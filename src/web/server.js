@@ -29,6 +29,22 @@ export function createServer() {
     });
   });
 
+  // 1.2 主动从微软官网同步真实完成进度
+  app.post('/api/status/sync', async (req, res) => {
+    try {
+      const accountId = req.body?.accountId || null;
+      if (accountId && accountId !== 'all') {
+        const accCfg = configManager.getAccount(accountId);
+        await taskManager.syncAccountOfficialStatus(accCfg);
+      } else {
+        await taskManager.syncAllOfficialStatus();
+      }
+      res.json({ success: true, data: taskManager.getStatus(accountId || 'all') });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
   // 1.5 多账号管理接口
   app.get('/api/accounts', (req, res) => {
     const accounts = configManager.getAccounts().map(a => ({
@@ -52,12 +68,36 @@ export function createServer() {
     }
   });
 
+  // 一键切换账号启用/停用 (继续/暂停)
+  app.post('/api/accounts/:id/toggle', (req, res) => {
+    try {
+      const acc = configManager.getAccount(req.params.id);
+      if (!acc) return res.status(404).json({ success: false, message: '账号未找到' });
+      const newEnabled = !acc.enabled;
+      configManager.upsertAccount({ id: acc.id, enabled: newEnabled });
+      res.json({ success: true, enabled: newEnabled, message: newEnabled ? '账号已继续自动巡检' : '账号已暂停巡检' });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
   app.delete('/api/accounts/:id', (req, res) => {
     try {
       configManager.deleteAccount(req.params.id);
       res.json({ success: true, message: '账号已删除' });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  // 测试词库来源获取明细
+  app.post('/api/tasks/test-search-api', async (req, res) => {
+    try {
+      const mode = req.body?.searchApi || 'offline';
+      const result = await rewardsApi.fetchSearchWordList(mode);
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
     }
   });
 

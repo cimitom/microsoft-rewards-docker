@@ -466,7 +466,8 @@ body {
 .acc-card-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 /* Hero Grid */

@@ -16,7 +16,7 @@
         <div class="brand">
           <div class="title-wrap">
             <h1 class="title">微软积分自动化控制台</h1>
-            <span class="badge badge-version">v1.3.0 Docker</span>
+            <span class="badge badge-version">v1.3.1 Docker</span>
           </div>
           <div class="subtitle-wrap">
             <span id="system-status-badge" class="status-pill status-idle">
@@ -38,6 +38,9 @@
           <button class="theme-btn" data-theme-val="dark" title="夜间模式" id="btn-theme-dark">🌙</button>
         </div>
 
+        <button id="btn-sync-status" class="btn btn-secondary" title="从微软官网同步今日真实任务完成度">
+          <span>🔄</span> 同步数据
+        </button>
         <button id="btn-check-account" class="btn btn-secondary">
           <span>🔍</span> 账号体检
         </button>
@@ -333,7 +336,7 @@
           </div>
 
           <div style="display: flex; gap: 10px;">
-            <button id="btn-test-account" class="btn btn-secondary">🔍 体检当前选中账号</button>
+            <button id="btn-test-account" class="btn btn-secondary">🔍 测试当前账号</button>
           </div>
           <div id="test-account-result" class="hint-msg"></div>
         </div>
@@ -385,12 +388,16 @@
           </div>
           <div class="form-group">
             <label class="form-label">搜索词库来源</label>
-            <select id="cfg-search-api" class="form-select">
-              <option value="offline">本地离线智能词库（推荐，最稳定）</option>
-              <option value="hot.baiwumm.com">Baidu 热搜榜单 (baiwumm)</option>
-              <option value="hot.cnxiaobai.com">Baidu 热搜榜单 (cnxiaobai)</option>
-              <option value="hot.nntool.cc">Baidu 热搜榜单 (nntool)</option>
-            </select>
+            <div class="input-with-btn">
+              <select id="cfg-search-api" class="form-select">
+                <option value="offline">本地离线智能词库（推荐，最稳定）</option>
+                <option value="hot.baiwumm.com">Baidu 热搜榜单 (baiwumm)</option>
+                <option value="hot.cnxiaobai.com">Baidu 热搜榜单 (cnxiaobai)</option>
+                <option value="hot.nntool.cc">Baidu 热搜榜单 (nntool)</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" id="btn-test-search-api">🔍 测试获取词库</button>
+            </div>
+            <small class="form-hint">点击按钮可实时检测当前词库是否畅通并查看获取到的词条明细</small>
           </div>
         </div>
 
@@ -575,6 +582,23 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-cancel-quick-add">取消</button>
         <button class="btn btn-primary" id="btn-save-quick-add">确认创建并添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 搜索词库获取测试弹窗 (Modal) -->
+  <div class="modal-backdrop" id="search-words-modal">
+    <div class="modal-box" style="max-width: 580px;">
+      <div class="modal-header">
+        <div class="modal-title"><span>🔍</span> 搜索词库抓取测试</div>
+        <button class="btn-close" id="btn-close-words-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="words-modal-status" style="margin-bottom: 12px; font-size: 13px;"></div>
+        <div id="words-modal-tags" style="display: flex; flex-wrap: wrap; gap: 8px; max-height: 320px; overflow-y: auto; padding: 10px; background: var(--card-inner); border: 1px solid var(--border-color); border-radius: 12px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="btn-close-words-modal-btn">关闭</button>
       </div>
     </div>
   </div>

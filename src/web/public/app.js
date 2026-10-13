@@ -15,6 +15,8 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchConfig();
   fetchHistory(7);
   initLogStream();
+  // 首次打开自动触发官网真实完成度同步（解决新部署到 NAS 时任务全显为 0 的问题）
+  fetch('/api/status/sync', { method: 'POST' }).then(() => fetchStatus()).catch(() => {});
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
 });
 
@@ -112,6 +114,33 @@ function initUIEvents() {
   document.getElementById('btn-close-diag').addEventListener('click', () => closeModal('diag-modal'));
   document.getElementById('btn-confirm-diag').addEventListener('click', () => closeModal('diag-modal'));
   document.getElementById('btn-retest-diag').addEventListener('click', runAccountDiagnosis);
+
+  // 顶部一键同步微软官网真实状态
+  document.getElementById('btn-sync-status')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-sync-status');
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = '<span>⏳</span> 同步中...';
+    try {
+      const res = await fetch('/api/status/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: selectedAccountId !== 'all' ? selectedAccountId : null })
+      }).then(r => r.json());
+      if (res.success && res.data) {
+        currentStatus = res.data;
+        renderDashboard(res.data);
+      }
+    } catch (e) {
+      alert(`同步失败: ${e.message}`);
+    } finally {
+      btn.innerHTML = origHtml;
+    }
+  });
+
+  // 测试词库来源按钮
+  document.getElementById('btn-test-search-api')?.addEventListener('click', handleTestSearchApi);
+  document.getElementById('btn-close-words-modal')?.addEventListener('click', () => closeModal('search-words-modal'));
+  document.getElementById('btn-close-words-modal-btn')?.addEventListener('click', () => closeModal('search-words-modal'));
 
   // 新建账号弹窗相关
   document.getElementById('btn-add-account-card')?.addEventListener('click', () => openModal('account-quick-add-modal'));
@@ -247,10 +276,10 @@ function initUIEvents() {
     }
   });
 
-  // 配置中心：一键测试当前选中的账户有效性
+  // 配置中心：测试当前账号 (详细展示 Cookie、Code、Token 是否可用)
   document.getElementById('btn-test-account')?.addEventListener('click', async () => {
     const resultDiv = document.getElementById('test-account-result');
-    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在全面检测该账户...</span>';
+    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在全面测试当前账号凭据可用性...</span>';
     const targetId = editingAccountIdInModal || 'acc_1';
     const res = await fetch('/api/auth/test', {
       method: 'POST',
@@ -259,11 +288,20 @@ function initUIEvents() {
     }).then(r => r.json());
     if (res.success) {
       const c = res.data.cookie;
+      const code = res.data.code;
       const t = res.data.token;
+      const net = res.data.network;
       resultDiv.innerHTML = `
-        <div>Cookie 状态: ${c.valid ? '✅ ' + c.message : '❌ ' + c.message}</div>
-        <div>OAuth Token: ${t.valid ? '✅ ' + t.message : '❌ ' + t.message}</div>
+        <div style="background:var(--card-inner); padding:10px 14px; border-radius:10px; border:1px solid var(--border-color); display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+          <div><strong>1. 必应网页端 Cookie:</strong> ${c?.valid ? '<span style="color:#34D399; font-weight:700;">✅ 可用</span>' : '<span style="color:#F87171; font-weight:700;">❌ 不可用或失效</span>'} <small style="color:var(--text-sub);">(${escapeHtml(c?.message || '')})</small></div>
+          <div><strong>2. 授权码链接 Code:</strong> ${code?.valid ? '<span style="color:#34D399; font-weight:700;">✅ 可用</span>' : '<span style="color:#F59E0B; font-weight:700;">⚠️ 待配置</span>'} <small style="color:var(--text-sub);">(${escapeHtml(code?.message || '')})</small></div>
+          <div><strong>3. 移动端 OAuth Token:</strong> ${t?.valid ? '<span style="color:#34D399; font-weight:700;">✅ 可用</span>' : '<span style="color:#F87171; font-weight:700;">❌ 不可用或失效</span>'} <small style="color:var(--text-sub);">(${escapeHtml(t?.message || '')})</small></div>
+          <div><strong>4. 网络出口与 IP 地区:</strong> ${net?.regionPass ? '<span style="color:#34D399; font-weight:700;">✅ 中国大陆 (安全通过)</span>' : '<span style="color:#F59E0B; font-weight:700;">⚠️ 非大陆出口</span>'} <small style="color:var(--text-sub);">(${escapeHtml(net?.ipInfo || '')})</small></div>
+        </div>
       `;
+      fetchStatus();
+    } else {
+      resultDiv.innerHTML = `<span style="color:#F87171;">测试出错: ${escapeHtml(res.message || '')}</span>`;
     }
   });
 
@@ -637,9 +675,42 @@ function renderAccountsOverviewGrid(accounts) {
       </div>
 
       <div class="acc-card-actions">
+        <button class="btn btn-primary btn-sm btn-run-single" title="立即运行此账号打卡">▶️ 运行</button>
+        <button class="btn btn-secondary btn-sm btn-toggle-single" title="${acc.enabled ? '暂停此账号自动巡检' : '继续此账号自动巡检'}">
+          ${acc.enabled ? '⏸️ 暂停' : '▶️ 继续'}
+        </button>
+        <button class="btn btn-secondary btn-sm btn-test-single" title="测试该账号登录状态">🔍 测试</button>
         <button class="btn btn-secondary btn-sm btn-view-acc">查看详情 ➜</button>
       </div>
     `;
+
+    // 绑定卡片上的各快捷按钮
+    card.querySelector('.btn-run-single')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch('/api/tasks/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: acc.id })
+      }).then(r => r.json());
+      if (res.success) fetchStatus();
+      else alert(res.message);
+    });
+
+    card.querySelector('.btn-toggle-single')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch(`/api/accounts/${acc.id}/toggle`, { method: 'POST' }).then(r => r.json());
+      if (res.success) {
+        fetchStatus();
+        fetchConfig();
+      }
+    });
+
+    card.querySelector('.btn-test-single')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectedAccountId = acc.id;
+      openModal('diag-modal');
+      runAccountDiagnosis();
+    });
 
     card.querySelector('.btn-view-acc')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1138,4 +1209,38 @@ function renderHistoryChart(dataList, days) {
 
     container.appendChild(col);
   });
+}
+
+// 测试词库来源并展示明细
+async function handleTestSearchApi() {
+  const selectElem = document.getElementById('cfg-search-api');
+  const selectedMode = selectElem?.value || 'offline';
+  const statusDiv = document.getElementById('words-modal-status');
+  const tagsDiv = document.getElementById('words-modal-tags');
+  
+  openModal('search-words-modal');
+  statusDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在请求并测试所选词库接口...</span>';
+  tagsDiv.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/tasks/test-search-api', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ searchApi: selectedMode })
+    }).then(r => r.json());
+
+    if (res.success && Array.isArray(res.sample)) {
+      statusDiv.innerHTML = `<span style="color:#34D399; font-weight:700;">✅ [${escapeHtml(res.name)}] 接口通畅！成功抓取 ${res.count} 条热词，前 ${res.sample.length} 条明细预览：</span>`;
+      tagsDiv.innerHTML = res.sample.map((w, i) => `
+        <span style="font-size:12px; padding:4px 9px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:6px; color:var(--text-main);">
+          ${i + 1}. ${escapeHtml(w)}
+        </span>
+      `).join('');
+    } else {
+      statusDiv.innerHTML = `<span style="color:#F87171; font-weight:700;">❌ [${escapeHtml(res.name || selectedMode)}] 获取失败: ${escapeHtml(res.message || '未知错误')}</span>`;
+      tagsDiv.innerHTML = '<span style="color:var(--text-muted); font-size:12px;">未能获取到有效词条，建议切换回「本地离线智能词库（最稳定）」。</span>';
+    }
+  } catch (e) {
+    statusDiv.innerHTML = `<span style="color:#F87171;">❌ 请求异常: ${escapeHtml(e.message)}</span>`;
+  }
 }
