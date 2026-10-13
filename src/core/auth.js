@@ -338,6 +338,12 @@ export class AuthManager {
       this.checkTokenStatus(accountId)
     ]);
 
+    const hasCode = !!acc?.authCodeUrl;
+    const codeStatus = {
+      valid: hasCode || tokenStatus.valid,
+      message: hasCode ? '授权码链接已配置' : (tokenStatus.valid ? '已通过历史授权码成功获取Token' : '尚未填写授权码链接')
+    };
+
     const balance = cookieStatus.balance || tokenStatus.balance || 0;
     const allValid = cookieStatus.valid && tokenStatus.valid;
     const partialValid = cookieStatus.valid || tokenStatus.valid;
@@ -354,6 +360,7 @@ export class AuthManager {
       accountId: acc?.id || 'acc_1',
       accountName: name,
       cookie: cookieStatus,
+      code: codeStatus,
       token: tokenStatus,
       balance,
       allValid,

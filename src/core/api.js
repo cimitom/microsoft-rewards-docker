@@ -277,13 +277,18 @@ export class RewardsApi {
             mobMax = pts.mobile?.max ?? 0;
             mobCur = pts.mobile?.progress ?? 0;
             dailyOffer = pts.dailyOffer ?? 0;
-            if (pts.totalPoints != null) balance = Number(pts.totalPoints);
           } catch {}
         }
 
-        if (balance === 0) {
-          const balMatch = clean.match(/"balance":(\d+)/) || clean.match(/"availablePoints":(\d+)/);
-          if (balMatch) balance = parseInt(balMatch[1]);
+        const balMatch = clean.match(/"balance":(\d+)/) || clean.match(/"availablePoints":(\d+)/);
+        if (balMatch) {
+          balance = parseInt(balMatch[1], 10);
+        } else {
+          const cookieStr = networkClient.getCookieString('https://rewards.bing.com');
+          const mCookieBal = cookieStr.match(/rc=(\d+)/) || cookieStr.match(/rb=(\d+)/);
+          if (mCookieBal) {
+            balance = parseInt(mCookieBal[1], 10);
+          }
         }
 
         const todayDetails = [];
@@ -815,6 +820,38 @@ export class RewardsApi {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * 探测并获取当前词库明细列表（用于前端测试）
+   */
+  async fetchSearchWordList(mode = 'offline') {
+    if (mode === 'offline') {
+      const sample = SEARCH_POOL.slice(0, 20);
+      return { success: true, mode: 'offline', name: '本地离线智能词库', count: SEARCH_POOL.length, sample };
+    }
+
+    const apiMap = {
+      'hot.baiwumm.com': { url: 'https://hot.baiwumm.com/api/baidu', name: 'Baidu 热搜榜单 (baiwumm)' },
+      'hot.cnxiaobai.com': { url: 'https://cnxiaobai.com/DailyHotApi/baidu', name: 'Baidu 热搜榜单 (cnxiaobai)' },
+      'hot.nntool.cc': { url: 'https://hotapi.nntool.cc/baidu', name: 'Baidu 热搜榜单 (nntool)' }
+    };
+
+    const target = apiMap[mode] || apiMap['hot.baiwumm.com'];
+    try {
+      const res = await networkClient.request({ url: target.url });
+      const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
+      let words = [];
+      if (data && Array.isArray(data.data)) {
+        words = data.data.map(item => item.title).filter(Boolean);
+      }
+      if (words.length > 0) {
+        return { success: true, mode, name: target.name, count: words.length, sample: words.slice(0, 20) };
+      }
+      return { success: false, mode, name: target.name, message: '接口返回数据格式异常或列表为空' };
+    } catch (e) {
+      return { success: false, mode, name: target.name, message: `网络请求失败: ${e.message}` };
     }
   }
 
