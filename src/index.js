@@ -1,0 +1,42 @@
+import configManager from './config.js';
+import logger from './logger.js';
+import scheduler from './scheduler.js';
+import { createServer } from './web/server.js';
+
+async function bootstrap() {
+  console.log(`
+  ==============================================================
+  🎁 Microsoft Rewards 微软积分全能自动化助手 (Docker/WebUI版)
+  ==============================================================
+  `);
+
+  const cfg = configManager.get();
+  const port = process.env.PORT || cfg.server?.port || 8080;
+
+  const app = createServer();
+
+  const server = app.listen(port, '0.0.0.0', () => {
+    logger.log('🚀', `Web 控制台已启动，请在浏览器访问: http://localhost:${port}`);
+    logger.log('💡', '如果是 NAS 或 VPS 部署，请访问: http://<服务器局域网或公网IP>:' + port);
+  });
+
+  // 启动后台定时任务
+  scheduler.start();
+
+  // 优雅退出
+  const shutdown = () => {
+    logger.log('🛑', '正在安全退出服务...');
+    scheduler.stop();
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+bootstrap().catch(err => {
+  console.error('服务启动失败:', err);
+  process.exit(1);
+});

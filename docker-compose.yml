@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  microsoft-rewards:
+    image: ghcr.io/wangheqiang530/microsoft-rewards-docker:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ms-rewards
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=8080
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
