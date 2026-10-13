@@ -38,7 +38,11 @@ const DEFAULT_CONFIG = {
     dingding: '',
     feishu: '',
     pushme: '',
-    bark: ''
+    bark: '',
+    telegram: {
+      botToken: '',
+      chatId: ''
+    }
   },
   server: {
     port: 5308,

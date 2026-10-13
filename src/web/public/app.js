@@ -2,11 +2,13 @@
 let currentStatus = null;
 let currentConfig = null;
 let eventSource = null;
+let currentHistoryDays = 7;
 
 document.addEventListener('DOMContentLoaded', () => {
   initUIEvents();
   fetchStatus();
   fetchConfig();
+  fetchHistory(7);
   initLogStream();
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
 });
@@ -15,6 +17,10 @@ function initUIEvents() {
   // 立即运行 & 停止
   document.getElementById('btn-run').addEventListener('click', runTasks);
   document.getElementById('btn-stop').addEventListener('click', stopTasks);
+
+  // 历史记录天数切换
+  document.getElementById('btn-history-7')?.addEventListener('click', () => switchHistoryDays(7));
+  document.getElementById('btn-history-30')?.addEventListener('click', () => switchHistoryDays(30));
 
   // 顶部快捷测试账号登录
   document.getElementById('btn-check-account').addEventListener('click', () => {
@@ -267,7 +273,21 @@ function renderDashboard(data) {
     const card = document.createElement('div');
     card.className = 'task-card';
     const isDone = t.done || (t.max > 0 && t.progress >= t.max);
-    const progPercent = t.max > 0 ? Math.min(100, Math.round((t.progress / t.max) * 100)) : (isDone ? 100 : 0);
+    
+    let subtext = isDone ? '状态: ✅ 已完成' : (running ? '状态: ⏳ 进行中' : '状态: 待执行');
+    let pointsBadge = `+${t.points || 0} 积分`;
+    let progressLabel = `进度: ${t.progress || 0} / ${t.max || 1} ${t.unit || ''}`;
+    let progPercent = t.max > 0 ? Math.min(100, Math.round((t.progress / t.max) * 100)) : (isDone ? 100 : 0);
+
+    // 针对桌面专属任务做专门定制展示
+    if (key === 'desktopApp') {
+      const p = t.progress || 3;
+      const m = t.max || 8;
+      progPercent = Math.round((p / m) * 100);
+      subtext = `${t.expiresText || '到期日期 5 天后'} · 每周打孔卡`;
+      progressLabel = `进度: ${p} / ${m} 个任务`;
+      pointsBadge = `+${t.points || 20} 积分`;
+    }
 
     card.innerHTML = `
       <div class="task-top">
@@ -275,14 +295,14 @@ function renderDashboard(data) {
           <div class="task-icon">${t.icon || '📌'}</div>
           <div>
             <div class="task-name">${t.name}</div>
-            <div class="task-subtext">${isDone ? '状态: ✅ 已完成' : (running ? '状态: ⏳ 进行中' : '状态: 待执行')}</div>
+            <div class="task-subtext">${subtext}</div>
           </div>
         </div>
-        <div class="pts-badge">+${t.points || 0} 积分</div>
+        <div class="pts-badge">${pointsBadge}</div>
       </div>
       <div class="progress-wrap">
         <div class="progress-labels">
-          <span>进度: ${t.progress || 0} / ${t.max || 1} ${t.unit || ''}</span>
+          <span>${progressLabel}</span>
           <span>${progPercent}%</span>
         </div>
         <div class="progress-bar-track">
@@ -406,6 +426,8 @@ function populateSettingsForm() {
   document.getElementById('cfg-notify-feishu').value = c.notify?.feishu || '';
   document.getElementById('cfg-notify-bark').value = c.notify?.bark || '';
   document.getElementById('cfg-notify-pushme').value = c.notify?.pushme || '';
+  document.getElementById('cfg-notify-tg-token').value = c.notify?.telegram?.botToken || '';
+  document.getElementById('cfg-notify-tg-chat').value = c.notify?.telegram?.chatId || '';
 }
 
 async function saveSettingsFromModal() {
@@ -439,7 +461,11 @@ async function saveSettingsFromModal() {
       dingding: document.getElementById('cfg-notify-dingding').value.trim(),
       feishu: document.getElementById('cfg-notify-feishu').value.trim(),
       bark: document.getElementById('cfg-notify-bark').value.trim(),
-      pushme: document.getElementById('cfg-notify-pushme').value.trim()
+      pushme: document.getElementById('cfg-notify-pushme').value.trim(),
+      telegram: {
+        botToken: document.getElementById('cfg-notify-tg-token').value.trim(),
+        chatId: document.getElementById('cfg-notify-tg-chat').value.trim()
+      }
     }
   };
 
@@ -475,15 +501,23 @@ async function saveGuideSettings() {
 }
 
 window.testNotifyChannel = async function(channel) {
-  const idMap = {
-    wework: 'cfg-notify-wework',
-    dingding: 'cfg-notify-dingding',
-    feishu: 'cfg-notify-feishu',
-    bark: 'cfg-notify-bark',
-    pushme: 'cfg-notify-pushme'
-  };
-  const val = document.getElementById(idMap[channel])?.value.trim();
-  if (!val) return alert('请先输入配置的值');
+  let val = '';
+  if (channel === 'telegram') {
+    const botToken = document.getElementById('cfg-notify-tg-token')?.value.trim();
+    const chatId = document.getElementById('cfg-notify-tg-chat')?.value.trim();
+    if (!botToken || !chatId) return alert('请先输入 Telegram Bot Token 和 Chat ID');
+    val = JSON.stringify({ botToken, chatId });
+  } else {
+    const idMap = {
+      wework: 'cfg-notify-wework',
+      dingding: 'cfg-notify-dingding',
+      feishu: 'cfg-notify-feishu',
+      bark: 'cfg-notify-bark',
+      pushme: 'cfg-notify-pushme'
+    };
+    val = document.getElementById(idMap[channel])?.value.trim();
+    if (!val) return alert('请先输入配置的值');
+  }
 
   try {
     const res = await fetch('/api/notify/test', {
@@ -621,4 +655,84 @@ async function runAccountDiagnosis() {
     document.getElementById('diag-banner-title').innerText = '诊断请求失败';
     document.getElementById('diag-banner-sub').innerText = e.message;
   }
+}
+
+// 切换历史记录天数 (7 日 / 30 日)
+function switchHistoryDays(days) {
+  currentHistoryDays = days;
+  document.getElementById('btn-history-7')?.classList.toggle('active', days === 7);
+  document.getElementById('btn-history-30')?.classList.toggle('active', days === 30);
+  fetchHistory(days);
+}
+
+// 拉取历史记录数据
+async function fetchHistory(days = 7) {
+  try {
+    const res = await fetch(`/api/history?days=${days}`).then(r => r.json());
+    if (res.success && Array.isArray(res.data)) {
+      renderHistoryChart(res.data, days);
+    }
+  } catch (e) {
+    console.error('获取历史记录失败:', e);
+  }
+}
+
+// 渲染历史柱形图与 Hover Tooltip
+function renderHistoryChart(dataList, days) {
+  const container = document.getElementById('history-chart-container');
+  const tooltip = document.getElementById('history-tooltip');
+  if (!container || !tooltip) return;
+
+  container.innerHTML = '';
+  if (dataList.length === 0) return;
+
+  // 计算最大值，方便归一化高度
+  const maxEarned = Math.max(...dataList.map(d => d.earned || 0), 160);
+
+  dataList.forEach((item, index) => {
+    const isToday = index === dataList.length - 1;
+    const heightPercent = Math.max(12, Math.min(100, Math.round((item.earned / maxEarned) * 100)));
+
+    const col = document.createElement('div');
+    col.className = `chart-col ${isToday ? 'today' : ''}`;
+
+    col.innerHTML = `
+      <div class="chart-val-hint">+${item.earned}</div>
+      <div class="chart-bar-wrap">
+        <div class="chart-bar" style="height: ${heightPercent}%;"></div>
+      </div>
+      <div class="chart-date-label">${days === 30 ? (index % 4 === 0 || isToday ? item.dayLabel : '') : item.dayLabel}</div>
+    `;
+
+    // Hover 交互
+    col.addEventListener('mouseenter', (e) => {
+      document.getElementById('tt-date').innerText = `${item.date} (${item.weekday})`;
+      document.getElementById('tt-earned').innerText = `+${item.earned} 积分`;
+      
+      const bdList = document.getElementById('tt-breakdown');
+      if (item.breakdown && item.breakdown.length > 0) {
+        bdList.innerHTML = item.breakdown.map(b => `
+          <div class="tooltip-item">
+            <span>${b.icon || '📌'} ${b.name}</span>
+            <span style="font-weight: 600; color: #34D399;">+${b.points}</span>
+          </div>
+        `).join('');
+      } else {
+        bdList.innerHTML = '<div style="color:#64748B;">打卡任务已满额到账</div>';
+      }
+
+      document.getElementById('tt-balance').innerText = `当日结余: ${(item.balance || 0).toLocaleString()} 积分`;
+
+      const rect = col.getBoundingClientRect();
+      tooltip.style.left = `${rect.left + rect.width / 2}px`;
+      tooltip.style.top = `${rect.top}px`;
+      tooltip.style.display = 'block';
+    });
+
+    col.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+    });
+
+    container.appendChild(col);
+  });
 }

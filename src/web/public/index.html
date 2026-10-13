@@ -117,6 +117,37 @@
           </div>
         </div>
       </section>
+
+      <!-- 底部历史记录卡片 -->
+      <section class="section-card history-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span>📈</span> 每日积分增长历史记录
+          </div>
+          <div class="history-controls">
+            <div class="pill-group">
+              <button class="pill-btn active" data-days="7" id="btn-history-7">7 日</button>
+              <button class="pill-btn" data-days="30" id="btn-history-30">30 日</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="history-chart-wrap">
+          <div class="chart-container" id="history-chart-container">
+            <!-- 动态渲染柱状图条 -->
+          </div>
+        </div>
+
+        <!-- 悬浮明细气泡 (Tooltip) -->
+        <div class="history-tooltip" id="history-tooltip" style="display: none;">
+          <div class="tooltip-header" id="tt-date">--</div>
+          <div class="tooltip-earned" id="tt-earned">+--</div>
+          <div class="tooltip-breakdown" id="tt-breakdown">
+            <!-- 明细清单 -->
+          </div>
+          <div class="tooltip-footer" id="tt-balance">结余: --</div>
+        </div>
+      </section>
     </main>
 
     <!-- 页脚 -->
@@ -349,6 +380,15 @@
               <input type="text" id="cfg-notify-pushme" class="form-input" placeholder="push.i-i.me 的 push_key">
               <button class="btn btn-secondary btn-sm" onclick="testNotifyChannel('pushme')">测试</button>
             </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Telegram Bot (TG 机器人推送)</label>
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr auto; gap: 8px;">
+              <input type="text" id="cfg-notify-tg-token" class="form-input" placeholder="Bot Token (例如 123456:ABC...)">
+              <input type="text" id="cfg-notify-tg-chat" class="form-input" placeholder="Chat ID (例如 123456789)">
+              <button class="btn btn-secondary btn-sm" onclick="testNotifyChannel('telegram')">测试</button>
+            </div>
+            <small class="form-hint">若部署在国内环境，启用网络代理后会自动通过代理访问 Telegram API</small>
           </div>
         </div>
       </div>

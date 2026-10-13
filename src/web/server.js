@@ -8,6 +8,7 @@ import authManager from '../core/auth.js';
 import notifier from '../core/notifier.js';
 import scheduler from '../scheduler.js';
 import rewardsApi from '../core/api.js';
+import historyManager from '../core/history.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -190,6 +191,13 @@ export function createServer() {
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }
+  });
+
+  // 11. 获取历史积分趋势与明细
+  app.get('/api/history', (req, res) => {
+    const days = parseInt(req.query.days, 10) || 7;
+    const history = historyManager.getHistory(days, taskManager.stats);
+    res.json({ success: true, data: history });
   });
 
   return app;

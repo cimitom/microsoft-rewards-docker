@@ -36,6 +36,16 @@ export class Notifier {
       tasks.push(this.sendPushMe(notify.pushme.trim(), title, content));
     }
 
+    // 6. Telegram
+    if (notify.telegram?.botToken && notify.telegram?.chatId) {
+      tasks.push(this.sendTelegram(
+        notify.telegram.botToken.trim(),
+        notify.telegram.chatId.trim(),
+        title,
+        fullContent
+      ));
+    }
+
     if (tasks.length > 0) {
       const results = await Promise.allSettled(tasks);
       return results;
@@ -148,6 +158,28 @@ export class Notifier {
     }
   }
 
+  async sendTelegram(botToken, chatId, title, text) {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const message = `*${title}*\n\n${text}`;
+    try {
+      await networkClient.request({
+        url,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        data: {
+          chat_id: chatId,
+          text: message,
+          parse_mode: 'Markdown'
+        }
+      });
+      logger.log('🔵', '「Telegram」消息推送成功');
+      return true;
+    } catch (e) {
+      logger.log('🔴', `「Telegram」推送失败: ${e.message}`);
+      throw e;
+    }
+  }
+
   async testChannel(channel, value) {
     const title = '测试通知';
     const content = '如果你看到这条消息，说明该推送渠道已成功配置并联通！';
@@ -162,6 +194,10 @@ export class Notifier {
         return this.sendBark(value, title, content);
       case 'pushme':
         return this.sendPushMe(value, title, content);
+      case 'telegram': {
+        const { botToken, chatId } = typeof value === 'object' ? value : JSON.parse(value);
+        return this.sendTelegram(botToken, chatId, title, content);
+      }
       default:
         throw new Error('不支持的通知渠道');
     }

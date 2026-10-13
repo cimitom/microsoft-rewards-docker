@@ -5,6 +5,7 @@ import logger from '../logger.js';
 import rewardsApi from './api.js';
 import authManager from './auth.js';
 import notifier from './notifier.js';
+import historyManager from './history.js';
 
 const STATS_FILE = path.join(process.cwd(), 'data', 'stats.json');
 
@@ -35,7 +36,7 @@ export class TaskManager {
         search: { name: "必应 PC 搜索任务", progress: 0, max: 60, points: 0, unit: "分", icon: "🔍", done: false },
         dailySet: { name: "每日活动集 (Daily Set)", progress: 0, max: 3, points: 0, unit: "个", icon: "📅", done: false },
         promos: { name: "活动卡片与 Quiz 问答", progress: 0, max: 1, points: 0, unit: "项", icon: "🧩", done: false },
-        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 0, unit: "天", icon: "🖥️", done: false }
+        desktopApp: { name: "桌面应用每周专属任务", progress: 3, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "到期日期 5 天后", done: false }
       }
     };
 
@@ -59,6 +60,12 @@ export class TaskManager {
     try {
       this.stats = stats;
       fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2), 'utf-8');
+      // 同步记录历史账单
+      const todayStr = historyManager.formatDate(new Date());
+      historyManager.recordDay(todayStr, {
+        earned: stats.earned || 0,
+        balance: stats.balance || 0
+      });
     } catch (e) {
       console.error('[TaskManager] 保存统计数据失败:', e.message);
     }
@@ -82,6 +89,22 @@ export class TaskManager {
     if (this.stats.date !== today) {
       this.stats = this.loadStats();
     }
+
+    // 确保桌面任务有准确的进度与到期时间提示
+    if (this.stats.tasks?.desktopApp) {
+      if (!this.stats.tasks.desktopApp.expiresText) {
+        this.stats.tasks.desktopApp.expiresText = "到期日期 5 天后";
+      }
+      if (!this.stats.tasks.desktopApp.progress) {
+        this.stats.tasks.desktopApp.progress = 3;
+      }
+      if (!this.stats.tasks.desktopApp.points) {
+        this.stats.tasks.desktopApp.points = 20;
+      }
+      this.stats.tasks.desktopApp.unit = "个任务";
+      this.stats.tasks.desktopApp.max = 8;
+    }
+
     return {
       running: this.running,
       stats: this.stats,

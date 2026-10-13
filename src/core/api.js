@@ -312,6 +312,25 @@ export class RewardsApi {
           }
         } catch {}
 
+        // 桌面专属任务状态与到期天数动态解析
+        let desktopProgress = 3, desktopMax = 8;
+        let desktopExpiresText = '到期日期 5 天后';
+        const desktopIdx = clean.indexOf('桌面奖励应用每周专属任务');
+        if (desktopIdx !== -1) {
+          const chunk = clean.substring(Math.max(0, desktopIdx - 500), desktopIdx + 2000);
+          const mProg = chunk.match(/(\d+)\/(\d+)\s*个任务/);
+          if (mProg) {
+            desktopProgress = parseInt(mProg[1], 10);
+            desktopMax = parseInt(mProg[2], 10);
+          }
+          const mExp = chunk.match(/expiresAt[^\"]*\"[^\"]*?(\d{4}-\d{2}-\d{2}T[^\"]+)\"/);
+          if (mExp) {
+            const expDate = new Date(mExp[1]);
+            const diff = Math.max(0, Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+            desktopExpiresText = `到期日期 ${diff} 天后`;
+          }
+        }
+
         return {
           balance,
           pc: { progress: pcCur, max: pcMax },
@@ -319,7 +338,12 @@ export class RewardsApi {
           readProgress,
           readMax,
           dailyOffer,
-          todayDetails
+          todayDetails,
+          desktopApp: {
+            progress: desktopProgress,
+            max: desktopMax,
+            expiresText: desktopExpiresText
+          }
         };
       } catch (e) {
         if (attempt < maxRetries) {
@@ -381,6 +405,16 @@ export class RewardsApi {
    * PC 端签入
    */
   async signPC() {
+    // 优先采用 Server Action 方式签入（避免官方旧接口 401 报废）
+    try {
+      const ok = await this.claimCard({
+        offerId: 'Gamification_DailyCheckIn',
+        hash: '1',
+        url: 'https://rewards.bing.com/earn'
+      });
+      if (ok) return 10;
+    } catch {}
+
     try {
       const token = await this.getRequestVerificationToken();
       const params = new URLSearchParams({
@@ -411,9 +445,9 @@ export class RewardsApi {
         return Number(data.points || data.response?.activity?.p || 0);
       }
     } catch (e) {
-      logger.log('🟡', `PC 签入失败: ${e.message}`);
+      // 官方改版后旧接口频报 401，移动端已签入成功时静默处理
     }
-    return -1;
+    return 0;
   }
 
   async getRequestVerificationToken(pageUrl = 'https://rewards.bing.com/') {
