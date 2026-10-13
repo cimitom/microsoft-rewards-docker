@@ -15,7 +15,7 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.4.4';
+const CURRENT_VERSION = '1.4.5';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 function getCpuUsage() {
@@ -52,6 +52,32 @@ async function getNetworkPing() {
 
 export function createServer() {
   const app = express();
+
+  // 健康检查（免认证）：Docker HEALTHCHECK 用它，否则开启密码后会因 401 被判为不健康
+  app.get('/api/health', (req, res) => {
+    res.json({ success: true, status: 'ok', uptime: Math.floor(process.uptime()) });
+  });
+
+  // 访问控制：当配置了 server.authPassword 时启用 HTTP Basic 认证。
+  // 注意：/api/config 会返回全部账号的 Cookie 与 Token，未设密码时任何能访问该端口的人
+  // 都能拿到账号凭据，强烈建议设置密码（尤其是把端口暴露到内网之外时）。
+  app.use((req, res, next) => {
+    const password = configManager.get()?.server?.authPassword;
+    if (!password) return next();
+
+    const header = req.headers.authorization || '';
+    if (header.startsWith('Basic ')) {
+      try {
+        const decoded = Buffer.from(header.slice(6), 'base64').toString('utf-8');
+        const sep = decoded.indexOf(':');
+        const pass = sep >= 0 ? decoded.slice(sep + 1) : decoded;
+        if (pass === password) return next();
+      } catch {}
+    }
+
+    res.set('WWW-Authenticate', 'Basic realm="Microsoft Rewards", charset="UTF-8"');
+    res.status(401).send('需要认证：请在配置中设置 server.authPassword 后使用该密码访问');
+  });
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
@@ -159,7 +185,10 @@ export function createServer() {
     try {
       const accountId = req.body?.accountId || null;
       if (accountId && accountId !== 'all') {
-        const accCfg = configManager.getAccount(accountId);
+        const accCfg = configManager.resolveAccount(accountId);
+        if (!accCfg) {
+          return res.status(404).json({ success: false, message: '账号未找到' });
+        }
         await taskManager.syncAccountOfficialStatus(accCfg);
       } else {
         await taskManager.syncAllOfficialStatus();
@@ -198,7 +227,9 @@ export function createServer() {
   // 一键切换账号启用/停用 (继续/暂停)
   app.post('/api/accounts/:id/toggle', (req, res) => {
     try {
-      const acc = configManager.getAccount(req.params.id);
+      // 必须精确匹配：getAccount() 在 id 不存在时会回退到第一个账号，
+      // 那样「暂停某个不存在的账号」会误操作到主账号上
+      const acc = configManager.resolveAccount(req.params.id);
       if (!acc) return res.status(404).json({ success: false, message: '账号未找到' });
       const newEnabled = !acc.enabled;
       configManager.upsertAccount({ id: acc.id, enabled: newEnabled });
@@ -211,6 +242,8 @@ export function createServer() {
   app.delete('/api/accounts/:id', (req, res) => {
     try {
       configManager.deleteAccount(req.params.id);
+      // 同步清理该账号的统计与账单，避免留下孤儿数据
+      taskManager.removeAccountStats(req.params.id);
       res.json({ success: true, message: '账号已删除' });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
@@ -317,12 +350,13 @@ export function createServer() {
 
   // 7. 小白一键换取 Token
   app.post('/api/auth/exchange-code', async (req, res) => {
-    const { urlOrCode, accountId } = req.body;
+    const { urlOrCode, accountId, name, order } = req.body;
     if (!urlOrCode) {
       return res.status(400).json({ success: false, message: '请提供跳转链接或授权码' });
     }
     try {
-      const result = await authManager.exchangeCodeForToken(urlOrCode, accountId);
+      // name/order 用于「配置向导」新建账号时带上名称与序号
+      const result = await authManager.exchangeCodeForToken(urlOrCode, accountId, { name, order });
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
@@ -336,10 +370,12 @@ export function createServer() {
       return res.status(400).json({ success: false, message: '请提供 Cookie' });
     }
     try {
-      configManager.upsertAccount({ id: accountId || 'acc_1', cookie });
+      // 只做校验，不落库：以前这里会 upsertAccount，导致「测试 Cookie」按钮
+      // 凭空创建出一个名为「账号 (xxx)」的账号。真正的保存由向导最后一步统一提交。
       const status = await authManager.checkCookieStatus(cookie, accountId);
-      if (status.valid) {
-        const accStats = taskManager.ensureAccountStats(accountId || 'acc_1');
+      const existing = configManager.findAccount(accountId);
+      if (status.valid && existing) {
+        const accStats = taskManager.ensureAccountStats(existing.id);
         if (status.balance > 0) accStats.balance = status.balance;
         if (status.streakDays > 0) accStats.streakDays = status.streakDays;
         if (status.stamps) accStats.stamps = status.stamps;

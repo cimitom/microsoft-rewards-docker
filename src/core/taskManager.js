@@ -7,8 +7,9 @@ import authManager from './auth.js';
 import notifier from './notifier.js';
 import historyManager from './history.js';
 import browserManager from './browser.js';
+import { DATA_DIR, writeFileAtomic } from '../fsUtil.js';
 
-const STATS_FILE = path.join(process.cwd(), 'data', 'stats.json');
+const STATS_FILE = path.join(DATA_DIR, 'stats.json');
 
 export class TaskManager {
   constructor() {
@@ -31,7 +32,7 @@ export class TaskManager {
       startBalance: 0,
       earned: 0,
       streakDays: 0,
-      stamps: { progress: 8, max: 12 },
+      stamps: { progress: 0, max: 12 },
       lastUpdate: Date.now(),
       tasks: {
         sign: { name: "每日双端签入 (PC+App)", progress: 0, max: 1, points: 0, unit: "次", icon: "📱", done: false },
@@ -39,7 +40,7 @@ export class TaskManager {
         search: { name: "必应 PC 搜索任务", progress: 0, max: 60, points: 0, unit: "分", icon: "🔍", done: false },
         dailySet: { name: "每日活动集 (Daily Set)", progress: 0, max: 3, points: 0, unit: "个", icon: "📅", done: false },
         promos: { name: "活动卡片与 Quiz 问答", progress: 0, max: 1, points: 0, unit: "项", icon: "🧩", done: false },
-        desktopApp: { name: "桌面应用每周专属任务", progress: 3, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "到期日期 5 天后", done: false }
+        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "到期日期 5 天后", available: false, done: false }
       }
     };
   }
@@ -73,7 +74,7 @@ export class TaskManager {
               startBalance: merged.startBalance || 0,
               earned: merged.earned || 0,
               streakDays: merged.streakDays || 0,
-              stamps: merged.stamps || { progress: 8, max: 12 },
+              stamps: merged.stamps || { progress: 0, max: 12 },
               lastUpdate: merged.lastUpdate || Date.now(),
               tasks: merged.tasks || this.createDefaultAccountStats().tasks
             };
@@ -98,7 +99,7 @@ export class TaskManager {
     if (!this.stats.accounts) {
       this.stats.accounts = {};
     }
-    const accCfg = configManager.getAccount(accountId);
+    const accCfg = configManager.resolveAccount(accountId);
     const id = accCfg?.id || accountId || 'acc_1';
     const name = accCfg?.name || '账号';
 
@@ -110,13 +111,15 @@ export class TaskManager {
       const dApp = this.stats.accounts[id].tasks?.desktopApp;
       if (dApp) {
         if (!dApp.expiresText) dApp.expiresText = "到期日期 5 天后";
-        if (!dApp.progress) dApp.progress = 3;
-        if (!dApp.points) dApp.points = 20;
+        // 注意：这里以前会把 progress 0 改写成 3，导致所有账号都显示假的 3/8
+        if (dApp.progress === undefined || dApp.progress === null) dApp.progress = 0;
+        if (dApp.points === undefined || dApp.points === null) dApp.points = 20;
         dApp.unit = "个任务";
         dApp.max = 8;
+        if (dApp.available === undefined) dApp.available = false;
       }
       if (!this.stats.accounts[id].stamps) {
-        this.stats.accounts[id].stamps = { progress: 8, max: 12 };
+        this.stats.accounts[id].stamps = { progress: 0, max: 12 };
       }
     }
     return this.stats.accounts[id];
@@ -136,7 +139,7 @@ export class TaskManager {
         stats.tasks = fa.tasks;
         stats.lastUpdate = fa.lastUpdate;
       }
-      fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2), 'utf-8');
+      writeFileAtomic(STATS_FILE, JSON.stringify(stats, null, 2), { encoding: 'utf-8', mode: 0o600 });
 
       // 同步记录历史账单（包含单账号账单与全局汇总）
       const summary = this.computeSummary();
@@ -174,6 +177,19 @@ export class TaskManager {
       accStats.lastUpdate = Date.now();
       this.saveStats();
     }
+  }
+
+  /**
+   * 删除账号时清理它的统计与账单，避免留下孤儿数据
+   */
+  removeAccountStats(accountId) {
+    if (!accountId) return false;
+    if (this.stats?.accounts?.[accountId]) {
+      delete this.stats.accounts[accountId];
+      this.saveStats();
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -236,17 +252,20 @@ export class TaskManager {
           };
         }
 
-        // 3. 同步桌面专属任务进度
+        // 3. 同步桌面专属任务进度（用真实值，不再用 3/8 兜底）
         if (info.desktopApp) {
+          const dProgress = Number(info.desktopApp.progress ?? 0);
+          const dMax = Number(info.desktopApp.max ?? 8) || 8;
           accStats.tasks.desktopApp = {
             name: "桌面应用每周专属任务",
-            progress: info.desktopApp.progress || 3,
-            max: info.desktopApp.max || 8,
-            points: 20,
+            progress: dProgress,
+            max: dMax,
+            points: dProgress >= dMax ? 20 : 0,
             unit: "个任务",
             icon: "🖥️",
             expiresText: info.desktopApp.expiresText || "到期日期 5 天后",
-            done: false
+            available: info.desktopApp.available !== false,
+            done: dProgress >= dMax
           };
         }
 
@@ -259,21 +278,22 @@ export class TaskManager {
           accStats.streakDays = streakInfo.streakDays;
         }
 
-        // 5. 智能识别签到与每日活动状态：若搜索或阅读已打满，说明今日打卡已完成
+        // 5. 智能识别签到与每日活动状态
+        //    这里只是「推断」：旧逻辑用 or（搜索或阅读任一打满就全标完成），
+        //    误报很多（明明没做却显示已完成）。现在要求两者都打满才推断，
+        //    并且不碰 promos —— 它有自己的真实进度（x/4 张卡片）。
         const isSearchDone = accStats.tasks.search?.done;
         const isReadDone = accStats.tasks.read?.done;
-        if (isSearchDone || isReadDone) {
-          accStats.tasks.sign.done = true;
-          accStats.tasks.sign.progress = 1;
-          accStats.tasks.sign.points = 10;
-
-          accStats.tasks.dailySet.done = true;
-          accStats.tasks.dailySet.progress = 3;
-          accStats.tasks.dailySet.points = 30;
-
-          accStats.tasks.promos.done = true;
-          accStats.tasks.promos.progress = 1;
-          accStats.tasks.promos.points = 10;
+        if (isSearchDone && isReadDone) {
+          const inferDone = (key, progress, points) => {
+            const t = accStats.tasks[key];
+            if (!t) return;
+            if (Number(t.progress || 0) < progress) t.progress = progress;
+            if (!t.points) t.points = points;
+            t.done = true;
+          };
+          inferDone('sign', 1, 10);
+          inferDone('dailySet', 3, 30);
         }
 
         // 重新计算今日已增总分
@@ -337,7 +357,7 @@ export class TaskManager {
         balance: st.balance || 0,
         earned: st.earned || 0,
         streakDays: st.streakDays || 0,
-        stamps: st.stamps || { progress: 8, max: 12 },
+        stamps: st.stamps || { progress: 0, max: 12 },
         doneTasks: tDone,
         totalTasks: tTotal,
         percent: tTotal > 0 ? Math.round((tDone / tTotal) * 100) : 0,
@@ -353,7 +373,7 @@ export class TaskManager {
       totalEarned,
       totalBalance,
       maxStreak,
-      stamps: { progress: stampsProgress || 8, max: stampsMax || 12 },
+      stamps: { progress: stampsProgress || 0, max: stampsMax || 12 },
       doneTasksCount,
       totalTasksCount,
       overallPercent,
@@ -549,11 +569,27 @@ export class TaskManager {
           if (claimed) {
             cardOk++;
             if (card.kind === 'desktop_app') {
-              this.updateTask('desktopApp', { progress: 3, max: 8, points: 20, done: false }, accountId);
+              // 桌面专属任务按真实进度累加，不再写死 3
+              const dCur = this.ensureAccountStats(accountId).tasks?.desktopApp || {};
+              const dProgress = Number(dCur.progress || 0) + 1;
+              const dMax = Number(dCur.max || 8) || 8;
+              this.updateTask('desktopApp', {
+                progress: dProgress,
+                max: dMax,
+                points: 20,
+                available: true,
+                done: dProgress >= dMax
+              }, accountId);
             }
           }
         }
-        this.updateTask('promos', { progress: cardOk, max: cards.length, points: cardOk * 10, done: true }, accountId);
+        // 只有全部卡片都成功打卡才算完成，避免出现「1/4 却标记已完成」的自相矛盾状态
+        this.updateTask('promos', {
+          progress: cardOk,
+          max: cards.length,
+          points: cardOk * 10,
+          done: cardOk >= cards.length
+        }, accountId);
         this.updateTask('dailySet', { progress: 3, max: 3, points: 30, done: true }, accountId);
         logger.addTimeline(accountName, `完成日常活动与卡片 ${cardOk}/${cards.length} 项`);
       } else {
@@ -569,11 +605,15 @@ export class TaskManager {
     const info = await rewardsApi.getRewardsInfo();
     if (info) {
       if (info.desktopApp) {
+        const dProgress = Number(info.desktopApp.progress ?? 0);
+        const dMax = Number(info.desktopApp.max ?? 8) || 8;
         this.updateTask('desktopApp', {
-          progress: info.desktopApp.progress || 3,
-          max: info.desktopApp.max || 8,
+          progress: dProgress,
+          max: dMax,
           expiresText: info.desktopApp.expiresText || '到期日期 5 天后',
-          points: 20
+          points: dProgress >= dMax ? 20 : 0,
+          available: info.desktopApp.available !== false,
+          done: dProgress >= dMax
         }, accountId);
       }
       if (info.stamps) {
@@ -621,7 +661,8 @@ export class TaskManager {
     if (!this.running) return;
 
     // 5. 连签检测与额外积分检测
-    const streakInfo = await rewardsApi.checkStreak();
+    //    视觉搜索补签只在任务执行期尝试（每账号每天一次），读取进度的同步流程不再触发
+    const streakInfo = await rewardsApi.checkStreak({ allowVisualSearchCheckIn: true });
     if (streakInfo?.streakDays) {
       accStats.streakDays = streakInfo.streakDays;
       logger.log('🔥', `连续打卡记录: ${accStats.streakDays} 天`, accountName);
@@ -668,7 +709,10 @@ export class TaskManager {
 
     try {
       const globalCfg = configManager.get();
-      const allAccounts = configManager.getAccounts().filter(a => a.enabled !== false);
+      // 没有 Cookie 也没有 Token 的账号直接跳过：
+      // 否则它会在没有凭据的情况下执行，可能误用到别的账号的会话
+      const allAccounts = configManager.getAccounts()
+        .filter(a => a.enabled !== false && (a.cookie || a.refreshToken));
       const targetList = (targetAccountId && targetAccountId !== 'all')
         ? allAccounts.filter(a => a.id === targetAccountId)
         : allAccounts;

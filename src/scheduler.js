@@ -14,27 +14,64 @@ class Scheduler {
     return Number(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`);
   }
 
+  /**
+   * 当前时刻距离窗口起点的分钟数（支持跨零点窗口，如 22:00 - 02:00）。
+   * 返回值 < 0 表示还没进入窗口。
+   */
+  minutesIntoWindow(startMin, wraps, nowMin) {
+    return wraps
+      ? (nowMin >= startMin ? nowMin - startMin : 1440 - startMin + nowMin)
+      : (nowMin - startMin);
+  }
+
   initTodayPlan() {
     const today = this.getTodayNum();
     if (!this.plannedDailyRuns[today]) {
       this.plannedDailyRuns[today] = {};
     }
 
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+
     const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
     for (let i = 0; i < accounts.length; i++) {
       const acc = accounts[i];
+      if (this.plannedDailyRuns[today][acc.id]) continue;
+
       const slot = acc.timeSlot || configManager.getDefaultTimeSlot(i);
-      if (!this.plannedDailyRuns[today][acc.id]) {
-        // 在时段开始时刻内生成 0 ~ randomDelayMin (默认60分钟) 的随机延迟分钟
-        const maxDelay = slot.randomDelayMin || 60;
-        const randomMin = Math.floor(Math.random() * Math.min(59, maxDelay));
-        this.plannedDailyRuns[today][acc.id] = {
-          startHour: slot.startHour ?? 6,
-          endHour: slot.endHour ?? 10,
-          plannedMinute: randomMin,
-          executed: false
-        };
+      const startHour = slot.startHour ?? 6;
+      const endHour = slot.endHour ?? ((startHour + 4) % 24);
+      const startMin = startHour * 60;
+      const endMin = endHour * 60;
+      // 支持跨零点窗口（例如 22:00 - 02:00）
+      const wraps = endMin <= startMin;
+      const windowLength = wraps ? (1440 - startMin + endMin) : (endMin - startMin);
+
+      // 窗口内随机偏移 0 ~ randomDelayMin 分钟
+      const maxDelay = Math.max(1, Math.min(59, slot.randomDelayMin || 60));
+      let offset = Math.floor(Math.random() * maxDelay);
+
+      // 容器在窗口中途启动时不要立刻开跑，仍然随机延后 1~20 分钟（保持拟人化）
+      const nowOffset = this.minutesIntoWindow(startMin, wraps, nowMin);
+      if (nowOffset >= offset && nowOffset < windowLength) {
+        offset = Math.min(windowLength - 1, nowOffset + 1 + Math.floor(Math.random() * 20));
       }
+
+      this.plannedDailyRuns[today][acc.id] = {
+        startMin,
+        endMin,
+        wraps,
+        windowLength,
+        offset,
+        executed: false
+      };
+    }
+
+    // 清理历史日期的计划，避免 plannedDailyRuns 无限增长
+    // 注意：对象 key 是字符串，today 是数字，必须转成字符串比较
+    const todayKey = String(today);
+    for (const key of Object.keys(this.plannedDailyRuns)) {
+      if (key !== todayKey) delete this.plannedDailyRuns[key];
     }
   }
 
@@ -54,8 +91,7 @@ class Scheduler {
       this.initTodayPlan();
 
       const now = new Date();
-      const currentHour = now.getHours();
-      const currentMinute = now.getMinutes();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
       const todayPlans = this.plannedDailyRuns[today] || {};
 
       const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
@@ -65,13 +101,14 @@ class Scheduler {
         const plan = todayPlans[acc.id];
         if (!plan || plan.executed) continue;
 
-        // 检查是否到达该账号的专属拟人作息时间窗口
-        const isStartHourMatch = (currentHour === plan.startHour && currentMinute >= plan.plannedMinute);
-        const isWithinWindow = (currentHour > plan.startHour && currentHour < plan.endHour);
+        // 距离窗口起点的分钟数（跨零点窗口也能正确计算）
+        const nowOffset = this.minutesIntoWindow(plan.startMin, plan.wraps, nowMin);
 
-        if (isStartHourMatch || isWithinWindow) {
+        const inWindow = nowOffset >= 0 && nowOffset < plan.windowLength;
+        if (inWindow && nowOffset >= plan.offset) {
           plan.executed = true;
-          logger.log('⏰', `到达账号 [${acc.name}] 拟人作息窗口 (${plan.startHour}:00 - ${plan.endHour}:00，今日随机命中 ${String(plan.startHour).padStart(2,'0')}:${String(plan.plannedMinute).padStart(2,'0')})，启动打卡...`, '', acc.name);
+          const fmt = (m) => `${String(Math.floor((m % 1440) / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+          logger.log('⏰', `到达账号 [${acc.name}] 拟人作息窗口 (${fmt(plan.startMin)} - ${fmt(plan.endMin)}，今日随机命中 ${fmt(plan.startMin + plan.offset)})，启动打卡...`, '', acc.name);
           try {
             await taskManager.runAll(false, acc.id);
           } catch (e) {

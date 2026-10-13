@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 const DEFAULT_CONFIG = {
@@ -185,7 +185,11 @@ class ConfigManager {
           tokenTime: first.tokenTime || 0
         };
       }
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2), 'utf-8');
+      // 原子写入 + 权限收紧（配置里含明文 Cookie / Refresh Token）
+      writeFileAtomic(CONFIG_FILE, JSON.stringify(this.config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      try {
+        fs.chmodSync(CONFIG_FILE, 0o600);
+      } catch {}
       return true;
     } catch (e) {
       console.error('[Config] 保存配置文件失败:', e.message);
@@ -214,6 +218,26 @@ class ConfigManager {
     const accounts = this.getAccounts();
     if (!accountId) return accounts[0] || null;
     return accounts.find(a => a.id === accountId) || accounts[0] || null;
+  }
+
+  /**
+   * 精确查找账号，找不到返回 null。
+   * 注意：getAccount() 在 id 不存在时会回退到第一个账号，写入类操作必须用这个方法，
+   * 否则一个不存在的 id 会静默改到第一个账号上（历史 bug：配置向导换 Token 覆盖主账号）。
+   */
+  findAccount(accountId) {
+    if (!accountId) return null;
+    return this.getAccounts().find(a => a.id === accountId) || null;
+  }
+
+  /**
+   * 解析账号：不传 id 时返回第一个账号（兼容单账号调用），
+   * 传了 id 则必须精确命中，否则返回 null。
+   * 所有「按 id 操作某个账号」的地方都应该用这个，而不是 getAccount()。
+   */
+  resolveAccount(accountId) {
+    if (!accountId) return this.getAccounts()[0] || null;
+    return this.findAccount(accountId);
   }
 
   upsertAccount(accountData) {
@@ -297,21 +321,30 @@ class ConfigManager {
       this.load();
     }
 
+    // 先深拷贝：mergeDeep 会改写传入对象，直接操作会把 express 的 req.body 也改掉
+    const patch = structuredClone(partial || {});
+
     // 如果更新的是单账号字段 account，同步更新到第一个账号或指定账号
-    if (partial.account && Array.isArray(this.config.accounts) && this.config.accounts.length > 0) {
-      const targetId = partial.accountId || this.config.accounts[0].id;
+    if (patch.account && Array.isArray(this.config.accounts) && this.config.accounts.length > 0) {
+      const targetId = patch.accountId || this.config.accounts[0].id;
       const idx = this.config.accounts.findIndex(a => a.id === targetId);
       if (idx !== -1) {
-        Object.assign(this.config.accounts[idx], partial.account);
+        Object.assign(this.config.accounts[idx], patch.account);
       }
     }
 
-    if (Array.isArray(partial.accounts)) {
-      this.config.accounts = partial.accounts;
-      delete partial.accounts;
+    if (Array.isArray(patch.accounts)) {
+      if (patch.accounts.length === 0) {
+        // 保护：前端 currentConfig 未加载完成时会上报空数组，
+        // 直接覆盖会把所有账号连同 Cookie/Token 一起清空。
+        console.error('[Config] 拒绝空的 accounts 更新，已保留原有账号');
+      } else {
+        this.config.accounts = patch.accounts;
+      }
+      delete patch.accounts;
     }
 
-    this.config = this.mergeDeep(this.config, partial);
+    this.config = this.mergeDeep(this.config, patch);
     this.save();
     return this.config;
   }

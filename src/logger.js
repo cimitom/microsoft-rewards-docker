@@ -1,8 +1,9 @@
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
+import { DATA_DIR } from './fsUtil.js';
 
-const LOG_FILE = path.join(process.cwd(), 'data', 'app.log');
+const LOG_FILE = path.join(DATA_DIR, 'app.log');
 
 class Logger extends EventEmitter {
   constructor(maxLogs = 500, maxTimeline = 30) {

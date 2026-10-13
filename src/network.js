@@ -3,6 +3,31 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import configManager from './config.js';
 
+// 只有这些域名才允许附带微软账号 Cookie。
+// 否则推送渠道（企业微信/钉钉/飞书/Bark/PushMe/Telegram）、热搜词接口、IP 查询接口
+// 都会收到完整的 Bing 会话 Cookie —— 那等于把账号凭据发给第三方。
+const MICROSOFT_COOKIE_DOMAINS = [
+  'bing.com',
+  'microsoft.com',
+  'live.com',
+  'msn.com',
+  'microsoftonline.com',
+  'microsoftonline.cn',
+  'windows.net',
+  'office.com',
+  'sharepoint.com',
+  'microsoft365.com'
+];
+
+function isMicrosoftHost(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return MICROSOFT_COOKIE_DOMAINS.some(d => hostname === d || hostname.endsWith(`.${d}`));
+  } catch {
+    return false;
+  }
+}
+
 class NetworkClient {
   constructor() {
     this.cookieJar = new Map();
@@ -11,7 +36,10 @@ class NetworkClient {
   }
 
   setActiveCookie(cookieStr) {
-    this.activeCookie = cookieStr || null;
+    // null = 未指定账号（回退到默认账号）；空字符串 = 该账号确实没有 Cookie。
+    // 之前用 `cookieStr || null` 会把空 Cookie 变成 null，导致「没有 Cookie 的账号」
+    // 悄悄拿第一个账号的 Cookie 去操作，等于跑错号。
+    this.activeCookie = (cookieStr === undefined || cookieStr === null) ? null : String(cookieStr);
   }
 
   initDefaultCookies() {
@@ -49,7 +77,8 @@ class NetworkClient {
   }
 
   getCookieString(targetUrl) {
-    if (this.activeCookie) {
+    // 必须用 !== null：空字符串代表「当前账号没有 Cookie」，不能回退
+    if (this.activeCookie !== null) {
       return this.activeCookie;
     }
 
@@ -131,8 +160,10 @@ class NetworkClient {
     const agent = this.getAgent();
     const finalHeaders = { ...headers };
 
-    // 自动添加 Cookie
-    const cookieHeader = cookieOverride !== null ? cookieOverride : this.getCookieString(url);
+    // 自动添加 Cookie（仅限微软/Bing 域名，防止账号凭据外泄给第三方接口）
+    const cookieHeader = cookieOverride !== null
+      ? cookieOverride
+      : (isMicrosoftHost(url) ? this.getCookieString(url) : '');
     if (cookieHeader && !finalHeaders['cookie'] && !finalHeaders['Cookie']) {
       finalHeaders['cookie'] = cookieHeader;
     }

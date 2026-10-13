@@ -119,7 +119,8 @@ export class RewardsApi {
 
   setCurrentAccount(acc) {
     this.currentAccountId = acc?.id || 'acc_1';
-    networkClient.setActiveCookie(acc?.cookie || null);
+    // 用 ?? 而不是 ||：账号没有 Cookie 时要显式置空，避免回退到别的账号
+    networkClient.setActiveCookie(acc?.cookie ?? null);
     // 同步日志归属上下文：该账号下所有未显式传账号名的日志都会自动带上账号名
     logger.setAccountContext(acc?.name || this.currentAccountId);
   }
@@ -333,9 +334,11 @@ export class RewardsApi {
         } catch {}
 
         // 桌面专属任务状态与到期天数动态解析
-        let desktopProgress = 3, desktopMax = 8;
+        // 注意：不要给默认值 3，否则没有该任务的账号也会显示假的 3/8
+        let desktopProgress = 0, desktopMax = 8;
         let desktopExpiresText = '到期日期 5 天后';
         const desktopIdx = clean.indexOf('桌面奖励应用每周专属任务');
+        const desktopAvailable = desktopIdx !== -1;
         if (desktopIdx !== -1) {
           const chunk = clean.substring(Math.max(0, desktopIdx - 500), desktopIdx + 2000);
           const mProg = chunk.match(/(\d+)\/(\d+)\s*个任务/);
@@ -352,7 +355,7 @@ export class RewardsApi {
         }
 
         // 印章进度提取 (如 8/12)
-        let stampsProgress = 8, stampsMax = 12;
+        let stampsProgress = 0, stampsMax = 12;
         const stampMatch = clean.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
           || clean.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
         if (stampMatch) {
@@ -371,7 +374,8 @@ export class RewardsApi {
           desktopApp: {
             progress: desktopProgress,
             max: desktopMax,
-            expiresText: desktopExpiresText
+            expiresText: desktopExpiresText,
+            available: desktopAvailable
           },
           stamps: {
             progress: stampsProgress,
@@ -955,8 +959,16 @@ export class RewardsApi {
 
   /**
    * 连签任务检测与视觉搜索
+   *
+   * 注意：视觉搜索（vsstreak）没法靠一次 HTTP GET 真正完成，原实现每次检测到
+   * 未完成就发一次请求，于是「检测到未打卡」会无限刷屏，并且高频访问微软接口
+   * 存在风控风险。现改为：
+   *   - 只有任务执行期（allowVisualSearchCheckIn=true）才尝试补签；
+   *   - 每个账号每天最多尝试一次；
+   *   - 跳过时不再打日志，避免刷屏。
    */
-  async checkStreak() {
+  async checkStreak(options = {}) {
+    const { allowVisualSearchCheckIn = false } = options;
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
@@ -976,13 +988,20 @@ export class RewardsApi {
       if (vsMatch) {
         const cur = parseInt(vsMatch[1]);
         const max = parseInt(vsMatch[2]);
-        if (cur < max) {
-          logger.log('📅', '检测到视觉搜索未打卡，正在后台补签...');
-          await networkClient.request({
-            url: 'https://www.bing.com/?features=vsstreak,vstooltip&form=ML2XES',
-            headers: { 'user-agent': USER_AGENTS.pc, 'referer': 'https://www.bing.com/' }
-          });
-          await this.randomDelay(2000, 4000);
+        if (cur < max && allowVisualSearchCheckIn) {
+          const accountKey = this.currentAccountId || 'acc_1';
+          const d = new Date();
+          const today = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+          if (!this.visualSearchCheckInAt) this.visualSearchCheckInAt = {};
+          if (this.visualSearchCheckInAt[accountKey] !== today) {
+            this.visualSearchCheckInAt[accountKey] = today;
+            logger.log('📅', `视觉搜索未完成 (${cur}/${max})，尝试后台补签（每账号每天一次）...`);
+            await networkClient.request({
+              url: 'https://www.bing.com/?features=vsstreak,vstooltip&form=ML2XES',
+              headers: { 'user-agent': USER_AGENTS.pc, 'referer': 'https://www.bing.com/' }
+            });
+            await this.randomDelay(2000, 4000);
+          }
         }
       }
 

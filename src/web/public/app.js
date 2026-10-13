@@ -381,10 +381,18 @@ function initUIEvents() {
     resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在换取并验证 Token...</span>';
     try {
       guideDraftAccount.authCodeUrl = input;
+      // 同步第一步填写的名称与序号，新建账号时一并写入
+      guideDraftAccount.name = document.getElementById('guide-account-name')?.value.trim() || guideDraftAccount.name;
+      guideDraftAccount.order = parseInt(document.getElementById('guide-account-order')?.value, 10) || guideDraftAccount.order;
       const res = await fetch('/api/auth/exchange-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urlOrCode: input, accountId: guideDraftAccount.id })
+        body: JSON.stringify({
+          urlOrCode: input,
+          accountId: guideDraftAccount.id,
+          name: guideDraftAccount.name,
+          order: guideDraftAccount.order
+        })
       }).then(r => r.json());
       if (res.success) {
         guideDraftAccount.accessToken = res.data.accessToken;
@@ -392,10 +400,10 @@ function initUIEvents() {
         guideDraftAccount.tokenTime = Date.now();
         resultDiv.innerHTML = '<span style="color:#34D399;">✅ Token 换取成功！已绑定至新账号草稿</span>';
       } else {
-        resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 换取失败: ${res.message}</span>`;
+        resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 换取失败: ${escapeHtml(res.message)}</span>`;
       }
     } catch (e) {
-      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 请求异常: ${e.message}</span>`;
+      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 请求异常: ${escapeHtml(e.message)}</span>`;
     }
   });
 
@@ -416,12 +424,12 @@ function initUIEvents() {
         body: JSON.stringify({ cookie, accountId: guideDraftAccount.id })
       }).then(r => r.json());
       if (testRes.success && testRes.data?.valid) {
-        resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${testRes.data.message}</span>`;
+        resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(testRes.data.message)}</span>`;
       } else {
-        resultDiv.innerHTML = `<span style="color:#EF4444;">❌ ${testRes.data?.message || testRes.message || 'Cookie 检测无效'}</span>`;
+        resultDiv.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(testRes.data?.message || testRes.message || 'Cookie 检测无效')}</span>`;
       }
     } catch (e) {
-      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 检测请求出错: ${e.message}</span>`;
+      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 检测请求出错: ${escapeHtml(e.message)}</span>`;
     }
   });
 
@@ -439,15 +447,15 @@ function initUIEvents() {
       }).then(r => r.json());
       if (res.success) {
         if (res.regionPass) {
-          resultDiv.innerHTML = `<span style="color:#34D399;">✅ 地区检测通过！当前出口位于：中国大陆 (${res.region})<br>${res.ipInfo}</span>`;
+          resultDiv.innerHTML = `<span style="color:#34D399;">✅ 地区检测通过！当前出口位于：中国大陆 (${escapeHtml(res.region)})<br>${escapeHtml(res.ipInfo)}</span>`;
         } else {
-          resultDiv.innerHTML = `<span style="color:#F59E0B;">⚠️ 警告：当前出口为非大陆地区 (${res.region})！若开启国区保护任务将被自动暂停。<br>${res.ipInfo}</span>`;
+          resultDiv.innerHTML = `<span style="color:#F59E0B;">⚠️ 警告：当前出口为非大陆地区 (${escapeHtml(res.region)})！若开启国区保护任务将被自动暂停。<br>${escapeHtml(res.ipInfo)}</span>`;
         }
       } else {
-        resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 测试失败: ${res.message}</span>`;
+        resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 测试失败: ${escapeHtml(res.message)}</span>`;
       }
     } catch (e) {
-      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 测试异常: ${e.message}</span>`;
+      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 测试异常: ${escapeHtml(e.message)}</span>`;
     }
   });
 
@@ -516,9 +524,9 @@ function initUIEvents() {
       body: JSON.stringify({ useProxy, proxyUrl })
     }).then(r => r.json());
     if (res.success) {
-      resultDiv.innerHTML = `<div>地区检测: ${res.regionPass ? '✅ 通过 (' + res.region + ')' : '⚠️ 报警 (' + res.region + ')'}</div><div>${res.ipInfo}</div>`;
+      resultDiv.innerHTML = `<div>地区检测: ${res.regionPass ? '✅ 通过 (' + escapeHtml(res.region) + ')' : '⚠️ 报警 (' + escapeHtml(res.region) + ')'}</div><div>${escapeHtml(res.ipInfo)}</div>`;
     } else {
-      resultDiv.innerHTML = `<div style="color:#EF4444;">测试失败: ${res.message}</div>`;
+      resultDiv.innerHTML = `<div style="color:#EF4444;">测试失败: ${escapeHtml(res.message)}</div>`;
     }
   });
 
@@ -690,7 +698,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.4';
+  const current = updateInfo?.currentVersion || '1.4.5';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -730,7 +738,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.4'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.5'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -877,7 +885,7 @@ function renderDashboard(data) {
   const displayBalance = isAllMode ? (summary?.totalBalance || 0) : (stats.balance || 0);
   const displayStreak = isAllMode ? (summary?.maxStreak || 0) : (stats.streakDays || 0);
   const displayPercent = isAllMode ? (summary?.overallPercent || 0) : Math.round((Object.values(stats.tasks || {}).filter(t => t.done || (t.max > 0 && t.progress >= t.max)).length / Math.max(1, Object.keys(stats.tasks || {}).length)) * 100);
-  const stamps = isAllMode ? (summary?.stamps || { progress: 8, max: 12 }) : (stats.stamps || { progress: 8, max: 12 });
+  const stamps = isAllMode ? (summary?.stamps || { progress: 0, max: 12 }) : (stats.stamps || { progress: 0, max: 12 });
 
   const doneTasksCount = isAllMode
     ? (summary?.doneTasksCount || 0)
@@ -895,10 +903,10 @@ function renderDashboard(data) {
   const statStamps = document.getElementById('stat-stamps');
   const statStampsDesc = document.getElementById('stat-stamps-desc');
   if (statStamps) {
-    statStamps.innerText = `${stamps.progress || 8} / ${stamps.max || 12}`;
+    statStamps.innerText = `${stamps.progress || 0} / ${stamps.max || 12}`;
   }
   if (statStampsDesc) {
-    const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 8));
+    const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 0));
     statStampsDesc.innerText = diff > 0 ? `差 ${diff} 个集满 1,000 分大奖` : '1,000 奖励印章已集满！';
   }
 
@@ -954,12 +962,19 @@ function renderDashboard(data) {
     let progPercent = t.max > 0 ? Math.min(100, Math.round((t.progress / t.max) * 100)) : (isDone ? 100 : 0);
 
     if (key === 'desktopApp') {
-      const p = t.progress || 3;
-      const m = t.max || 8;
+      const p = Number(t.progress || 0);
+      const m = Number(t.max || 8) || 8;
       progPercent = Math.round((p / m) * 100);
-      subtext = `${t.expiresText || '到期日期 5 天后'} · 每周打孔卡`;
-      progressLabel = `进度: ${p} / ${m} 个任务`;
-      pointsBadge = `+${t.points || 20} 积分`;
+      if (t.available === false) {
+        // 该账号本周没有这个任务时不要伪造进度
+        subtext = '本周未检测到该任务 · 每周打孔卡';
+        progressLabel = `进度: 0 / ${m} 个任务`;
+        pointsBadge = '+0 积分';
+      } else {
+        subtext = `${t.expiresText || '到期日期 5 天后'} · 每周打孔卡`;
+        progressLabel = `进度: ${p} / ${m} 个任务`;
+        pointsBadge = `+${t.points || 20} 积分`;
+      }
     }
 
     card.innerHTML = `
@@ -1315,6 +1330,9 @@ function populateSettingsForm() {
   // 调度
   document.getElementById('cfg-sched-enabled').checked = c.schedule?.enabled !== false;
   document.getElementById('cfg-sched-cron').value = c.schedule?.cron || '*/25 * * * *';
+  // Web 访问密码
+  const authPassElem = document.getElementById('cfg-auth-password');
+  if (authPassElem) authPassElem.value = c.server?.authPassword || '';
   // 通知
   document.getElementById('cfg-notify-wework').value = c.notify?.wework || '';
   document.getElementById('cfg-notify-dingding').value = c.notify?.dingding || '';
@@ -1367,6 +1385,11 @@ function loadAccountIntoForm(accId) {
 }
 
 async function saveSettingsFromModal() {
+  // 保护：配置还没加载完成时保存，会用空数据覆盖掉所有账号（连同 Cookie/Token）
+  if (!currentConfig || !Array.isArray(currentConfig.accounts) || currentConfig.accounts.length === 0) {
+    alert('配置尚未加载完成，为避免覆盖账号数据，请稍后重试。');
+    return;
+  }
   const currentAccId = editingAccountIdInModal || 'acc_1';
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
@@ -1432,6 +1455,9 @@ async function saveSettingsFromModal() {
       enabled: document.getElementById('cfg-sched-enabled').checked,
       cron: document.getElementById('cfg-sched-cron').value.trim()
     },
+    server: {
+      authPassword: document.getElementById('cfg-auth-password')?.value.trim() || ''
+    },
     notify: {
       wework: document.getElementById('cfg-notify-wework').value.trim(),
       dingding: document.getElementById('cfg-notify-dingding').value.trim(),
@@ -1478,20 +1504,42 @@ async function saveGuideSettings() {
   sh = Math.max(0, Math.min(23, sh));
   const eh = (sh + 4) % 24;
 
+  // 1) 保存账号本身：名称 / 序号 / Cookie / Token / 时段
+  //    以前这里只提交 account.timeSlot，会被 update() 写到第一个账号上，
+  //    向导里填的名称和序号则完全没有保存过。
+  const name = document.getElementById('guide-account-name')?.value.trim() || guideDraftAccount.name;
+  const order = parseInt(document.getElementById('guide-account-order')?.value, 10) || guideDraftAccount.order;
+  const cookie = document.getElementById('guide-cookie-input')?.value.trim() || guideDraftAccount.cookie;
+
+  try {
+    const accRes = await fetch('/api/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: guideDraftAccount.id,
+        name,
+        order,
+        enabled: true,
+        cookie,
+        authCodeUrl: guideDraftAccount.authCodeUrl,
+        refreshToken: guideDraftAccount.refreshToken,
+        accessToken: guideDraftAccount.accessToken,
+        tokenTime: guideDraftAccount.tokenTime,
+        timeSlot: { startHour: sh, endHour: eh, randomDelayMin: 60, durationHours: 2 }
+      })
+    }).then(r => r.json());
+    if (accRes.success && accRes.data?.id) {
+      selectedAccountId = accRes.data.id;
+    }
+  } catch (e) {
+    console.error('保存向导账号失败:', e);
+  }
+
+  // 2) 保存网络与代理设置
   await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      network: { useProxy, proxyUrl, lockRegion },
-      account: {
-        timeSlot: {
-          startHour: sh,
-          endHour: eh,
-          randomDelayMin: 60,
-          durationHours: 2
-        }
-      }
-    })
+    body: JSON.stringify({ network: { useProxy, proxyUrl, lockRegion } })
   });
 
   fetchConfig();

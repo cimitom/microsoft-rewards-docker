@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.4.4</span>
+            <span class="version-label" id="version-label">v1.4.5</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -572,6 +572,11 @@
             <label class="form-label">Cron 调度表达式</label>
             <input type="text" id="cfg-sched-cron" class="form-input" value="*/25 * * * *">
             <small class="form-hint">常用预设：<code>*/25 * * * *</code> (每25分钟检测一次) | <code>0 8,12,18 * * *</code> (每天8点、12点、18点)</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">🔒 Web 访问密码（留空则不启用认证）</label>
+            <input type="password" id="cfg-auth-password" class="form-input" autocomplete="new-password" placeholder="建议设置，避免账号 Cookie 被他人读取">
+            <small class="form-hint">设置后访问控制台需要输入此密码（HTTP Basic 认证）。保存并刷新页面后生效。页面会明文返回账号凭据，请勿在公网无密码暴露此端口。</small>
           </div>
         </div>
 

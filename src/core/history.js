@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import { DATA_DIR, writeFileAtomic } from '../fsUtil.js';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 
 class HistoryManager {
@@ -38,7 +38,7 @@ class HistoryManager {
   save(data) {
     try {
       this.ensureFile();
-      fs.writeFileSync(HISTORY_FILE, JSON.stringify(data, null, 2), 'utf-8');
+      writeFileAtomic(HISTORY_FILE, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
     } catch (e) {
       console.error('[History] 保存历史记录失败:', e.message);
     }

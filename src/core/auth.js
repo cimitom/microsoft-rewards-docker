@@ -24,7 +24,7 @@ export class AuthManager {
   }
 
   getAccessToken(accountId = null) {
-    const acc = configManager.getAccount(accountId);
+    const acc = configManager.resolveAccount(accountId);
     return acc?.accessToken || this.accessToken;
   }
 
@@ -49,14 +49,17 @@ export class AuthManager {
   /**
    * 通过授权码换取 Token
    */
-  async exchangeCodeForToken(codeOrUrl, accountId = null) {
+  async exchangeCodeForToken(codeOrUrl, accountId = null, accountMeta = {}) {
     const code = this.extractCode(codeOrUrl);
     if (!code) {
       throw new Error('无效的授权码或链接，未找到 code 参数');
     }
 
-    const targetAccount = configManager.getAccount(accountId);
-    const targetId = targetAccount?.id || 'acc_1';
+    // 必须精确匹配：accountId 不存在时不能用 getAccount()，
+    // 它会静默回退到第一个账号，导致「配置向导换 Token」覆盖主账号。
+    const targetAccount = configManager.findAccount(accountId);
+    const targetId = targetAccount?.id || accountId || `acc_${Date.now()}`;
+    const displayName = targetAccount?.name || accountMeta.name || targetId;
 
     const params = new URLSearchParams({
       client_id: AUTH_CONFIG.clientId,
@@ -66,10 +69,10 @@ export class AuthManager {
     });
 
     const prevCtx = logger.getAccountContext();
-    logger.setAccountContext(targetAccount?.name || targetId);
+    logger.setAccountContext(displayName);
 
     try {
-      logger.log('🔑', `正在为账号 [${targetAccount?.name || targetId}] 换取访问令牌 (Token)...`);
+      logger.log('🔑', `正在为账号 [${displayName}] 换取访问令牌 (Token)...`);
       const res = await networkClient.request({
         url: AUTH_CONFIG.tokenUrl,
         method: 'POST',
@@ -86,12 +89,14 @@ export class AuthManager {
         this.accessToken = data.access_token;
         configManager.upsertAccount({
           id: targetId,
+          // 新账号（配置向导草稿）需要带上名称与序号，否则会生成名为「账号 N」的占位账号
+          ...(targetAccount ? {} : { name: accountMeta.name, order: accountMeta.order }),
           authCodeUrl: codeOrUrl,
           accessToken: data.access_token,
           refreshToken: data.refresh_token,
           tokenTime: Date.now()
         });
-        logger.log('🟢', `账号 [${targetAccount?.name || targetId}] OAuth Token 换取成功并已持久化保存！`);
+        logger.log('🟢', `账号 [${displayName}] OAuth Token 换取成功并已持久化保存！`);
         return {
           success: true,
           accountId: targetId,
@@ -112,7 +117,7 @@ export class AuthManager {
    * 使用 Refresh Token 刷新 Access Token
    */
   async refreshToken(force = false, accountId = null) {
-    const acc = configManager.getAccount(accountId);
+    const acc = configManager.resolveAccount(accountId);
     if (!acc) return false;
 
     // 本函数内的日志统一归属到该账号
@@ -190,7 +195,7 @@ export class AuthManager {
    * 验证网页端 Cookie 是否有效并拉取账号详情
    */
   async checkCookieStatus(cookieOverride = null, accountId = null) {
-    const acc = configManager.getAccount(accountId);
+    const acc = configManager.resolveAccount(accountId);
     const cookie = cookieOverride || acc?.cookie;
     if (!cookie) {
       return { valid: false, message: '尚未配置网页端 Cookie' };
@@ -254,7 +259,7 @@ export class AuthManager {
         }
 
         // 5. 提取印章进度 (如 8/12)
-        let stampsProgress = 8, stampsMax = 12;
+        let stampsProgress = 0, stampsMax = 12;
         const stampMatch = clean.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
           || clean.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
         if (stampMatch) {
@@ -299,7 +304,7 @@ export class AuthManager {
    * 实测移动端 OAuth Token 与 DAPI 接口连通性
    */
   async checkTokenStatus(accountId = null) {
-    const acc = configManager.getAccount(accountId);
+    const acc = configManager.resolveAccount(accountId);
     if (!acc?.refreshToken && !acc?.accessToken) {
       return { valid: false, message: '尚未完成移动端授权 (未配置 Token)' };
     }
@@ -347,7 +352,7 @@ export class AuthManager {
    * 一键全面诊断测试账户在 Docker 中的登录状态
    */
   async testAccount(accountId = null) {
-    const acc = configManager.getAccount(accountId);
+    const acc = configManager.resolveAccount(accountId);
     const name = acc?.name || accountId || '当前账号';
     const prevCtx = logger.getAccountContext();
     logger.setAccountContext(name);
