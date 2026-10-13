@@ -16,6 +16,15 @@ function initUIEvents() {
   document.getElementById('btn-run').addEventListener('click', runTasks);
   document.getElementById('btn-stop').addEventListener('click', stopTasks);
 
+  // 顶部快捷测试账号登录
+  document.getElementById('btn-check-account').addEventListener('click', () => {
+    openModal('diag-modal');
+    runAccountDiagnosis();
+  });
+  document.getElementById('btn-close-diag').addEventListener('click', () => closeModal('diag-modal'));
+  document.getElementById('btn-confirm-diag').addEventListener('click', () => closeModal('diag-modal'));
+  document.getElementById('btn-retest-diag').addEventListener('click', runAccountDiagnosis);
+
   // 向导 Modal
   document.getElementById('btn-guide').addEventListener('click', () => openModal('guide-modal'));
   document.getElementById('btn-close-guide').addEventListener('click', () => closeModal('guide-modal'));
@@ -487,3 +496,125 @@ window.testNotifyChannel = async function(channel) {
     alert(`测试异常: ${e.message}`);
   }
 };
+
+// 全面运行账号登录状态体检
+async function runAccountDiagnosis() {
+  const loading = document.getElementById('diag-loading');
+  const content = document.getElementById('diag-content');
+  loading.style.display = 'block';
+  content.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/auth/test', { method: 'POST' }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '诊断接口异常');
+
+    const data = res.data;
+    const cookie = data.cookie || {};
+    const token = data.token || {};
+    const net = data.network || {};
+
+    // 1. 综合 Banner
+    const banner = document.getElementById('diag-banner');
+    const bIcon = document.getElementById('diag-banner-icon');
+    const bTitle = document.getElementById('diag-banner-title');
+    const bSub = document.getElementById('diag-banner-sub');
+
+    if (data.allValid && net.regionPass) {
+      banner.className = 'diag-banner ok';
+      bIcon.innerText = '🟢';
+      bTitle.innerText = '账号登录完全正常 (双端在线)';
+      bSub.innerText = '当前 Docker 环境已完美就绪，所有任务通道与网络环境均处于最佳状态！';
+    } else if (data.overallValid) {
+      banner.className = 'diag-banner partial';
+      bIcon.innerText = '🟡';
+      bTitle.innerText = '账号部分登录有效';
+      bSub.innerText = '部分通道已连接，但仍有项未就绪（如网页端或移动端单边未登录），请根据下方提示补充。';
+    } else {
+      banner.className = 'diag-banner failed';
+      bIcon.innerText = '🔴';
+      bTitle.innerText = '账号尚未成功在 Docker 中登录';
+      bSub.innerText = '未检测到有效的微软登录凭据，请点击右上角「新手配置向导」进行绑定。';
+    }
+
+    // 2. 网页端 Cookie 卡片
+    const pillCookie = document.getElementById('diag-pill-cookie');
+    const detailCookie = document.getElementById('diag-detail-cookie');
+    if (cookie.valid) {
+      pillCookie.className = 'diag-status-pill pill-ok';
+      pillCookie.innerText = '已登录正常';
+      detailCookie.innerHTML = `
+        <div>状态：✅ 身份认证有效，可执行 PC 搜索、每日活动集与桌面专属任务</div>
+        <div style="margin-top:4px; color:#E2E8F0;">${cookie.message || ''}</div>
+      `;
+    } else {
+      pillCookie.className = 'diag-status-pill pill-err';
+      pillCookie.innerText = '未登录 / 失效';
+      detailCookie.innerHTML = `
+        <div style="color:#F87171;">状态：❌ ${cookie.message || 'Cookie 缺失或已失效'}</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：在电脑登录 rewards.bing.com，按 F12 复制完整 Cookie 粘贴到配置中心。</div>
+      `;
+    }
+
+    // 3. 移动端 Token 卡片
+    const pillToken = document.getElementById('diag-pill-token');
+    const detailToken = document.getElementById('diag-detail-token');
+    if (token.valid) {
+      pillToken.className = 'diag-status-pill pill-ok';
+      pillToken.innerText = '已授权正常';
+      detailToken.innerHTML = `
+        <div>状态：✅ OAuth Token 活跃，可执行 App 静默签到与新闻资讯阅读 (30分)</div>
+        <div style="margin-top:4px; color:#E2E8F0;">${token.message || ''}</div>
+      `;
+    } else {
+      pillToken.className = 'diag-status-pill pill-err';
+      pillToken.innerText = '未授权 / 失效';
+      detailToken.innerHTML = `
+        <div style="color:#F87171;">状态：❌ ${token.message || '未获取到移动端 OAuth 授权'}</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：点击「新手配置向导」第一步，打开官方链接授权并粘贴跳转 URL。</div>
+      `;
+    }
+
+    // 4. 网络卡片
+    const pillNet = document.getElementById('diag-pill-network');
+    const detailNet = document.getElementById('diag-detail-network');
+    if (net.regionPass) {
+      pillNet.className = 'diag-status-pill pill-ok';
+      pillNet.innerText = '中国大陆 (安全)';
+      detailNet.innerHTML = `
+        <div>状态：✅ 出口 IP 符合微软国区要求 (${net.region})，防风控检测通过</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">${net.ipInfo || ''}</div>
+      `;
+    } else {
+      pillNet.className = 'diag-status-pill pill-err';
+      pillNet.innerText = `非大陆地区 (${net.region || '未知'})`;
+      detailNet.innerHTML = `
+        <div style="color:#F87171;">状态：⚠️ 出口位于非大陆地区，若开启国区保护将被自动停止打卡防风控。</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：如果是境外 VPS，请在配置中心设置走国内 HTTP/SOCKS5 代理。</div>
+      `;
+    }
+
+    // 5. 数据概览明细
+    document.getElementById('diag-val-balance').innerText = data.balance ? `${data.balance.toLocaleString()} 积分` : '--';
+    document.getElementById('diag-val-search').innerText = cookie.pcSearch || '--';
+    document.getElementById('diag-val-read').innerText = token.readProgress || '--';
+
+    // 6. 建议区
+    const tipsBox = document.getElementById('diag-tips');
+    if (data.allValid) {
+      tipsBox.innerHTML = '💡 <strong>检测完毕：</strong>您的微软账号在 Docker 中运行环境完美，点击「▶️ 立即执行」即可开始打卡！';
+    } else {
+      tipsBox.innerHTML = '💡 <strong>下一步建议：</strong>请点击右上角「💡 新手配置向导」，根据缺失的项（Cookie 或 Token）补充配置即可。';
+    }
+
+    loading.style.display = 'none';
+    content.style.display = 'block';
+
+    // 同步刷新大屏
+    fetchStatus();
+  } catch (e) {
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    document.getElementById('diag-banner-title').innerText = '诊断请求失败';
+    document.getElementById('diag-banner-sub').innerText = e.message;
+  }
+}

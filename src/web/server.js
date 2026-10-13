@@ -106,10 +106,28 @@ export function createServer() {
     }
   });
 
-  // 8. 测试账户状态
+  // 8. 全面测试账户状态并在 Docker 中完成体检
   app.post('/api/auth/test', async (req, res) => {
     try {
       const result = await authManager.testAccount();
+      // 获取当前网络出口信息
+      const [ipInfo, regionPass] = await Promise.all([
+        rewardsApi.getIPInfo(),
+        rewardsApi.checkRegion(0)
+      ]);
+
+      result.network = {
+        region: rewardsApi.region,
+        regionPass,
+        ipInfo: ipInfo || '未知'
+      };
+
+      // 如果成功获取到积分，同步更新当前系统的总积分大屏
+      if (result.balance > 0) {
+        taskManager.stats.balance = result.balance;
+        taskManager.saveStats();
+      }
+
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });

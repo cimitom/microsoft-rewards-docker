@@ -67,10 +67,10 @@ services:
     container_name: ms-rewards
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "5308:5308"
     environment:
       - TZ=Asia/Shanghai
-      - PORT=8080
+      - PORT=5308
     volumes:
       - ./data:/app/data
 ```
@@ -80,7 +80,7 @@ services:
 docker compose up -d
 ```
 
-4. 启动后，打开浏览器访问：`http://<NAS或VPS的IP>:8080`，即可进入现代化控制台！
+4. 启动后，打开浏览器访问：`http://<NAS或VPS的IP>:5308`，即可进入现代化控制台！
 
 ---
 
@@ -90,7 +90,7 @@ docker compose up -d
 docker run -d \
   --name ms-rewards \
   --restart unless-stopped \
-  -p 8080:8080 \
+  -p 5308:5308 \
   -v $(pwd)/data:/app/data \
   -e TZ=Asia/Shanghai \
   ghcr.io/wangheqiang530/microsoft-rewards-docker:latest
@@ -112,7 +112,7 @@ npm install
 npm start
 ```
 
-服务启动后，浏览器访问 `http://localhost:8080`。
+服务启动后，浏览器访问 `http://localhost:5308`。
 
 ---
 

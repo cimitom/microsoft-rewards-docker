@@ -9,10 +9,10 @@ services:
     container_name: ms-rewards
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "5308:5308"
     environment:
       - TZ=Asia/Shanghai
-      - PORT=8080
+      - PORT=5308
     volumes:
       - ./data:/app/data
     logging:

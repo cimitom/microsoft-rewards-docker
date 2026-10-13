@@ -11,7 +11,7 @@ async function bootstrap() {
   `);
 
   const cfg = configManager.get();
-  const port = process.env.PORT || cfg.server?.port || 8080;
+  const port = process.env.PORT || cfg.server?.port || 5308;
 
   const app = createServer();
 

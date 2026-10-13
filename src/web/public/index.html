@@ -28,6 +28,9 @@
       </div>
 
       <div class="header-right">
+        <button id="btn-check-account" class="btn btn-secondary">
+          <span>🔍</span> 测试账号状态
+        </button>
         <button id="btn-guide" class="btn btn-secondary">
           <span>💡</span> 新手配置向导
         </button>
@@ -352,6 +355,94 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-cancel-settings">取消</button>
         <button class="btn btn-primary" id="btn-save-settings">保存所有配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 账号登录诊断弹窗 (Modal) -->
+  <div class="modal-backdrop" id="diag-modal">
+    <div class="modal-box modal-diag">
+      <div class="modal-header">
+        <div class="modal-title"><span>🔍</span> 微软账号在 Docker 中的登录状态体检</div>
+        <button class="btn-close" id="btn-close-diag">&times;</button>
+      </div>
+      <div class="modal-body" id="diag-modal-body">
+        <div class="diag-loading" id="diag-loading" style="text-align: center; padding: 30px 0;">
+          <div class="diag-spinner"></div>
+          <p style="margin-top: 14px; color: var(--text-sub);">正在全面请求微软官方接口检测当前 Docker 中的登录态...</p>
+        </div>
+        <div class="diag-content" id="diag-content" style="display: none;">
+          <!-- 诊断综合状态 Header -->
+          <div class="diag-banner" id="diag-banner">
+            <div class="diag-banner-icon" id="diag-banner-icon">🟢</div>
+            <div>
+              <h3 class="diag-banner-title" id="diag-banner-title">账号登录完全正常</h3>
+              <p class="diag-banner-sub" id="diag-banner-sub">当前 Docker 环境已成功连接微软服务，可顺利打卡全部任务。</p>
+            </div>
+          </div>
+
+          <!-- 3 个检测维度卡片 -->
+          <div class="diag-cards">
+            <!-- 1. 网页端 Cookie 状态 -->
+            <div class="diag-item-card" id="diag-card-cookie">
+              <div class="diag-item-header">
+                <span class="diag-item-icon">💻</span>
+                <span class="diag-item-name">必应网页端 Cookie</span>
+                <span class="diag-status-pill" id="diag-pill-cookie">检测中</span>
+              </div>
+              <div class="diag-item-body" id="diag-detail-cookie">
+                --
+              </div>
+            </div>
+
+            <!-- 2. 移动端 OAuth Token 状态 -->
+            <div class="diag-item-card" id="diag-card-token">
+              <div class="diag-item-header">
+                <span class="diag-item-icon">📱</span>
+                <span class="diag-item-name">移动端 App 授权 (DAPI)</span>
+                <span class="diag-status-pill" id="diag-pill-token">检测中</span>
+              </div>
+              <div class="diag-item-body" id="diag-detail-token">
+                --
+              </div>
+            </div>
+
+            <!-- 3. Docker 出口网络与 IP 地区 -->
+            <div class="diag-item-card" id="diag-card-network">
+              <div class="diag-item-header">
+                <span class="diag-item-icon">🌐</span>
+                <span class="diag-item-name">容器出口 IP 与国区防风控</span>
+                <span class="diag-status-pill" id="diag-pill-network">检测中</span>
+              </div>
+              <div class="diag-item-body" id="diag-detail-network">
+                --
+              </div>
+            </div>
+          </div>
+
+          <!-- 账户总览明细 -->
+          <div class="diag-summary-box">
+            <div class="diag-summary-item">
+              <span class="diag-summary-label">微软平台实时总积分</span>
+              <span class="diag-summary-val" id="diag-val-balance">--</span>
+            </div>
+            <div class="diag-summary-item">
+              <span class="diag-summary-label">PC 搜索配额状态</span>
+              <span class="diag-summary-val" id="diag-val-search">--</span>
+            </div>
+            <div class="diag-summary-item">
+              <span class="diag-summary-label">新闻阅读任务进度</span>
+              <span class="diag-summary-val" id="diag-val-read">--</span>
+            </div>
+          </div>
+
+          <!-- 优化建议提示区 -->
+          <div class="diag-tips" id="diag-tips"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-retest-diag">🔄 重新检测</button>
+        <button class="btn btn-primary" id="btn-confirm-diag">确定</button>
       </div>
     </div>
   </div>

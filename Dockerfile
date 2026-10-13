@@ -17,10 +17,10 @@ COPY src/ ./src/
 # 创建持久化数据目录
 RUN mkdir -p /app/data
 
-EXPOSE 8080
+EXPOSE 5308
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/api/status || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:5308/api/status || exit 1
 
 VOLUME ["/app/data"]
 

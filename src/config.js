@@ -41,7 +41,7 @@ const DEFAULT_CONFIG = {
     bark: ''
   },
   server: {
-    port: 8080,
+    port: 5308,
     authPassword: ''
   }
 };
