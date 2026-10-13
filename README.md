@@ -4,6 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Version](https://img.shields.io/badge/Version-v1.2.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -11,12 +12,18 @@
 
 ## ✨ 核心特性
 
+- 👥 **多账号矩阵管理与一键切换 (全新 v1.2.0)**：
+  - 支持绑定并同时托管多个微软账户，各账号独立 Cookie / Token，环境彻底隔离；
+  - 顶部一键切换胶囊：支持 **「全部账号汇总大屏」** 与 **「单账号深度看板」** 自由穿梭；
+  - 顺序轮询巡检打卡，账号间内置 **安全随机防风控间隔**，防止关联风控。
 - 🖥️ **完全脱离电脑与浏览器**：基于轻量 Docker 容器后台静默常驻，7×24 小时自动巡检。
 - 📊 **现代化 Fluent 毛玻璃 Web 控制台**：
-  - 四核 Hero 指标大屏：今日已增积分、当前总积分、今日任务达成率、连续签到天数；
+  - 五核 Hero 指标大屏：今日已增积分、当前总积分、今日任务达成率、连续签到天数、连签印章进度 (8/12)；
   - 任务进度微光进度条与打卡状态可视化；
+  - 距离每日刷新剩余时间动态秒级倒计时；
   - 实时执行流时间轴与内置终端风格彩色日志流（支持 SSE 实时推流滚屏）；
-  - **📈 每日积分历史趋势看板**：支持 **7 日** 与 **30 日** 动态切换，鼠标悬停柱子浮现详细打卡明细与结余积分。
+  - **📈 每日积分历史趋势看板**：支持 **7 日** 与 **30 日** 动态切换，鼠标悬停柱子浮现详细打卡明细与结余积分；
+  - **🌓 日夜模式与跟随系统**：支持一键切换日间模式、夜间模式或跟随操作系统。
 - 💡 **小白 1 分钟极简配置向导**：无需懂代码，通过 Web 页面指引点击一键授权微软登录、粘贴 Cookie，系统自动换取 Token 并永久自动续期。
 - 🌐 **网络环境与代理（防风控关键）**：
   - 支持配置 **HTTP / HTTPS / SOCKS5 代理**；

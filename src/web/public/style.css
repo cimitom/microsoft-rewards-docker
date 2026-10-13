@@ -298,6 +298,149 @@ body {
   color: #fff;
 }
 
+/* Multi-Account Selector Bar */
+.account-selector-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 2px;
+  scrollbar-width: none;
+}
+.account-selector-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.account-chip {
+  background: var(--card-bg);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 8px 16px;
+  color: var(--text-main);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.account-chip:hover {
+  border-color: var(--border-light);
+  transform: translateY(-1px);
+}
+
+.account-chip.active {
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(0, 120, 212, 0.2));
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 4px 18px rgba(0, 120, 212, 0.35);
+}
+
+.chip-icon {
+  font-size: 14px;
+}
+
+.chip-badge {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent);
+}
+
+.chip-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.chip-add {
+  background: transparent;
+  border: 1px dashed var(--border-light);
+  color: var(--accent);
+}
+
+.chip-add:hover {
+  background: var(--card-inner);
+}
+
+/* Accounts Overview Grid in All Mode */
+.accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.account-overview-card {
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.account-overview-card:hover {
+  border-color: var(--border-light);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+}
+
+.acc-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.acc-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.acc-card-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.acc-stat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.acc-stat-lbl {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.acc-stat-num {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.acc-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Hero Grid */
 .hero-grid {
   display: grid;

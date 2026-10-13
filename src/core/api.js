@@ -117,11 +117,16 @@ export class RewardsApi {
     }
   }
 
+  setCurrentAccount(acc) {
+    this.currentAccountId = acc?.id || 'acc_1';
+    networkClient.setActiveCookie(acc?.cookie || null);
+  }
+
   async withTokenRetry(requestFn) {
-    let token = authManager.getAccessToken();
+    let token = authManager.getAccessToken(this.currentAccountId);
     if (!token) {
-      await authManager.refreshToken();
-      token = authManager.getAccessToken();
+      await authManager.refreshToken(false, this.currentAccountId);
+      token = authManager.getAccessToken(this.currentAccountId);
     }
     if (!token) return null;
 
@@ -130,9 +135,9 @@ export class RewardsApi {
     } catch (e) {
       if (e.message && e.message.includes('401')) {
         logger.log('🟡', 'Token 可能已过期，尝试重新刷新续期...');
-        const ok = await authManager.refreshToken(true);
+        const ok = await authManager.refreshToken(true, this.currentAccountId);
         if (!ok) return null;
-        token = authManager.getAccessToken();
+        token = authManager.getAccessToken(this.currentAccountId);
         return await requestFn(token);
       }
       throw e;

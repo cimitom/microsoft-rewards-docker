@@ -23,17 +23,18 @@ class Scheduler {
 
     const validExpr = cron.validate(cronExpr) ? cronExpr : '*/25 * * * *';
     this.job = cron.schedule(validExpr, async () => {
-      const currentCfg = configManager.get();
-      if (!currentCfg.account?.cookie && !currentCfg.account?.refreshToken) {
-        logger.log('🟡', '定时任务跳过：尚未配置微软账户 Cookie 或 Token');
+      const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
+      const hasValidAccount = accounts.some(a => a.cookie || a.refreshToken);
+      if (!hasValidAccount) {
+        logger.log('🟡', '定时任务跳过：尚未配置任何已启用的微软账户 Cookie 或 Token');
         return;
       }
 
-      const status = taskManager.getStatus();
-      const tasks = Object.values(status.stats.tasks || {});
-      const allDone = tasks.length > 0 && tasks.every(t => t.done);
+      const status = taskManager.getStatus('all');
+      const allDone = status.summary?.overallPercent === 100;
+      const currentCfg = configManager.get();
       if (allDone && !currentCfg.tasks?.keepRunning) {
-        logger.log('💤', '今日所有任务已达标完成，跳过本次巡检');
+        logger.log('💤', '今日所有账号任务均已全部达成，跳过本次巡检');
         return;
       }
 

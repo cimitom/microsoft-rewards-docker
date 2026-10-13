@@ -23,8 +23,9 @@ export class AuthManager {
     }
   }
 
-  getAccessToken() {
-    return this.accessToken;
+  getAccessToken(accountId = null) {
+    const acc = configManager.getAccount(accountId);
+    return acc?.accessToken || this.accessToken;
   }
 
   /**
@@ -48,11 +49,14 @@ export class AuthManager {
   /**
    * 通过授权码换取 Token
    */
-  async exchangeCodeForToken(codeOrUrl) {
+  async exchangeCodeForToken(codeOrUrl, accountId = null) {
     const code = this.extractCode(codeOrUrl);
     if (!code) {
       throw new Error('无效的授权码或链接，未找到 code 参数');
     }
+
+    const targetAccount = configManager.getAccount(accountId);
+    const targetId = targetAccount?.id || 'acc_1';
 
     const params = new URLSearchParams({
       client_id: AUTH_CONFIG.clientId,
@@ -62,7 +66,7 @@ export class AuthManager {
     });
 
     try {
-      logger.log('🔑', '正在使用授权码换取访问令牌 (Token)...');
+      logger.log('🔑', `正在为账号 [${targetAccount?.name || targetId}] 换取访问令牌 (Token)...`);
       const res = await networkClient.request({
         url: AUTH_CONFIG.tokenUrl,
         method: 'POST',
@@ -77,17 +81,17 @@ export class AuthManager {
 
       if (data.access_token && data.refresh_token) {
         this.accessToken = data.access_token;
-        configManager.update({
-          account: {
-            authCodeUrl: codeOrUrl,
-            accessToken: data.access_token,
-            refreshToken: data.refresh_token,
-            tokenTime: Date.now()
-          }
+        configManager.upsertAccount({
+          id: targetId,
+          authCodeUrl: codeOrUrl,
+          accessToken: data.access_token,
+          refreshToken: data.refresh_token,
+          tokenTime: Date.now()
         });
-        logger.log('🟢', '移动端 OAuth Token 换取成功并已持久化保存！');
+        logger.log('🟢', `账号 [${targetAccount?.name || targetId}] OAuth Token 换取成功并已持久化保存！`);
         return {
           success: true,
+          accountId: targetId,
           accessToken: data.access_token,
           refreshToken: data.refresh_token
         };
@@ -102,19 +106,22 @@ export class AuthManager {
   /**
    * 使用 Refresh Token 刷新 Access Token
    */
-  async refreshToken(force = false) {
-    const cfg = configManager.get();
-    let refreshToken = cfg.account?.refreshToken;
-    const tokenTime = cfg.account?.tokenTime || 0;
+  async refreshToken(force = false, accountId = null) {
+    const acc = configManager.getAccount(accountId);
+    if (!acc) return false;
+
+    let refreshToken = acc.refreshToken;
+    const tokenTime = acc.tokenTime || 0;
 
     // 检查有效期，如果刚刷过且没有强制要求，且已经有 accessToken，则直接复用
     const diffHours = (Date.now() - tokenTime) / (1000 * 60 * 60);
-    if (!force && this.accessToken && diffHours < 12) {
+    if (!force && acc.accessToken && diffHours < 12) {
+      this.accessToken = acc.accessToken;
       return true;
     }
 
     if (!refreshToken) {
-      logger.log('🟡', '未配置 Refresh Token，跳过 Token 刷新');
+      logger.log('🟡', `账号 [${acc.name || acc.id}] 未配置 Refresh Token，跳过 Token 刷新`);
       return false;
     }
 
@@ -126,7 +133,7 @@ export class AuthManager {
     });
 
     try {
-      logger.log('🔄', '正在自动续期刷新 OAuth Token...');
+      logger.log('🔄', `正在为账号 [${acc.name || acc.id}] 自动续期刷新 OAuth Token...`);
       const res = await networkClient.request({
         url: AUTH_CONFIG.tokenUrl,
         method: 'POST',
@@ -136,26 +143,27 @@ export class AuthManager {
 
       const data = typeof res === 'string' ? JSON.parse(res) : res;
       if (data.error) {
-        logger.log('🔴', `刷新 Token 失败: ${data.error} - ${data.error_description || ''}`);
+        logger.log('🔴', `账号 [${acc.name}] 刷新 Token 失败: ${data.error} - ${data.error_description || ''}`);
         if (['invalid_grant', 'invalid_request'].includes(data.error)) {
-          configManager.update({
-            account: { accessToken: '', refreshToken: '', tokenTime: 0 }
+          configManager.upsertAccount({
+            id: acc.id,
+            accessToken: '',
+            refreshToken: '',
+            tokenTime: 0
           });
-          this.accessToken = null;
         }
         return false;
       }
 
       if (data.access_token && data.refresh_token) {
         this.accessToken = data.access_token;
-        configManager.update({
-          account: {
-            accessToken: data.access_token,
-            refreshToken: data.refresh_token,
-            tokenTime: Date.now()
-          }
+        configManager.upsertAccount({
+          id: acc.id,
+          accessToken: data.access_token,
+          refreshToken: data.refresh_token,
+          tokenTime: Date.now()
         });
-        logger.log('🟢', 'OAuth Token 续期刷新成功！');
+        logger.log('🟢', `账号 [${acc.name}] OAuth Token 续期刷新成功！`);
         return true;
       }
       return false;
@@ -168,9 +176,9 @@ export class AuthManager {
   /**
    * 验证网页端 Cookie 是否有效并拉取账号详情
    */
-  async checkCookieStatus(cookieOverride = null) {
-    const cfg = configManager.get();
-    const cookie = cookieOverride || cfg.account?.cookie;
+  async checkCookieStatus(cookieOverride = null, accountId = null) {
+    const acc = configManager.getAccount(accountId);
+    const cookie = cookieOverride || acc?.cookie;
     if (!cookie) {
       return { valid: false, message: '尚未配置网页端 Cookie' };
     }
@@ -272,14 +280,15 @@ export class AuthManager {
   /**
    * 实测移动端 OAuth Token 与 DAPI 接口连通性
    */
-  async checkTokenStatus() {
-    const cfg = configManager.get();
-    if (!cfg.account?.refreshToken && !this.accessToken) {
+  async checkTokenStatus(accountId = null) {
+    const acc = configManager.getAccount(accountId);
+    if (!acc?.refreshToken && !acc?.accessToken) {
       return { valid: false, message: '尚未完成移动端授权 (未配置 Token)' };
     }
 
-    const tokenOk = await this.refreshToken();
-    if (!tokenOk || !this.accessToken) {
+    const tokenOk = await this.refreshToken(false, accountId);
+    const token = this.getAccessToken(accountId);
+    if (!tokenOk || !token) {
       return { valid: false, message: 'Refresh Token 已过期或失效，请重新授权' };
     }
 
@@ -289,7 +298,7 @@ export class AuthManager {
         headers: {
           'content-type': 'application/json; charset=UTF-8',
           'user-agent': 'Mozilla/5.0 (Linux; Android 16; Redmi K20 Pro Build/BP4A.251205.006; ) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/144.0.7559.132 Mobile Safari/537.36 BingSapphire/32.6.2110003560',
-          'authorization': `Bearer ${this.accessToken}`,
+          'authorization': `Bearer ${token}`,
           'x-rewards-appid': 'SAAndroid/32.6.2110003560',
           'x-rewards-ismobile': 'true',
           'x-rewards-country': 'cn',
@@ -319,11 +328,14 @@ export class AuthManager {
   /**
    * 一键全面诊断测试账户在 Docker 中的登录状态
    */
-  async testAccount() {
-    logger.log('🔍', '开始检测当前微软账号在 Docker 容器中的登录状态...');
+  async testAccount(accountId = null) {
+    const acc = configManager.getAccount(accountId);
+    const name = acc?.name || accountId || '当前账号';
+    logger.log('🔍', `开始检测账号 [${name}] 在 Docker 容器中的登录状态...`);
+
     const [cookieStatus, tokenStatus] = await Promise.all([
-      this.checkCookieStatus(),
-      this.checkTokenStatus()
+      this.checkCookieStatus(null, accountId),
+      this.checkTokenStatus(accountId)
     ]);
 
     const balance = cookieStatus.balance || tokenStatus.balance || 0;
@@ -331,14 +343,16 @@ export class AuthManager {
     const partialValid = cookieStatus.valid || tokenStatus.valid;
 
     if (allValid) {
-      logger.log('🟢', `账号登录检测完全通过！网页端与移动端均在线，当前总积分: ${balance}`);
+      logger.log('🟢', `账号 [${name}] 登录检测完全通过！网页端与移动端均在线，当前总积分: ${balance}`);
     } else if (partialValid) {
-      logger.log('🟡', `账号部分登录有效：网页端(${cookieStatus.valid ? '正常' : '未就绪'}) / 移动端(${tokenStatus.valid ? '正常' : '未就绪'})`);
+      logger.log('🟡', `账号 [${name}] 部分登录有效：网页端(${cookieStatus.valid ? '正常' : '未就绪'}) / 移动端(${tokenStatus.valid ? '正常' : '未就绪'})`);
     } else {
-      logger.log('🔴', '账号尚未登录或凭证已失效，请打开「新手配置向导」完成绑定');
+      logger.log('🔴', `账号 [${name}] 尚未登录或凭证已失效`);
     }
 
     return {
+      accountId: acc?.id || 'acc_1',
+      accountName: name,
       cookie: cookieStatus,
       token: tokenStatus,
       balance,

@@ -6,7 +6,12 @@ import configManager from './config.js';
 class NetworkClient {
   constructor() {
     this.cookieJar = new Map();
+    this.activeCookie = null;
     this.initDefaultCookies();
+  }
+
+  setActiveCookie(cookieStr) {
+    this.activeCookie = cookieStr || null;
   }
 
   initDefaultCookies() {
@@ -44,6 +49,10 @@ class NetworkClient {
   }
 
   getCookieString(targetUrl) {
+    if (this.activeCookie) {
+      return this.activeCookie;
+    }
+
     let hostname = '';
     try {
       hostname = new URL(targetUrl).hostname;

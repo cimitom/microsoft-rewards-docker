@@ -4,6 +4,8 @@ let currentConfig = null;
 let eventSource = null;
 let currentHistoryDays = 7;
 let currentTheme = localStorage.getItem('ms_rewards_theme') || 'auto';
+let selectedAccountId = 'all'; // 'all' 或具体账号 id (如 'acc_1')
+let editingAccountIdInModal = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
@@ -111,6 +113,12 @@ function initUIEvents() {
   document.getElementById('btn-confirm-diag').addEventListener('click', () => closeModal('diag-modal'));
   document.getElementById('btn-retest-diag').addEventListener('click', runAccountDiagnosis);
 
+  // 新建账号弹窗相关
+  document.getElementById('btn-add-account-card')?.addEventListener('click', () => openModal('account-quick-add-modal'));
+  document.getElementById('btn-close-quick-add')?.addEventListener('click', () => closeModal('account-quick-add-modal'));
+  document.getElementById('btn-cancel-quick-add')?.addEventListener('click', () => closeModal('account-quick-add-modal'));
+  document.getElementById('btn-save-quick-add')?.addEventListener('click', handleQuickAddAccount);
+
   // 向导 Modal
   document.getElementById('btn-guide').addEventListener('click', () => openModal('guide-modal'));
   document.getElementById('btn-close-guide').addEventListener('click', () => closeModal('guide-modal'));
@@ -125,6 +133,17 @@ function initUIEvents() {
   document.getElementById('btn-cancel-settings').addEventListener('click', () => closeModal('settings-modal'));
   document.getElementById('btn-save-settings').addEventListener('click', saveSettingsFromModal);
 
+  // 配置中心：切换账号编辑
+  document.getElementById('cfg-account-select')?.addEventListener('change', (e) => {
+    editingAccountIdInModal = e.target.value;
+    loadAccountIntoForm(editingAccountIdInModal);
+  });
+  document.getElementById('btn-modal-add-acc')?.addEventListener('click', () => {
+    closeModal('settings-modal');
+    openModal('account-quick-add-modal');
+  });
+  document.getElementById('btn-modal-del-acc')?.addEventListener('click', handleDeleteCurrentAccountInModal);
+
   // 向导换取 Token
   document.getElementById('guide-btn-exchange').addEventListener('click', async () => {
     const input = document.getElementById('guide-code-input').value.trim();
@@ -138,7 +157,7 @@ function initUIEvents() {
       const res = await fetch('/api/auth/exchange-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urlOrCode: input })
+        body: JSON.stringify({ urlOrCode: input, accountId: selectedAccountId !== 'all' ? selectedAccountId : 'acc_1' })
       }).then(r => r.json());
       if (res.success) {
         resultDiv.innerHTML = '<span style="color:#34D399;">✅ Token 换取成功！已自动持久化保存</span>';
@@ -164,7 +183,7 @@ function initUIEvents() {
       const testRes = await fetch('/api/auth/test-cookie', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookie })
+        body: JSON.stringify({ cookie, accountId: selectedAccountId !== 'all' ? selectedAccountId : 'acc_1' })
       }).then(r => r.json());
       if (testRes.success && testRes.data?.valid) {
         resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${testRes.data.message}（已自动保存）</span>`;
@@ -213,24 +232,31 @@ function initUIEvents() {
   document.getElementById('btn-exchange-token')?.addEventListener('click', async () => {
     const input = document.getElementById('cfg-authcode').value.trim();
     if (!input) return alert('请先填入包含 code 的链接或授权码');
+    const targetId = editingAccountIdInModal || 'acc_1';
     const res = await fetch('/api/auth/exchange-code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urlOrCode: input })
+      body: JSON.stringify({ urlOrCode: input, accountId: targetId })
     }).then(r => r.json());
     if (res.success) {
       alert('Token 换取并保存成功！');
       fetchConfig();
+      fetchStatus();
     } else {
       alert(`换取失败: ${res.message}`);
     }
   });
 
-  // 配置中心：一键测试账户有效性
+  // 配置中心：一键测试当前选中的账户有效性
   document.getElementById('btn-test-account')?.addEventListener('click', async () => {
     const resultDiv = document.getElementById('test-account-result');
-    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在全面检测账户...</span>';
-    const res = await fetch('/api/auth/test', { method: 'POST' }).then(r => r.json());
+    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在全面检测该账户...</span>';
+    const targetId = editingAccountIdInModal || 'acc_1';
+    const res = await fetch('/api/auth/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: targetId })
+    }).then(r => r.json());
     if (res.success) {
       const c = res.data.cookie;
       const t = res.data.token;
@@ -294,10 +320,64 @@ function closeModal(id) {
   document.getElementById(id)?.classList.remove('show');
 }
 
+// 快速新建账号提交
+async function handleQuickAddAccount() {
+  const name = document.getElementById('quick-add-name')?.value.trim();
+  const cookie = document.getElementById('quick-add-cookie')?.value.trim();
+  const authCodeUrl = document.getElementById('quick-add-authcode')?.value.trim();
+
+  if (!name && !cookie) {
+    return alert('请至少填写账号备注名称或粘贴 Cookie');
+  }
+
+  const res = await fetch('/api/accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: name || '新账号',
+      cookie,
+      authCodeUrl,
+      enabled: true
+    })
+  }).then(r => r.json());
+
+  if (res.success) {
+    alert('账号添加成功！');
+    closeModal('account-quick-add-modal');
+    // 清空表单
+    document.getElementById('quick-add-name').value = '';
+    document.getElementById('quick-add-cookie').value = '';
+    document.getElementById('quick-add-authcode').value = '';
+    // 自动切到新添加的账号
+    selectedAccountId = res.data.id;
+    fetchStatus();
+    fetchConfig();
+  } else {
+    alert(`创建失败: ${res.message}`);
+  }
+}
+
+// 配置中心中删除当前账号
+async function handleDeleteCurrentAccountInModal() {
+  if (!editingAccountIdInModal) return;
+  if (!confirm('确定要删除当前选中的这个账号吗？')) return;
+
+  const res = await fetch(`/api/accounts/${editingAccountIdInModal}`, { method: 'DELETE' }).then(r => r.json());
+  if (res.success) {
+    alert('账号已删除');
+    selectedAccountId = 'all';
+    fetchConfig();
+    fetchStatus();
+    closeModal('settings-modal');
+  } else {
+    alert(res.message);
+  }
+}
+
 // 获取状态并渲染大屏
 async function fetchStatus() {
   try {
-    const res = await fetch('/api/status').then(r => r.json());
+    const res = await fetch(`/api/status?accountId=${selectedAccountId}`).then(r => r.json());
     if (res.success && res.data) {
       currentStatus = res.data;
       renderDashboard(res.data);
@@ -307,11 +387,69 @@ async function fetchStatus() {
   }
 }
 
+// 渲染多账号切换胶囊栏
+function renderAccountSelectorBar(summary) {
+  const bar = document.getElementById('account-selector-bar');
+  if (!bar || !summary) return;
+
+  const accounts = summary.accountsList || [];
+  let html = '';
+
+  // 1. 全部账号汇总胶囊
+  const isAllActive = selectedAccountId === 'all';
+  html += `
+    <button class="account-chip ${isAllActive ? 'active' : ''}" data-acc-id="all">
+      <span class="chip-icon">🌐</span>
+      <span class="chip-name">全部账号汇总</span>
+      <span class="chip-badge">${summary.totalAccounts || 1} 个账号</span>
+    </button>
+  `;
+
+  // 2. 各独立账号胶囊
+  accounts.forEach(acc => {
+    const isActive = selectedAccountId === acc.id;
+    html += `
+      <button class="account-chip ${isActive ? 'active' : ''}" data-acc-id="${acc.id}">
+        <span class="chip-icon">${acc.enabled ? '👤' : '⏸️'}</span>
+        <span class="chip-name">${escapeHtml(acc.name)}</span>
+        <span class="chip-sub">${(acc.balance || 0).toLocaleString()} 分</span>
+      </button>
+    `;
+  });
+
+  // 3. 添加账号按钮
+  html += `
+    <button class="account-chip chip-add" id="btn-add-account-chip">
+      <span>➕</span> 添加账号
+    </button>
+  `;
+
+  bar.innerHTML = html;
+
+  // 绑定切换事件
+  bar.querySelectorAll('.account-chip[data-acc-id]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      selectedAccountId = chip.getAttribute('data-acc-id');
+      fetchStatus();
+      fetchHistory(currentHistoryDays);
+    });
+  });
+
+  bar.querySelector('#btn-add-account-chip')?.addEventListener('click', () => {
+    openModal('account-quick-add-modal');
+  });
+}
+
 // 渲染大屏
 function renderDashboard(data) {
-  const { running, stats, timeline } = data;
+  const { running, summary, stats, timeline } = data;
 
-  // 1. 系统运行状态
+  // 1. 渲染顶部多账号切换胶囊
+  if (summary) {
+    renderAccountSelectorBar(summary);
+  }
+
+  // 2. 系统运行状态
   const statusBadge = document.getElementById('system-status-badge');
   const statusText = document.getElementById('status-text');
   const btnRun = document.getElementById('btn-run');
@@ -319,7 +457,7 @@ function renderDashboard(data) {
 
   if (running) {
     statusBadge.className = 'status-pill status-running';
-    statusText.innerText = '正在执行全套自动化任务...';
+    statusText.innerText = '正在执行打卡巡检...';
     btnRun.style.display = 'none';
     btnStop.style.display = 'inline-flex';
   } else {
@@ -329,13 +467,19 @@ function renderDashboard(data) {
     btnStop.style.display = 'none';
   }
 
-  // 2. Hero 卡片
-  document.getElementById('stat-earned').innerText = `+${stats.earned || 0}`;
-  document.getElementById('stat-balance').innerText = (stats.balance || 0).toLocaleString();
-  document.getElementById('stat-streak').innerText = `${stats.streakDays || 0} 天`;
+  // 3. Hero 5 大卡片数据渲染
+  const isAllMode = selectedAccountId === 'all';
+  const displayEarned = isAllMode ? (summary?.totalEarned || 0) : (stats.earned || 0);
+  const displayBalance = isAllMode ? (summary?.totalBalance || 0) : (stats.balance || 0);
+  const displayStreak = isAllMode ? (summary?.maxStreak || 0) : (stats.streakDays || 0);
+  const displayPercent = isAllMode ? (summary?.overallPercent || 0) : Math.round((Object.values(stats.tasks || {}).filter(t => t.done || (t.max > 0 && t.progress >= t.max)).length / Math.max(1, Object.keys(stats.tasks || {}).length)) * 100);
+  const stamps = isAllMode ? (summary?.stamps || { progress: 8, max: 12 }) : (stats.stamps || { progress: 8, max: 12 });
 
-  // 渲染印章进度 (如 8 / 12)
-  const stamps = stats.stamps || { progress: 8, max: 12 };
+  document.getElementById('stat-earned').innerText = `+${displayEarned}`;
+  document.getElementById('stat-balance').innerText = displayBalance.toLocaleString();
+  document.getElementById('stat-percent').innerText = `${displayPercent}%`;
+  document.getElementById('stat-streak').innerText = `${displayStreak} 天`;
+
   const statStamps = document.getElementById('stat-stamps');
   const statStampsDesc = document.getElementById('stat-stamps-desc');
   if (statStamps) {
@@ -346,20 +490,37 @@ function renderDashboard(data) {
     statStampsDesc.innerText = diff > 0 ? `还差 ${diff} 个集满 1,000 积分大奖` : '1,000 奖励印章已集满！';
   }
 
-  const tasksList = Object.entries(stats.tasks || {});
-  const totalTasks = tasksList.length;
-  const doneTasks = tasksList.filter(([_, t]) => t.done || (t.max > 0 && t.progress >= t.max)).length;
-  const percent = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
-  document.getElementById('stat-percent').innerText = `${percent}%`;
-  document.getElementById('stat-done-count').innerText = `${doneTasks} / ${totalTasks} 项任务完成`;
+  // 运行按钮提示
+  const btnRunIcon = btnRun.querySelector('.icon') || btnRun;
+  btnRun.innerHTML = isAllMode ? '<span>▶️</span> 立即执行全部账号' : `<span>▶️</span> 运行当前账号 [${escapeHtml(stats.name || '')}]`;
 
-  if (stats.lastUpdate) {
-    document.getElementById('last-update-time').innerText = `最后数据同步: ${new Date(stats.lastUpdate).toLocaleTimeString('zh-CN')}`;
+  // 4. 汇总视图 vs 单账号视图渲染
+  const overviewCard = document.getElementById('accounts-overview-card');
+  const taskListTitle = document.getElementById('task-list-title');
+
+  if (isAllMode) {
+    // 显示各账号概览卡片矩阵
+    if (overviewCard) {
+      overviewCard.style.display = 'flex';
+      renderAccountsOverviewGrid(summary?.accountsList || []);
+    }
+    if (taskListTitle) {
+      taskListTitle.innerText = `今日全账号综合任务明细`;
+    }
+  } else {
+    // 隐藏多账号概览矩阵，聚焦单账号详细任务
+    if (overviewCard) {
+      overviewCard.style.display = 'none';
+    }
+    if (taskListTitle) {
+      taskListTitle.innerText = `账号 [${escapeHtml(stats.name || '')}] 今日自动化任务进度清单`;
+    }
   }
 
-  // 3. 渲染任务网格
+  // 5. 渲染任务网格
   const taskGrid = document.getElementById('task-grid');
   taskGrid.innerHTML = '';
+  const tasksList = Object.entries(stats.tasks || {});
 
   for (const [key, t] of tasksList) {
     const card = document.createElement('div');
@@ -371,7 +532,6 @@ function renderDashboard(data) {
     let progressLabel = `进度: ${t.progress || 0} / ${t.max || 1} ${t.unit || ''}`;
     let progPercent = t.max > 0 ? Math.min(100, Math.round((t.progress / t.max) * 100)) : (isDone ? 100 : 0);
 
-    // 针对桌面专属任务做专门定制展示
     if (key === 'desktopApp') {
       const p = t.progress || 3;
       const m = t.max || 8;
@@ -405,17 +565,89 @@ function renderDashboard(data) {
     taskGrid.appendChild(card);
   }
 
-  // 4. 渲染时间轴
+  // 6. 渲染时间轴
   const timelineList = document.getElementById('timeline-list');
   if (timeline && timeline.length > 0) {
     timelineList.innerHTML = timeline.map(item => `
       <div class="timeline-item">
         <span class="timeline-time">${item.time}</span>
-        <span class="timeline-tag">[${item.tag}]</span>
-        <span>${item.text}</span>
+        <span class="timeline-tag">[${escapeHtml(item.tag)}]</span>
+        <span>${escapeHtml(item.text)}</span>
       </div>
     `).join('');
   }
+}
+
+// 渲染多账号概览矩阵卡片 (在“全部账号汇总”视图中展示)
+function renderAccountsOverviewGrid(accounts) {
+  const grid = document.getElementById('accounts-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  accounts.forEach(acc => {
+    const card = document.createElement('div');
+    card.className = 'account-overview-card';
+    card.innerHTML = `
+      <div class="acc-card-top">
+        <div class="acc-card-title">
+          <span>👤</span>
+          <span>${escapeHtml(acc.name)}</span>
+        </div>
+        <div class="acc-card-badges">
+          <span class="badge-mini" style="background:${acc.enabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}; color:${acc.enabled ? '#34D399' : '#F87171'};">
+            ${acc.enabled ? '已启用' : '已停用'}
+          </span>
+          <span class="badge-mini" style="background:rgba(56,189,248,0.15); color:#38BDF8;">
+            ${acc.hasCookie ? 'Cookie就绪' : '未配Cookie'}
+          </span>
+        </div>
+      </div>
+
+      <div class="acc-card-stats">
+        <div class="acc-stat-box">
+          <span class="acc-stat-lbl">今日已增</span>
+          <span class="acc-stat-num" style="color:#34D399;">+${acc.earned || 0}</span>
+        </div>
+        <div class="acc-stat-box">
+          <span class="acc-stat-lbl">当前总分</span>
+          <span class="acc-stat-num">${(acc.balance || 0).toLocaleString()}</span>
+        </div>
+        <div class="acc-stat-box">
+          <span class="acc-stat-lbl">连续签到</span>
+          <span class="acc-stat-num" style="color:#F59E0B;">${acc.streakDays || 0}天</span>
+        </div>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-labels">
+          <span>任务达成率: ${acc.doneTasks || 0}/${acc.totalTasks || 6} 项</span>
+          <span>${acc.percent || 0}%</span>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" style="width: ${acc.percent || 0}%;"></div>
+        </div>
+      </div>
+
+      <div class="acc-card-actions">
+        <button class="btn btn-secondary btn-sm btn-view-acc">查看详情 ➜</button>
+      </div>
+    `;
+
+    card.querySelector('.btn-view-acc')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectedAccountId = acc.id;
+      fetchStatus();
+      fetchHistory(currentHistoryDays);
+    });
+
+    card.addEventListener('click', () => {
+      selectedAccountId = acc.id;
+      fetchStatus();
+      fetchHistory(currentHistoryDays);
+    });
+
+    grid.appendChild(card);
+  });
 }
 
 // 建立 SSE 实时日志流
@@ -443,7 +675,7 @@ function initLogStream() {
   function appendLog(log) {
     const div = document.createElement('div');
     div.className = 'log-line';
-    div.innerHTML = `<span class="log-time">[${log.time}]</span> <span>${log.icon}</span> ${log.tag ? `<strong>[${log.tag}]</strong> ` : ''}${escapeHtml(log.message)}`;
+    div.innerHTML = `<span class="log-time">[${log.time}]</span> <span>${log.icon}</span> ${log.tag ? `<strong>[${escapeHtml(log.tag)}]</strong> ` : ''}${escapeHtml(log.message)}`;
     terminal.appendChild(div);
     if (chkAutoScroll.checked) {
       terminal.scrollTop = terminal.scrollHeight;
@@ -452,7 +684,7 @@ function initLogStream() {
 }
 
 function escapeHtml(str) {
-  return String(str)
+  return String(str || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -460,7 +692,12 @@ function escapeHtml(str) {
 }
 
 async function runTasks() {
-  const res = await fetch('/api/tasks/run', { method: 'POST' }).then(r => r.json());
+  const reqBody = selectedAccountId !== 'all' ? { accountId: selectedAccountId } : {};
+  const res = await fetch('/api/tasks/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(reqBody)
+  }).then(r => r.json());
   if (res.success) {
     fetchStatus();
   } else {
@@ -494,15 +731,23 @@ async function fetchConfig() {
 function populateSettingsForm() {
   if (!currentConfig) return;
   const c = currentConfig;
-  // 主题
-  const themeVal = c.ui?.theme || localStorage.getItem('ms_rewards_theme') || 'auto';
-  const themeSelect = document.getElementById('cfg-ui-theme');
-  if (themeSelect) themeSelect.value = themeVal;
+  const accounts = c.accounts || [];
 
-  // 账户
-  document.getElementById('cfg-cookie').value = c.account?.cookie || '';
-  document.getElementById('cfg-authcode').value = c.account?.authCodeUrl || '';
-  document.getElementById('cfg-refresh-token').value = c.account?.refreshToken ? '********' : '';
+  // 1. 填充多账号下拉框
+  const accSelect = document.getElementById('cfg-account-select');
+  if (accSelect) {
+    accSelect.innerHTML = accounts.map(a => `
+      <option value="${a.id}" ${editingAccountIdInModal === a.id ? 'selected' : ''}>
+        ${escapeHtml(a.name || a.id)}
+      </option>
+    `).join('');
+    if (!editingAccountIdInModal && accounts.length > 0) {
+      editingAccountIdInModal = accounts[0].id;
+    }
+  }
+
+  loadAccountIntoForm(editingAccountIdInModal);
+
   // 网络
   document.getElementById('cfg-use-proxy').checked = !!c.network?.useProxy;
   document.getElementById('cfg-proxy-url').value = c.network?.proxyUrl || '';
@@ -517,6 +762,10 @@ function populateSettingsForm() {
   document.getElementById('cfg-task-keep').checked = c.tasks?.keepRunning !== false;
   document.getElementById('cfg-search-span').value = c.tasks?.searchSpan || 30;
   document.getElementById('cfg-search-api').value = c.tasks?.searchApi || 'offline';
+  // 主题
+  const themeVal = c.ui?.theme || localStorage.getItem('ms_rewards_theme') || 'auto';
+  const themeSelect = document.getElementById('cfg-ui-theme');
+  if (themeSelect) themeSelect.value = themeVal;
   // 调度
   document.getElementById('cfg-sched-enabled').checked = c.schedule?.enabled !== false;
   document.getElementById('cfg-sched-cron').value = c.schedule?.cron || '*/25 * * * *';
@@ -530,12 +779,43 @@ function populateSettingsForm() {
   document.getElementById('cfg-notify-tg-chat').value = c.notify?.telegram?.chatId || '';
 }
 
+function loadAccountIntoForm(accId) {
+  if (!currentConfig || !Array.isArray(currentConfig.accounts)) return;
+  const acc = currentConfig.accounts.find(a => a.id === accId) || currentConfig.accounts[0];
+  if (!acc) return;
+
+  editingAccountIdInModal = acc.id;
+  document.getElementById('cfg-account-name').value = acc.name || '';
+  document.getElementById('cfg-account-enabled').checked = acc.enabled !== false;
+  document.getElementById('cfg-cookie').value = acc.cookie || '';
+  document.getElementById('cfg-authcode').value = acc.authCodeUrl || '';
+  document.getElementById('cfg-refresh-token').value = acc.refreshToken ? '********' : '';
+}
+
 async function saveSettingsFromModal() {
+  const currentAccId = editingAccountIdInModal || 'acc_1';
+  const currentAccounts = currentConfig?.accounts || [];
+  const idx = currentAccounts.findIndex(a => a.id === currentAccId);
+
+  const updatedAccountData = {
+    id: currentAccId,
+    name: document.getElementById('cfg-account-name').value.trim() || '账号',
+    enabled: document.getElementById('cfg-account-enabled').checked,
+    cookie: document.getElementById('cfg-cookie').value.trim(),
+    authCodeUrl: document.getElementById('cfg-authcode').value.trim()
+  };
+
+  if (idx !== -1) {
+    currentAccounts[idx] = { ...currentAccounts[idx], ...updatedAccountData };
+  } else {
+    currentAccounts.push(updatedAccountData);
+  }
+
+  const selectedTheme = document.getElementById('cfg-ui-theme')?.value || 'auto';
+  setTheme(selectedTheme);
+
   const updateData = {
-    account: {
-      cookie: document.getElementById('cfg-cookie').value.trim(),
-      authCodeUrl: document.getElementById('cfg-authcode').value.trim()
-    },
+    accounts: currentAccounts,
     network: {
       useProxy: document.getElementById('cfg-use-proxy').checked,
       proxyUrl: document.getElementById('cfg-proxy-url').value.trim(),
@@ -553,7 +833,7 @@ async function saveSettingsFromModal() {
       searchApi: document.getElementById('cfg-search-api').value
     },
     ui: {
-      theme: document.getElementById('cfg-ui-theme')?.value || 'auto'
+      theme: selectedTheme
     },
     schedule: {
       enabled: document.getElementById('cfg-sched-enabled').checked,
@@ -582,6 +862,7 @@ async function saveSettingsFromModal() {
     alert('配置已成功保存并即时生效！');
     closeModal('settings-modal');
     fetchConfig();
+    fetchStatus();
   } else {
     alert(`保存失败: ${res.message}`);
   }
@@ -646,13 +927,19 @@ async function runAccountDiagnosis() {
   content.style.display = 'none';
 
   try {
-    const res = await fetch('/api/auth/test', { method: 'POST' }).then(r => r.json());
+    const targetId = selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || 'acc_1');
+    const res = await fetch('/api/auth/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: targetId })
+    }).then(r => r.json());
     if (!res.success) throw new Error(res.message || '诊断接口异常');
 
     const data = res.data;
     const cookie = data.cookie || {};
     const token = data.token || {};
     const net = data.network || {};
+    const accName = data.accountName || '当前账号';
 
     // 1. 综合 Banner
     const banner = document.getElementById('diag-banner');
@@ -663,17 +950,17 @@ async function runAccountDiagnosis() {
     if (data.allValid && net.regionPass) {
       banner.className = 'diag-banner ok';
       bIcon.innerText = '🟢';
-      bTitle.innerText = '账号登录完全正常 (双端在线)';
+      bTitle.innerText = `账号 [${escapeHtml(accName)}] 登录完全正常 (双端在线)`;
       bSub.innerText = '当前 Docker 环境已完美就绪，所有任务通道与网络环境均处于最佳状态！';
     } else if (data.overallValid) {
       banner.className = 'diag-banner partial';
       bIcon.innerText = '🟡';
-      bTitle.innerText = '账号部分登录有效';
+      bTitle.innerText = `账号 [${escapeHtml(accName)}] 部分登录有效`;
       bSub.innerText = '部分通道已连接，但仍有项未就绪（如网页端或移动端单边未登录），请根据下方提示补充。';
     } else {
       banner.className = 'diag-banner failed';
       bIcon.innerText = '🔴';
-      bTitle.innerText = '账号尚未成功在 Docker 中登录';
+      bTitle.innerText = `账号 [${escapeHtml(accName)}] 尚未成功在 Docker 中登录`;
       bSub.innerText = '未检测到有效的微软登录凭据，请点击右上角「新手配置向导」进行绑定。';
     }
 
@@ -685,13 +972,13 @@ async function runAccountDiagnosis() {
       pillCookie.innerText = '已登录正常';
       detailCookie.innerHTML = `
         <div>状态：✅ 身份认证有效，可执行 PC 搜索、每日活动集与桌面专属任务</div>
-        <div style="margin-top:4px; color:#E2E8F0;">${cookie.message || ''}</div>
+        <div style="margin-top:4px; color:#E2E8F0;">${escapeHtml(cookie.message || '')}</div>
       `;
     } else {
       pillCookie.className = 'diag-status-pill pill-err';
       pillCookie.innerText = '未登录 / 失效';
       detailCookie.innerHTML = `
-        <div style="color:#F87171;">状态：❌ ${cookie.message || 'Cookie 缺失或已失效'}</div>
+        <div style="color:#F87171;">状态：❌ ${escapeHtml(cookie.message || 'Cookie 缺失或已失效')}</div>
         <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：在电脑登录 rewards.bing.com，按 F12 复制完整 Cookie 粘贴到配置中心。</div>
       `;
     }
@@ -704,13 +991,13 @@ async function runAccountDiagnosis() {
       pillToken.innerText = '已授权正常';
       detailToken.innerHTML = `
         <div>状态：✅ OAuth Token 活跃，可执行 App 静默签到与新闻资讯阅读 (30分)</div>
-        <div style="margin-top:4px; color:#E2E8F0;">${token.message || ''}</div>
+        <div style="margin-top:4px; color:#E2E8F0;">${escapeHtml(token.message || '')}</div>
       `;
     } else {
       pillToken.className = 'diag-status-pill pill-err';
       pillToken.innerText = '未授权 / 失效';
       detailToken.innerHTML = `
-        <div style="color:#F87171;">状态：❌ ${token.message || '未获取到移动端 OAuth 授权'}</div>
+        <div style="color:#F87171;">状态：❌ ${escapeHtml(token.message || '未获取到移动端 OAuth 授权')}</div>
         <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：点击「新手配置向导」第一步，打开官方链接授权并粘贴跳转 URL。</div>
       `;
     }
@@ -723,7 +1010,7 @@ async function runAccountDiagnosis() {
       pillNet.innerText = '中国大陆 (安全)';
       detailNet.innerHTML = `
         <div>状态：✅ 出口 IP 符合微软国区要求 (${net.region})，防风控检测通过</div>
-        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">${net.ipInfo || ''}</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">${escapeHtml(net.ipInfo || '')}</div>
       `;
     } else {
       pillNet.className = 'diag-status-pill pill-err';
@@ -742,7 +1029,7 @@ async function runAccountDiagnosis() {
     // 6. 建议区
     const tipsBox = document.getElementById('diag-tips');
     if (data.allValid) {
-      tipsBox.innerHTML = '💡 <strong>检测完毕：</strong>您的微软账号在 Docker 中运行环境完美，点击「▶️ 立即执行」即可开始打卡！';
+      tipsBox.innerHTML = `💡 <strong>检测完毕：</strong>账号 [${escapeHtml(accName)}] 在 Docker 中运行环境完美，点击「▶️ 立即执行」即可开始打卡！`;
     } else {
       tipsBox.innerHTML = '💡 <strong>下一步建议：</strong>请点击右上角「💡 新手配置向导」，根据缺失的项（Cookie 或 Token）补充配置即可。';
     }

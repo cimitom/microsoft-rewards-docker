@@ -16,7 +16,7 @@
         <div class="brand">
           <div class="title-wrap">
             <h1 class="title">微软积分自动化控制台</h1>
-            <span class="badge badge-version">v1.0.2 Docker</span>
+            <span class="badge badge-version">v1.2.0 Docker</span>
           </div>
           <div class="subtitle-wrap">
             <span id="system-status-badge" class="status-pill status-idle">
@@ -58,6 +58,11 @@
 
     <!-- 主仪表大屏 -->
     <main class="main-content">
+      <!-- 顶部多账号快速切换胶囊栏 -->
+      <section class="account-selector-bar" id="account-selector-bar">
+        <!-- 动态渲染账号胶囊 -->
+      </section>
+
       <!-- 5 大核心数据卡片 -->
       <section class="hero-grid">
         <div class="hero-card">
@@ -87,11 +92,26 @@
         </div>
       </section>
 
-      <!-- 任务进度网格 -->
-      <section class="section-card">
+      <!-- 全账号概览矩阵 (在“全部账号汇总”视图下展示) -->
+      <section class="section-card accounts-overview-card" id="accounts-overview-card" style="display: none;">
         <div class="section-header">
           <div class="section-title">
-            <span>📋</span> 今日自动化任务进度清单
+            <span>👥</span> 各账号运行状态与积分概览
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-add-account-card">
+            <span>➕</span> 添加新账号
+          </button>
+        </div>
+        <div class="accounts-grid" id="accounts-grid">
+          <!-- 动态渲染各账号卡片 -->
+        </div>
+      </section>
+
+      <!-- 任务进度网格 -->
+      <section class="section-card" id="task-list-section">
+        <div class="section-header">
+          <div class="section-title">
+            <span>📋</span> <span id="task-list-title">今日自动化任务进度清单</span>
           </div>
           <div class="section-sub" id="last-update-time">
             最后更新：--
@@ -267,23 +287,54 @@
           <button class="tab-btn" data-tab="tab-notify">🔔 消息推送</button>
         </div>
 
-        <!-- Tab: 账号与凭据 -->
+        <!-- Tab: 多账号配置与管理 -->
         <div class="tab-content active" id="tab-account">
-          <div class="form-group">
-            <label class="form-label">必应网页端 Cookie (Cookie Header)</label>
-            <textarea id="cfg-cookie" class="form-textarea" rows="4" placeholder="粘贴浏览器 rewards.bing.com 的完整 Cookie"></textarea>
-            <small class="form-hint">PC 搜索、每日活动和桌面任务必备</small>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="flex: 1; margin-right: 12px;">
+              <label class="form-label">切换当前编辑的账号</label>
+              <select id="cfg-account-select" class="form-select">
+                <!-- 动态填充各账号 -->
+              </select>
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: 22px;">
+              <button class="btn btn-secondary btn-sm" id="btn-modal-add-acc">➕ 新建账号</button>
+              <button class="btn btn-danger btn-sm" id="btn-modal-del-acc">🗑️ 删除账号</button>
+            </div>
           </div>
+
           <div class="form-group">
-            <label class="form-label">移动端授权码链接 / Code</label>
-            <input type="text" id="cfg-authcode" class="form-input" placeholder="粘贴包含 code= 的完整 URL">
-            <button id="btn-exchange-token" class="btn btn-secondary btn-sm" style="margin-top: 6px;">一键换取/刷新 Token</button>
+            <label class="form-label">账号备注名称</label>
+            <input type="text" id="cfg-account-name" class="form-input" placeholder="例如：我的主号、小号、家人号">
           </div>
+
           <div class="form-group">
-            <label class="form-label">当前 Refresh Token (自动维护无需手动填写)</label>
+            <label class="form-label checkbox-label">
+              <input type="checkbox" id="cfg-account-enabled" checked> 启用该账号自动打卡与巡检
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">必应网页端 Cookie (针对当前选中的账号)</label>
+            <textarea id="cfg-cookie" class="form-textarea" rows="3" placeholder="粘贴浏览器 rewards.bing.com 的完整 Cookie"></textarea>
+            <small class="form-hint">PC 搜索、每日活动集与桌面任务必备</small>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">移动端授权码链接 / Code (针对当前选中的账号)</label>
+            <div class="input-with-btn">
+              <input type="text" id="cfg-authcode" class="form-input" placeholder="粘贴包含 code= 的完整跳转链接">
+              <button id="btn-exchange-token" class="btn btn-secondary btn-sm">换取 Token</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">当前 Refresh Token</label>
             <input type="password" id="cfg-refresh-token" class="form-input" readonly placeholder="未获取">
           </div>
-          <button id="btn-test-account" class="btn btn-secondary">一键检测当前账户有效性</button>
+
+          <div style="display: flex; gap: 10px;">
+            <button id="btn-test-account" class="btn btn-secondary">🔍 体检当前选中账号</button>
+          </div>
           <div id="test-account-result" class="hint-msg"></div>
         </div>
 
@@ -496,6 +547,34 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-retest-diag">🔄 重新检测</button>
         <button class="btn btn-primary" id="btn-confirm-diag">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 快速添加新账号弹窗 (Modal) -->
+  <div class="modal-backdrop" id="account-quick-add-modal">
+    <div class="modal-box" style="max-width: 520px;">
+      <div class="modal-header">
+        <div class="modal-title"><span>➕</span> 添加新微软账号</div>
+        <button class="btn-close" id="btn-close-quick-add">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">账号备注名称</label>
+          <input type="text" id="quick-add-name" class="form-input" placeholder="例如：我的小号、副号、家人号">
+        </div>
+        <div class="form-group">
+          <label class="form-label">必应网页端 Cookie (可选，可稍后填写)</label>
+          <textarea id="quick-add-cookie" class="form-textarea" rows="3" placeholder="粘贴该账号 rewards.bing.com 的 Cookie"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">移动端授权码链接 / Code (可选)</label>
+          <input type="text" id="quick-add-authcode" class="form-input" placeholder="粘贴该账号登录后跳转的包含 code= 链接">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-quick-add">取消</button>
+        <button class="btn btn-primary" id="btn-save-quick-add">确认创建并添加</button>
       </div>
     </div>
   </div>

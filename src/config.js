@@ -5,6 +5,18 @@ const DATA_DIR = path.resolve(process.cwd(), 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 const DEFAULT_CONFIG = {
+  accounts: [
+    {
+      id: 'acc_1',
+      name: '默认账号',
+      enabled: true,
+      cookie: '',
+      authCodeUrl: '',
+      refreshToken: '',
+      accessToken: '',
+      tokenTime: 0
+    }
+  ],
   account: {
     cookie: '',
     authCodeUrl: '',
@@ -26,7 +38,7 @@ const DEFAULT_CONFIG = {
     desktopApp: true,
     dailySet: true,
     searchSpan: 30,
-    searchApi: 'offline', // 'offline' | 'hot.baiwumm.com' | 'hot.cnxiaobai.com' | 'hot.nntool.cc'
+    searchApi: 'offline',
     keepRunning: true
   },
   schedule: {
@@ -45,7 +57,7 @@ const DEFAULT_CONFIG = {
     }
   },
   ui: {
-    theme: 'auto' // 'auto' | 'light' | 'dark'
+    theme: 'auto'
   },
   server: {
     port: 5308,
@@ -66,12 +78,26 @@ class ConfigManager {
     }
   }
 
+  extractUserNameFromCookie(cookie = '') {
+    if (!cookie) return '';
+    // 尝试从 WLS=C=...&N=%e8%b4%ba%e5%bc%ba 提取用户名
+    const wlsMatch = cookie.match(/WLS=[^;]*?N=([^;&]+)/i);
+    if (wlsMatch) {
+      try {
+        return decodeURIComponent(wlsMatch[1]);
+      } catch {}
+    }
+    return '';
+  }
+
   load() {
     try {
       if (fs.existsSync(CONFIG_FILE)) {
         const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
         this.config = this.mergeDeep(structuredClone(DEFAULT_CONFIG), parsed);
+        // 平滑迁移旧版单账号数据到 accounts 列表
+        this.migrateLegacyAccount(parsed);
       } else {
         this.config = structuredClone(DEFAULT_CONFIG);
         this.save();
@@ -83,9 +109,54 @@ class ConfigManager {
     return this.config;
   }
 
+  migrateLegacyAccount(parsed) {
+    if (!Array.isArray(parsed.accounts) || parsed.accounts.length === 0) {
+      const legacy = parsed.account || {};
+      const extractedName = this.extractUserNameFromCookie(legacy.cookie);
+      this.config.accounts = [
+        {
+          id: 'acc_1',
+          name: extractedName ? `主账号 (${extractedName})` : '主账号',
+          enabled: true,
+          cookie: legacy.cookie || '',
+          authCodeUrl: legacy.authCodeUrl || '',
+          refreshToken: legacy.refreshToken || '',
+          accessToken: legacy.accessToken || '',
+          tokenTime: legacy.tokenTime || 0
+        }
+      ];
+      this.save();
+    } else {
+      this.config.accounts = parsed.accounts;
+    }
+
+    // 同步第一个账号到 config.account 以保持向后兼容
+    if (this.config.accounts.length > 0) {
+      const first = this.config.accounts[0];
+      this.config.account = {
+        cookie: first.cookie || '',
+        authCodeUrl: first.authCodeUrl || '',
+        refreshToken: first.refreshToken || '',
+        accessToken: first.accessToken || '',
+        tokenTime: first.tokenTime || 0
+      };
+    }
+  }
+
   save() {
     try {
       this.ensureDataDir();
+      // 保持 config.account 与 accounts[0] 同步
+      if (Array.isArray(this.config.accounts) && this.config.accounts.length > 0) {
+        const first = this.config.accounts[0];
+        this.config.account = {
+          cookie: first.cookie || '',
+          authCodeUrl: first.authCodeUrl || '',
+          refreshToken: first.refreshToken || '',
+          accessToken: first.accessToken || '',
+          tokenTime: first.tokenTime || 0
+        };
+      }
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2), 'utf-8');
       return true;
     } catch (e) {
@@ -101,10 +172,84 @@ class ConfigManager {
     return this.config;
   }
 
+  getAccounts() {
+    const cfg = this.get();
+    return cfg.accounts || [];
+  }
+
+  getAccount(accountId) {
+    const accounts = this.getAccounts();
+    if (!accountId) return accounts[0] || null;
+    return accounts.find(a => a.id === accountId) || accounts[0] || null;
+  }
+
+  upsertAccount(accountData) {
+    const cfg = this.get();
+    if (!Array.isArray(cfg.accounts)) cfg.accounts = [];
+
+    const id = accountData.id || `acc_${Date.now()}`;
+    const idx = cfg.accounts.findIndex(a => a.id === id);
+
+    // 如果没有填名字但有 cookie，尝试提取名字
+    let name = accountData.name;
+    if (!name && accountData.cookie) {
+      const extracted = this.extractUserNameFromCookie(accountData.cookie);
+      name = extracted ? `账号 (${extracted})` : `账号 ${cfg.accounts.length + 1}`;
+    }
+
+    if (idx !== -1) {
+      cfg.accounts[idx] = {
+        ...cfg.accounts[idx],
+        ...accountData,
+        name: name || cfg.accounts[idx].name
+      };
+    } else {
+      cfg.accounts.push({
+        id,
+        name: name || `账号 ${cfg.accounts.length + 1}`,
+        enabled: accountData.enabled !== false,
+        cookie: accountData.cookie || '',
+        authCodeUrl: accountData.authCodeUrl || '',
+        refreshToken: accountData.refreshToken || '',
+        accessToken: accountData.accessToken || '',
+        tokenTime: accountData.tokenTime || 0
+      });
+    }
+
+    this.save();
+    return this.getAccount(id);
+  }
+
+  deleteAccount(accountId) {
+    const cfg = this.get();
+    if (!Array.isArray(cfg.accounts)) return false;
+    if (cfg.accounts.length <= 1) {
+      throw new Error('至少需要保留一个账号');
+    }
+    cfg.accounts = cfg.accounts.filter(a => a.id !== accountId);
+    this.save();
+    return true;
+  }
+
   update(partial) {
     if (!this.config) {
       this.load();
     }
+
+    // 如果更新的是单账号字段 account，同步更新到第一个账号或指定账号
+    if (partial.account && Array.isArray(this.config.accounts) && this.config.accounts.length > 0) {
+      const targetId = partial.accountId || this.config.accounts[0].id;
+      const idx = this.config.accounts.findIndex(a => a.id === targetId);
+      if (idx !== -1) {
+        Object.assign(this.config.accounts[idx], partial.account);
+      }
+    }
+
+    if (Array.isArray(partial.accounts)) {
+      this.config.accounts = partial.accounts;
+      delete partial.accounts;
+    }
+
     this.config = this.mergeDeep(this.config, partial);
     this.save();
     return this.config;

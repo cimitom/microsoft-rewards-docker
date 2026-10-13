@@ -20,12 +20,45 @@ export function createServer() {
   app.use(express.urlencoded({ extended: true }));
   app.use(express.static(path.join(__dirname, 'public')));
 
-  // 1. 获取当前状态
+  // 1. 获取当前状态（支持按账号过滤）
   app.get('/api/status', (req, res) => {
+    const accountId = req.query.accountId || 'all';
     res.json({
       success: true,
-      data: taskManager.getStatus()
+      data: taskManager.getStatus(accountId)
     });
+  });
+
+  // 1.5 多账号管理接口
+  app.get('/api/accounts', (req, res) => {
+    const accounts = configManager.getAccounts().map(a => ({
+      id: a.id,
+      name: a.name,
+      enabled: a.enabled !== false,
+      hasCookie: !!a.cookie,
+      hasToken: !!a.refreshToken,
+      tokenTime: a.tokenTime || 0
+    }));
+    res.json({ success: true, data: accounts });
+  });
+
+  app.post('/api/accounts', (req, res) => {
+    try {
+      const saved = configManager.upsertAccount(req.body);
+      taskManager.ensureAccountStats(saved.id);
+      res.json({ success: true, data: saved });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.delete('/api/accounts/:id', (req, res) => {
+    try {
+      configManager.deleteAccount(req.params.id);
+      res.json({ success: true, message: '账号已删除' });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
   });
 
   // 2. 获取配置
@@ -49,14 +82,17 @@ export function createServer() {
     }
   });
 
-  // 4. 手动立即执行
+  // 4. 手动立即执行（支持指定单账号或全部账号）
   app.post('/api/tasks/run', async (req, res) => {
     if (taskManager.running) {
       return res.json({ success: false, message: '任务正在运行中' });
     }
-    // 异步执行，不阻塞 HTTP 响应
-    taskManager.runAll(true);
-    res.json({ success: true, message: '全自动化任务已启动' });
+    const targetAccountId = req.body?.accountId || null;
+    taskManager.runAll(true, targetAccountId);
+    res.json({
+      success: true,
+      message: targetAccountId ? `已启动账号 [${targetAccountId}] 的任务` : '全账号自动化任务已启动'
+    });
   });
 
   // 5. 中断停止
@@ -95,12 +131,12 @@ export function createServer() {
 
   // 7. 小白一键换取 Token
   app.post('/api/auth/exchange-code', async (req, res) => {
-    const { urlOrCode } = req.body;
+    const { urlOrCode, accountId } = req.body;
     if (!urlOrCode) {
       return res.status(400).json({ success: false, message: '请提供跳转链接或授权码' });
     }
     try {
-      const result = await authManager.exchangeCodeForToken(urlOrCode);
+      const result = await authManager.exchangeCodeForToken(urlOrCode, accountId);
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
@@ -109,20 +145,18 @@ export function createServer() {
 
   // 7.5 单独测试并保存 Cookie
   app.post('/api/auth/test-cookie', async (req, res) => {
-    const { cookie } = req.body;
+    const { cookie, accountId } = req.body;
     if (!cookie) {
       return res.status(400).json({ success: false, message: '请提供 Cookie' });
     }
     try {
-      configManager.update({ account: { cookie } });
-      const status = await authManager.checkCookieStatus(cookie);
+      configManager.upsertAccount({ id: accountId || 'acc_1', cookie });
+      const status = await authManager.checkCookieStatus(cookie, accountId);
       if (status.valid) {
-        if (status.balance > 0) {
-          taskManager.stats.balance = status.balance;
-        }
-        if (status.streakDays > 0) {
-          taskManager.stats.streakDays = status.streakDays;
-        }
+        const accStats = taskManager.ensureAccountStats(accountId || 'acc_1');
+        if (status.balance > 0) accStats.balance = status.balance;
+        if (status.streakDays > 0) accStats.streakDays = status.streakDays;
+        if (status.stamps) accStats.stamps = status.stamps;
         taskManager.saveStats();
       }
       res.json({ success: true, data: status });
@@ -133,8 +167,9 @@ export function createServer() {
 
   // 8. 全面测试账户状态并在 Docker 中完成体检
   app.post('/api/auth/test', async (req, res) => {
+    const targetAccountId = req.body?.accountId || null;
     try {
-      const result = await authManager.testAccount();
+      const result = await authManager.testAccount(targetAccountId);
       // 获取当前网络出口信息
       const [ipInfo, regionPass] = await Promise.all([
         rewardsApi.getIPInfo(),
@@ -147,9 +182,10 @@ export function createServer() {
         ipInfo: ipInfo || '未知'
       };
 
-      // 如果成功获取到积分，同步更新当前系统的总积分大屏
+      // 如果成功获取到积分，同步更新当前账户的总积分
       if (result.balance > 0) {
-        taskManager.stats.balance = result.balance;
+        const accStats = taskManager.ensureAccountStats(targetAccountId || 'acc_1');
+        accStats.balance = result.balance;
         taskManager.saveStats();
       }
 
