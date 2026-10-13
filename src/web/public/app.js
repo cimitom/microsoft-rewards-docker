@@ -6,12 +6,31 @@ let currentHistoryDays = 7;
 
 document.addEventListener('DOMContentLoaded', () => {
   initUIEvents();
+  startCountdownTimer();
   fetchStatus();
   fetchConfig();
   fetchHistory(7);
   initLogStream();
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
 });
+
+// 启动每日刷新剩余时间倒计时 (距离次日 00:00:00)
+function startCountdownTimer() {
+  function updateTimer() {
+    const now = new Date();
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0);
+    const diff = Math.max(0, midnight.getTime() - now.getTime());
+    const hours = String(Math.floor(diff / 3600000)).padStart(2, '0');
+    const minutes = String(Math.floor((diff % 3600000) / 60000)).padStart(2, '0');
+    const seconds = String(Math.floor((diff % 60000) / 1000)).padStart(2, '0');
+    const timerElem = document.getElementById('countdown-timer');
+    if (timerElem) {
+      timerElem.innerText = `${hours}:${minutes}:${seconds}`;
+    }
+  }
+  updateTimer();
+  setInterval(updateTimer, 1000);
+}
 
 function initUIEvents() {
   // 立即运行 & 停止
@@ -253,6 +272,18 @@ function renderDashboard(data) {
   document.getElementById('stat-earned').innerText = `+${stats.earned || 0}`;
   document.getElementById('stat-balance').innerText = (stats.balance || 0).toLocaleString();
   document.getElementById('stat-streak').innerText = `${stats.streakDays || 0} 天`;
+
+  // 渲染印章进度 (如 8 / 12)
+  const stamps = stats.stamps || { progress: 8, max: 12 };
+  const statStamps = document.getElementById('stat-stamps');
+  const statStampsDesc = document.getElementById('stat-stamps-desc');
+  if (statStamps) {
+    statStamps.innerText = `${stamps.progress || 8} / ${stamps.max || 12}`;
+  }
+  if (statStampsDesc) {
+    const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 8));
+    statStampsDesc.innerText = diff > 0 ? `还差 ${diff} 个集满 1,000 积分大奖` : '1,000 奖励印章已集满！';
+  }
 
   const tasksList = Object.entries(stats.tasks || {});
   const totalTasks = tasksList.length;
@@ -705,7 +736,7 @@ function renderHistoryChart(dataList, days) {
     `;
 
     // Hover 交互
-    col.addEventListener('mouseenter', (e) => {
+    const showTooltip = (e) => {
       document.getElementById('tt-date').innerText = `${item.date} (${item.weekday})`;
       document.getElementById('tt-earned').innerText = `+${item.earned} 积分`;
       
@@ -723,12 +754,17 @@ function renderHistoryChart(dataList, days) {
 
       document.getElementById('tt-balance').innerText = `当日结余: ${(item.balance || 0).toLocaleString()} 积分`;
 
-      const rect = col.getBoundingClientRect();
-      tooltip.style.left = `${rect.left + rect.width / 2}px`;
-      tooltip.style.top = `${rect.top}px`;
+      const barEl = col.querySelector('.chart-bar') || col;
+      const rect = barEl.getBoundingClientRect();
+      const centerX = Math.max(120, Math.min(window.innerWidth - 120, rect.left + rect.width / 2));
+      const topY = Math.max(160, rect.top);
+      tooltip.style.left = `${centerX}px`;
+      tooltip.style.top = `${topY}px`;
       tooltip.style.display = 'block';
-    });
+    };
 
+    col.addEventListener('mouseenter', showTooltip);
+    col.addEventListener('mousemove', showTooltip);
     col.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
     });

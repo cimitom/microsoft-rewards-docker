@@ -232,13 +232,26 @@ export class AuthManager {
           try { userName = decodeURIComponent(nameMatch[1]); } catch {}
         }
 
+        // 5. 提取印章进度 (如 8/12)
+        let stampsProgress = 8, stampsMax = 12;
+        const stampMatch = clean.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
+          || clean.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
+        if (stampMatch) {
+          stampsMax = parseInt(stampMatch[1], 10) || 12;
+          stampsProgress = parseInt(stampMatch[2], 10) || 8;
+        }
+
         return {
           valid: true,
           balance,
           userName: userName || '微软用户',
           streakDays,
+          stamps: {
+            progress: stampsProgress,
+            max: stampsMax
+          },
           pcSearch: `${pcProgress}/${pcMax}`,
-          message: `网页端已登录成功！${userName ? `用户: ${userName} | ` : ''}积分: ${balance} | 连续签到: ${streakDays}天 | 搜索配额: ${pcProgress}/${pcMax}`
+          message: `网页端已登录成功！${userName ? `用户: ${userName} | ` : ''}积分: ${balance} | 连续签到: ${streakDays}天 | 印章进度: ${stampsProgress}/${stampsMax} | 搜索配额: ${pcProgress}/${pcMax}`
         };
       }
 

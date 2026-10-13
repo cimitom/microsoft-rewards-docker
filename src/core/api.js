@@ -331,6 +331,15 @@ export class RewardsApi {
           }
         }
 
+        // 印章进度提取 (如 8/12)
+        let stampsProgress = 8, stampsMax = 12;
+        const stampMatch = clean.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
+          || clean.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
+        if (stampMatch) {
+          stampsMax = parseInt(stampMatch[1], 10) || 12;
+          stampsProgress = parseInt(stampMatch[2], 10) || 8;
+        }
+
         return {
           balance,
           pc: { progress: pcCur, max: pcMax },
@@ -343,6 +352,10 @@ export class RewardsApi {
             progress: desktopProgress,
             max: desktopMax,
             expiresText: desktopExpiresText
+          },
+          stamps: {
+            progress: stampsProgress,
+            max: stampsMax
           }
         };
       } catch (e) {

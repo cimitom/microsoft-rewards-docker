@@ -29,6 +29,7 @@ export class TaskManager {
       startBalance: 0,
       earned: 0,
       streakDays: 0,
+      stamps: { progress: 8, max: 12 },
       lastUpdate: Date.now(),
       tasks: {
         sign: { name: "每日双端签入 (PC+App)", progress: 0, max: 1, points: 0, unit: "次", icon: "📱", done: false },
@@ -103,6 +104,10 @@ export class TaskManager {
       }
       this.stats.tasks.desktopApp.unit = "个任务";
       this.stats.tasks.desktopApp.max = 8;
+    }
+
+    if (!this.stats.stamps) {
+      this.stats.stamps = { progress: 8, max: 12 };
     }
 
     return {

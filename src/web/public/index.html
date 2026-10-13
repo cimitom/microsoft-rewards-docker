@@ -22,6 +22,9 @@
             <span id="system-status-badge" class="status-pill status-idle">
               <span class="status-dot"></span> <span id="status-text">系统就绪</span>
             </span>
+            <span class="refresh-countdown" id="daily-countdown-pill">
+              <span class="countdown-sandglass">⏳</span> 距离每日刷新: <strong id="countdown-timer">--:--:--</strong>
+            </span>
             <span class="next-cron" id="cron-hint">定时巡检: 开启</span>
           </div>
         </div>
@@ -48,7 +51,7 @@
 
     <!-- 主仪表大屏 -->
     <main class="main-content">
-      <!-- 4 大核心数据卡片 -->
+      <!-- 5 大核心数据卡片 -->
       <section class="hero-grid">
         <div class="hero-card">
           <div class="hero-label">今日已增加积分</div>
@@ -66,9 +69,14 @@
           <div class="hero-desc" id="stat-done-count">0 / 6 项任务完成</div>
         </div>
         <div class="hero-card">
-          <div class="hero-label">连续签到记录</div>
+          <div class="hero-label">连续签到天数</div>
           <div class="hero-val hero-gold" id="stat-streak">-- 天</div>
-          <div class="hero-desc">印章打卡与连签保护中</div>
+          <div class="hero-desc">全自动打卡连签保护中</div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-label">连签奖励印章进度</div>
+          <div class="hero-val" style="color: #F59E0B;" id="stat-stamps">8 / 12</div>
+          <div class="hero-desc" id="stat-stamps-desc">还差 4 个集满 1,000 积分大奖</div>
         </div>
       </section>
 
@@ -136,16 +144,6 @@
           <div class="chart-container" id="history-chart-container">
             <!-- 动态渲染柱状图条 -->
           </div>
-        </div>
-
-        <!-- 悬浮明细气泡 (Tooltip) -->
-        <div class="history-tooltip" id="history-tooltip" style="display: none;">
-          <div class="tooltip-header" id="tt-date">--</div>
-          <div class="tooltip-earned" id="tt-earned">+--</div>
-          <div class="tooltip-breakdown" id="tt-breakdown">
-            <!-- 明细清单 -->
-          </div>
-          <div class="tooltip-footer" id="tt-balance">结余: --</div>
         </div>
       </section>
     </main>
@@ -485,6 +483,14 @@
         <button class="btn btn-primary" id="btn-confirm-diag">确定</button>
       </div>
     </div>
+  </div>
+
+  <!-- 悬浮明细气泡 (Tooltip - 位于 body 最外层防止 backdrop-filter 裁剪或偏移) -->
+  <div class="history-tooltip" id="history-tooltip" style="display: none;">
+    <div class="tooltip-header" id="tt-date">--</div>
+    <div class="tooltip-earned" id="tt-earned">+--</div>
+    <div class="tooltip-breakdown" id="tt-breakdown"></div>
+    <div class="tooltip-footer" id="tt-balance">结余: --</div>
   </div>
 
   <script src="app.js"></script>
