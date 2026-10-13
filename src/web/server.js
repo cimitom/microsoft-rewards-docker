@@ -1,4 +1,5 @@
 import express from 'express';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import configManager from '../config.js';
@@ -14,12 +15,73 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+let lastCpuInfo = os.cpus().map(c => c.times);
+function getCpuUsage() {
+  const cpus = os.cpus();
+  let idle = 0;
+  let total = 0;
+  for (let i = 0; i < cpus.length; i++) {
+    const prev = lastCpuInfo[i] || { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 };
+    const cur = cpus[i].times;
+    const prevTotal = Object.values(prev).reduce((a, b) => a + b, 0);
+    const curTotal = Object.values(cur).reduce((a, b) => a + b, 0);
+    total += (curTotal - prevTotal);
+    idle += (cur.idle - prev.idle);
+  }
+  lastCpuInfo = cpus.map(c => c.times);
+  const usage = total > 0 ? Math.max(0, Math.min(100, Math.round(((total - idle) / total) * 100))) : 2;
+  return usage;
+}
+
+let lastPingMs = 28;
+let lastPingTime = 0;
+async function getNetworkPing() {
+  if (Date.now() - lastPingTime < 8000) return lastPingMs;
+  const start = Date.now();
+  try {
+    await fetch('https://cn.bing.com/favicon.ico', { method: 'HEAD', signal: AbortSignal.timeout(2500) });
+    lastPingMs = Math.max(5, Date.now() - start);
+    lastPingTime = Date.now();
+  } catch {
+    lastPingMs = Math.max(5, Date.now() - start);
+  }
+  return lastPingMs;
+}
+
 export function createServer() {
   const app = express();
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
   app.use(express.static(path.join(__dirname, 'public')));
+
+  // 0. 系统硬件与网络实时监控指标
+  app.get('/api/system/metrics', async (req, res) => {
+    try {
+      const cpuPercent = getCpuUsage();
+      const ping = await getNetworkPing();
+      const totalMemBytes = os.totalmem();
+      const freeMemBytes = os.freemem();
+      const usedMemBytes = totalMemBytes - freeMemBytes;
+      const procMemMB = Math.round(process.memoryUsage().rss / (1024 * 1024));
+      const totalMemGB = (totalMemBytes / (1024 * 1024 * 1024)).toFixed(1);
+      const usedMemGB = (usedMemBytes / (1024 * 1024 * 1024)).toFixed(1);
+      const memPercent = Math.round((usedMemBytes / totalMemBytes) * 100);
+
+      res.json({
+        success: true,
+        data: {
+          cpu: `${cpuPercent}%`,
+          procMem: `${procMemMB} MB`,
+          sysMem: `${usedMemGB}G/${totalMemGB}G`,
+          memPercent,
+          ping: `${ping} ms`
+        }
+      });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
 
   // 1. 获取当前状态（支持按账号过滤）
   app.get('/api/status', (req, res) => {
@@ -46,15 +108,17 @@ export function createServer() {
     }
   });
 
-  // 1.5 多账号管理接口
+  // 1.5 多账号管理接口 (包含 order 排序)
   app.get('/api/accounts', (req, res) => {
     const accounts = configManager.getAccounts().map(a => ({
       id: a.id,
       name: a.name,
+      order: a.order !== undefined ? Number(a.order) : 999,
       enabled: a.enabled !== false,
       hasCookie: !!a.cookie,
       hasToken: !!a.refreshToken,
-      tokenTime: a.tokenTime || 0
+      tokenTime: a.tokenTime || 0,
+      timeSlot: a.timeSlot
     }));
     res.json({ success: true, data: accounts });
   });

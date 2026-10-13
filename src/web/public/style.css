@@ -158,6 +158,37 @@ body {
   color: #FBBF24;
 }
 
+.sys-metrics-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--card-inner);
+  color: var(--text-sub);
+  border: 1px solid var(--border-color);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.sys-metrics-pill .metric-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-main);
+  font-family: "JetBrains Mono", Consolas, monospace;
+}
+
+.sys-metrics-pill .metric-icon {
+  font-size: 12px;
+}
+
+.sys-metrics-pill .metric-sep {
+  color: var(--border-light);
+  font-size: 10px;
+}
+
 .status-pill {
   font-size: 11.5px;
   font-weight: 600;

@@ -413,13 +413,24 @@ export class TaskManager {
 
     logger.log('👤', `>>> 开始执行账号 [${accountName}] 的自动化打卡任务 <<<`, accountName);
 
+    // 1. 运行前先从官方同步一次真实进度（确保增量起点100%准确）
+    await this.syncAccountOfficialStatus(accCfg);
+
+    // 2. 检查是否所有任务今日均已达标完成
+    const taskValues = Object.values(accStats.tasks || {});
+    const isAllDone = taskValues.length > 0 && taskValues.every(t => t.done || (t.max > 0 && t.progress >= t.max));
+    if (isAllDone && !globalCfg.tasks?.keepRunning) {
+      logger.log('💤', `账号 [${accountName}] 今日所有打卡任务已全部满额达成，无需重复执行，直接结束！`, '', accountName);
+      return;
+    }
+
     const startBalance = await rewardsApi.getBalance();
     if (accStats.startBalance === 0 || accStats.date !== this.getTodayNum()) {
       accStats.startBalance = startBalance;
     }
     accStats.balance = startBalance || accStats.balance;
     this.saveStats();
-    logger.log('📊', `初始积分: ${accStats.balance}`, accountName);
+    logger.log('📊', `当前积分: ${accStats.balance}`, accountName);
 
     // 检查或刷新 Token
     const tokenOk = await authManager.refreshToken(false, accountId);
@@ -427,49 +438,52 @@ export class TaskManager {
       logger.log('🟡', '移动端 OAuth Token 未就绪，将跳过 App 签到与阅读任务', accountName);
     }
 
-    // 1. 每日双端签入
+    // 1. 每日双端签入 (若已签到则直接跳过)
     if (globalCfg.tasks?.sign && this.running) {
-      let signPoints = 0;
-      let signSuccess = false;
+      if (accStats.tasks.sign?.done) {
+        logger.log('✅', '每日签入已完成，跳过', accountName);
+      } else {
+        let signPoints = 0;
+        let signSuccess = false;
 
-      if (tokenOk) {
-        const appPts = await rewardsApi.signApp();
-        if (appPts >= 0) {
-          signSuccess = true;
-          signPoints += appPts;
-          logger.log('📱', `App 端静默签到成功${appPts > 0 ? ` +${appPts} 积分` : ''}`, accountName);
+        if (tokenOk) {
+          const appPts = await rewardsApi.signApp();
+          if (appPts >= 0) {
+            signSuccess = true;
+            signPoints += appPts;
+            logger.log('📱', `App 端静默签到成功${appPts > 0 ? ` +${appPts} 积分` : ''}`, accountName);
+          }
         }
-      }
 
-      await rewardsApi.randomDelay(2000, 4000);
-      const pcPts = await rewardsApi.signPC();
-      if (pcPts >= 0) {
-        signSuccess = true;
-        signPoints += pcPts;
-        logger.log('💻', `PC 网页端签入成功${pcPts > 0 ? ` +${pcPts} 积分` : ''}`, accountName);
-      }
+        await rewardsApi.randomDelay(2000, 4000);
+        const pcPts = await rewardsApi.signPC();
+        if (pcPts >= 0) {
+          signSuccess = true;
+          signPoints += pcPts;
+          logger.log('💻', `PC 网页端签入成功${pcPts > 0 ? ` +${pcPts} 积分` : ''}`, accountName);
+        }
 
-      if (signSuccess) {
-        this.updateTask('sign', { progress: 1, max: 1, points: signPoints || 10, done: true }, accountId);
-        logger.addTimeline(accountName, `双端签到完成 (+${signPoints || 10} 积分)`);
+        if (signSuccess) {
+          this.updateTask('sign', { progress: 1, max: 1, points: signPoints || 10, done: true }, accountId);
+          logger.addTimeline(accountName, `双端签到完成 (+${signPoints || 10} 积分)`);
+        }
       }
     }
 
     if (!this.running) return;
 
-    // 2. 新闻资讯自动阅读
+    // 2. 新闻资讯自动阅读 (严格增量模式：缺几篇读几篇)
     if (globalCfg.tasks?.read && tokenOk && this.running) {
-      logger.log('📖', '开始执行新闻资讯阅读打卡...', accountName);
       const readInfo = await rewardsApi.getReadProgress();
-      const cur = readInfo?.progress || 0;
-      const max = readInfo?.max || 30;
+      const cur = readInfo?.progress || accStats.tasks.read?.progress || 0;
+      const max = readInfo?.max || accStats.tasks.read?.max || 30;
 
       if (cur >= max) {
-        logger.log('✅', `新闻阅读配额今日已打满 (${cur}/${max})`, accountName);
+        logger.log('✅', `新闻阅读配额今日已打满 (${cur}/${max})，跳过`, accountName);
         this.updateTask('read', { progress: max, max, points: max, done: true }, accountId);
       } else {
         const remaining = Math.min(max - cur, 10);
-        logger.log('📖', `今日还需阅读 ${remaining} 篇新闻资讯`, accountName);
+        logger.log('📖', `今日还需阅读 ${remaining} 篇新闻资讯 (当前进度 ${cur}/${max})`, accountName);
         let okCount = 0;
         for (let i = 0; i < remaining && this.running; i++) {
           const res = await rewardsApi.doReadArticle();

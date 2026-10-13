@@ -9,6 +9,7 @@ const DEFAULT_CONFIG = {
     {
       id: 'acc_1',
       name: '默认账号',
+      order: 1,
       enabled: true,
       cookie: '',
       authCodeUrl: '',
@@ -201,7 +202,12 @@ class ConfigManager {
 
   getAccounts() {
     const cfg = this.get();
-    return cfg.accounts || [];
+    const list = cfg.accounts || [];
+    return list.slice().sort((a, b) => {
+      const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 999;
+      const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 999;
+      return orderA - orderB;
+    });
   }
 
   getAccount(accountId) {
@@ -236,10 +242,12 @@ class ConfigManager {
           durationHours: Number(accountData.timeSlot.durationHours) || 2
         };
       }
+      const order = accountData.order !== undefined ? Number(accountData.order) : (existing.order || idx + 1);
       cfg.accounts[idx] = {
         ...existing,
         ...accountData,
         name: name || existing.name,
+        order,
         timeSlot
       };
     } else {
@@ -254,9 +262,11 @@ class ConfigManager {
           durationHours: Number(accountData.timeSlot.durationHours) || 2
         };
       }
+      const order = accountData.order !== undefined ? Number(accountData.order) : (newIdx + 1);
       cfg.accounts.push({
         id,
         name: name || `账号 ${newIdx + 1}`,
+        order,
         enabled: accountData.enabled !== false,
         cookie: accountData.cookie || '',
         authCodeUrl: accountData.authCodeUrl || '',

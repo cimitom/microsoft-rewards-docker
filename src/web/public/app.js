@@ -6,12 +6,23 @@ let currentHistoryDays = 7;
 let currentTheme = localStorage.getItem('ms_rewards_theme') || 'auto';
 let selectedAccountId = 'all'; // 'all' 或具体账号 id (如 'acc_1')
 let editingAccountIdInModal = null;
+let guideDraftAccount = {
+  id: '',
+  name: '新账号',
+  order: 2,
+  cookie: '',
+  authCodeUrl: '',
+  refreshToken: '',
+  accessToken: '',
+  tokenTime: 0
+};
 
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initUIEvents();
   startCountdownTimer();
   fetchStatus();
+  fetchSystemMetrics();
   fetchBrowserStatus();
   fetchConfig();
   fetchHistory(7);
@@ -19,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 首次打开自动触发官网真实完成度同步（解决新部署到 NAS 时任务全显为 0 的问题）
   fetch('/api/status/sync', { method: 'POST' }).then(() => fetchStatus()).catch(() => {});
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
+  setInterval(fetchSystemMetrics, 4000); // 4秒轮询硬件与网络延时
   setInterval(fetchBrowserStatus, 2500); // 2.5秒轮询无头浏览器状态
 });
 
@@ -233,10 +245,33 @@ function initUIEvents() {
   document.getElementById('btn-cancel-quick-add')?.addEventListener('click', () => closeModal('account-quick-add-modal'));
   document.getElementById('btn-save-quick-add')?.addEventListener('click', handleQuickAddAccount);
 
-  // 向导 Modal
-  document.getElementById('btn-guide').addEventListener('click', () => openModal('guide-modal'));
+  // 向导 Modal (默认创建全新账号，绝不覆盖已有账号)
+  document.getElementById('btn-guide').addEventListener('click', openGuideModal);
   document.getElementById('btn-close-guide').addEventListener('click', () => closeModal('guide-modal'));
   document.getElementById('btn-finish-guide').addEventListener('click', () => closeModal('guide-modal'));
+
+  // 任务列表标题旁的刷新当前账号进度按钮
+  document.getElementById('btn-sync-current-account')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-sync-current-account');
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = '<span>⏳</span> 同步中...';
+    try {
+      const targetId = selectedAccountId !== 'all' ? selectedAccountId : null;
+      const res = await fetch('/api/status/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: targetId })
+      }).then(r => r.json());
+      if (res.success) {
+        currentStatus = res.data;
+        renderDashboard(res.data);
+      }
+    } catch (e) {
+      alert(`同步失败: ${e.message}`);
+    } finally {
+      btn.innerHTML = origHtml;
+    }
+  });
 
   // 配置中心 Modal
   document.getElementById('btn-settings').addEventListener('click', () => {
@@ -268,14 +303,17 @@ function initUIEvents() {
     }
     resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在换取并验证 Token...</span>';
     try {
+      guideDraftAccount.authCodeUrl = input;
       const res = await fetch('/api/auth/exchange-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urlOrCode: input, accountId: selectedAccountId !== 'all' ? selectedAccountId : 'acc_1' })
+        body: JSON.stringify({ urlOrCode: input, accountId: guideDraftAccount.id })
       }).then(r => r.json());
       if (res.success) {
-        resultDiv.innerHTML = '<span style="color:#34D399;">✅ Token 换取成功！已自动持久化保存</span>';
-        fetchConfig();
+        guideDraftAccount.accessToken = res.data.accessToken;
+        guideDraftAccount.refreshToken = res.data.refreshToken;
+        guideDraftAccount.tokenTime = Date.now();
+        resultDiv.innerHTML = '<span style="color:#34D399;">✅ Token 换取成功！已绑定至新账号草稿</span>';
       } else {
         resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 换取失败: ${res.message}</span>`;
       }
@@ -294,15 +332,14 @@ function initUIEvents() {
     }
     resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在请求微软官网验证 Cookie...</span>';
     try {
+      guideDraftAccount.cookie = cookie;
       const testRes = await fetch('/api/auth/test-cookie', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookie, accountId: selectedAccountId !== 'all' ? selectedAccountId : 'acc_1' })
+        body: JSON.stringify({ cookie, accountId: guideDraftAccount.id })
       }).then(r => r.json());
       if (testRes.success && testRes.data?.valid) {
-        resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${testRes.data.message}（已自动保存）</span>`;
-        fetchStatus();
-        fetchConfig();
+        resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${testRes.data.message}</span>`;
       } else {
         resultDiv.innerHTML = `<span style="color:#EF4444;">❌ ${testRes.data?.message || testRes.message || 'Cookie 检测无效'}</span>`;
       }
@@ -443,9 +480,34 @@ function closeModal(id) {
   document.getElementById(id)?.classList.remove('show');
 }
 
+function openGuideModal() {
+  const nextOrder = (currentConfig?.accounts?.length || 1) + 1;
+  guideDraftAccount = {
+    id: `acc_${Date.now()}`,
+    name: `账号 ${nextOrder}`,
+    order: nextOrder,
+    cookie: '',
+    authCodeUrl: '',
+    refreshToken: '',
+    accessToken: '',
+    tokenTime: 0
+  };
+  const nameInput = document.getElementById('guide-account-name');
+  if (nameInput) nameInput.value = guideDraftAccount.name;
+  const orderInput = document.getElementById('guide-account-order');
+  if (orderInput) orderInput.value = guideDraftAccount.order;
+  document.getElementById('guide-code-input').value = '';
+  document.getElementById('guide-token-result').innerHTML = '';
+  document.getElementById('guide-cookie-input').value = '';
+  document.getElementById('guide-cookie-result').innerHTML = '';
+  switchStep(1);
+  openModal('guide-modal');
+}
+
 // 快速新建账号提交
 async function handleQuickAddAccount() {
   const name = document.getElementById('quick-add-name')?.value.trim();
+  const order = parseInt(document.getElementById('quick-add-order')?.value, 10) || ((currentConfig?.accounts?.length || 1) + 1);
   const cookie = document.getElementById('quick-add-cookie')?.value.trim();
   const authCodeUrl = document.getElementById('quick-add-authcode')?.value.trim();
 
@@ -458,6 +520,7 @@ async function handleQuickAddAccount() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name: name || '新账号',
+      order,
       cookie,
       authCodeUrl,
       enabled: true
@@ -469,6 +532,7 @@ async function handleQuickAddAccount() {
     closeModal('account-quick-add-modal');
     // 清空表单
     document.getElementById('quick-add-name').value = '';
+    document.getElementById('quick-add-order').value = '';
     document.getElementById('quick-add-cookie').value = '';
     document.getElementById('quick-add-authcode').value = '';
     // 自动切到新添加的账号
@@ -516,6 +580,22 @@ async function fetchBrowserStatus() {
     const res = await fetch('/api/browser/status').then(r => r.json());
     if (res.success && res.data) {
       renderBrowserMonitor(res.data);
+    }
+  } catch {}
+}
+
+// 获取并渲染系统硬件与网络实时状态
+async function fetchSystemMetrics() {
+  try {
+    const res = await fetch('/api/system/metrics').then(r => r.json());
+    if (res.success && res.data) {
+      const d = res.data;
+      const cpuEl = document.getElementById('metric-cpu');
+      const memEl = document.getElementById('metric-mem');
+      const pingEl = document.getElementById('metric-ping');
+      if (cpuEl) cpuEl.innerText = `CPU ${d.cpu}`;
+      if (memEl) memEl.innerText = `内存 ${d.procMem}`;
+      if (pingEl) pingEl.innerText = `延时 ${d.ping}`;
     }
   } catch {}
 }
@@ -805,6 +885,7 @@ function renderAccountsOverviewGrid(accounts) {
 
       <div class="acc-card-actions">
         <button class="btn btn-primary btn-sm btn-run-single" title="立即运行此账号打卡">▶️ 运行</button>
+        <button class="btn btn-secondary btn-sm btn-sync-single" title="从微软官网同步该账号今日真实进度">🔄 刷新</button>
         <button class="btn btn-secondary btn-sm btn-toggle-single" title="${acc.enabled ? '暂停此账号自动巡检' : '继续此账号自动巡检'}">
           ${acc.enabled ? '⏸️ 暂停' : '▶️ 继续'}
         </button>
@@ -815,6 +896,27 @@ function renderAccountsOverviewGrid(accounts) {
     `;
 
     // 绑定卡片上的各快捷按钮
+    card.querySelector('.btn-sync-single')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.target;
+      const origText = btn.innerText;
+      btn.innerText = '⏳ 同步中';
+      try {
+        const res = await fetch('/api/status/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId: acc.id })
+        }).then(r => r.json());
+        if (res.success) {
+          fetchStatus();
+        }
+      } catch (err) {
+        alert(`同步失败: ${err.message}`);
+      } finally {
+        btn.innerText = origText;
+      }
+    });
+
     card.querySelector('.btn-test-single-search')?.addEventListener('click', async (e) => {
       e.stopPropagation();
       const btn = e.target;
@@ -1020,6 +1122,8 @@ function loadAccountIntoForm(accId) {
 
   editingAccountIdInModal = acc.id;
   document.getElementById('cfg-account-name').value = acc.name || '';
+  const orderElem = document.getElementById('cfg-account-order');
+  if (orderElem) orderElem.value = acc.order !== undefined ? acc.order : 1;
   document.getElementById('cfg-account-enabled').checked = acc.enabled !== false;
   document.getElementById('cfg-cookie').value = acc.cookie || '';
   document.getElementById('cfg-authcode').value = acc.authCodeUrl || '';
@@ -1071,6 +1175,7 @@ async function saveSettingsFromModal() {
   const updatedAccountData = {
     id: currentAccId,
     name: document.getElementById('cfg-account-name').value.trim() || '账号',
+    order: parseInt(document.getElementById('cfg-account-order')?.value, 10) || 1,
     enabled: document.getElementById('cfg-account-enabled').checked,
     cookie: document.getElementById('cfg-cookie').value.trim(),
     authCodeUrl: document.getElementById('cfg-authcode').value.trim(),
