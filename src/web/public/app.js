@@ -698,7 +698,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.5';
+  const current = updateInfo?.currentVersion || '1.4.6';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -738,7 +738,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.5'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.6'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 

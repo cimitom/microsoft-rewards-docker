@@ -542,6 +542,14 @@ export class TaskManager {
           if (res) {
             okCount++;
             logger.log('📖', `阅读完成第 ${i + 1}/${remaining} 篇 (+${res.points || 3} 积分)`, accountName);
+            // 实时写入进度：否则整个阅读过程（约 1 分钟）界面会一直停在 0/30
+            const liveProg = Math.min(max, cur + okCount * 3);
+            this.updateTask('read', {
+              progress: liveProg,
+              max,
+              points: liveProg,
+              done: liveProg >= max
+            }, accountId);
           }
           await rewardsApi.randomDelay(3000, 6000);
         }
@@ -581,6 +589,13 @@ export class TaskManager {
                 done: dProgress >= dMax
               }, accountId);
             }
+            // 实时更新卡片进度，避免整个扫描过程界面停在 0/x
+            this.updateTask('promos', {
+              progress: cardOk,
+              max: cards.length,
+              points: cardOk * 10,
+              done: cardOk >= cards.length
+            }, accountId);
           }
         }
         // 只有全部卡片都成功打卡才算完成，避免出现「1/4 却标记已完成」的自相矛盾状态
@@ -622,8 +637,19 @@ export class TaskManager {
     }
 
     if (globalCfg.tasks?.search && this.running) {
-      let curSearch = info?.pc?.progress || 0;
+      const curSearch = info?.pc?.progress || 0;
       const maxSearch = info?.pc?.max || 60;
+      // 本地实时进度：官方页面刷新有延迟，用它兜底避免进度倒退
+      let liveSearch = curSearch;
+      const applySearchProgress = (completed) => {
+        liveSearch = Math.max(liveSearch, Math.min(maxSearch, curSearch + completed * 3));
+        this.updateTask('search', {
+          progress: liveSearch,
+          max: maxSearch,
+          points: liveSearch,
+          done: liveSearch >= maxSearch
+        }, accountId);
+      };
       logger.log('🔍', `当前 PC 搜索配额: ${curSearch}/${maxSearch}`, accountName);
 
       if (curSearch >= maxSearch) {
@@ -637,17 +663,23 @@ export class TaskManager {
         if (searchMode === 'browser' && hasBrowser) {
           try {
             const duration = accCfg.timeSlot?.durationHours || 2;
-            await browserManager.runPacedSearch(accCfg, neededPoints, { durationHours: duration });
+            await browserManager.runPacedSearch(accCfg, neededPoints, {
+              durationHours: duration,
+              // 每搜完一次就刷新进度，否则整个搜索过程（最长 2 小时）界面都不动
+              onProgress: applySearchProgress
+            });
           } catch (e) {
             logger.log('🟡', `无头浏览器运行异常: ${e.message}，正在切换为轻量协议兜底`, '', accountName);
-            await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg);
+            await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress);
           }
         } else {
-          await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg);
+          await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress);
         }
 
         const afterInfo = await rewardsApi.getRewardsInfo();
-        const finalSearch = afterInfo?.pc?.progress || curSearch;
+        const official = afterInfo?.pc?.progress || 0;
+        // 官方页面可能尚未刷新，取官方值与本地实时值的较大者，避免进度倒退
+        const finalSearch = Math.max(official, liveSearch, curSearch);
         this.updateTask('search', {
           progress: finalSearch,
           max: maxSearch,
@@ -678,7 +710,7 @@ export class TaskManager {
     logger.log('✅', `账号 [${accountName}] 任务完成！今日新增: +${accStats.earned} | 当前余额: ${accStats.balance}`, accountName);
   }
 
-  async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg) {
+  async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, onProgress = null) {
     const accountName = accCfg.name || accCfg.id;
     const searchCount = Math.min(Math.ceil(neededPoints / 3), 7);
     logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求`, '', accountName);
@@ -687,6 +719,13 @@ export class TaskManager {
       const word = await rewardsApi.getHotSearchWord();
       logger.log('🔍', `[搜索 ${i + 1}/${searchCount}] 关键词: "${word}"`, '', accountName);
       await rewardsApi.doSearchOnce(word);
+
+      // 轻量模式同样实时刷新进度
+      if (typeof onProgress === 'function') {
+        try {
+          onProgress(i + 1);
+        } catch {}
+      }
 
       const span = Number(globalCfg.tasks?.searchSpan || 30);
       const waitTime = rewardsApi.randomRange(Math.max(10, span - 10) * 1000, (span + 10) * 1000);

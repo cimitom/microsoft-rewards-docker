@@ -244,8 +244,8 @@ class BrowserManager extends EventEmitter {
    */
   async runPacedSearch(acc, neededPoints, options = {}) {
     const accName = acc?.name || '当前账号';
+    const { durationHours = 2, onProgress = null } = options; // 默认平摊到 2 小时
     const totalSearches = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
-    const durationHours = options.durationHours || 2; // 默认平摊到 2 小时
     const totalSeconds = durationHours * 3600;
     const baseIntervalSec = Math.max(45, Math.floor(totalSeconds / totalSearches)); // 平均每 3.5~4 分钟一次
 
@@ -312,6 +312,13 @@ class BrowserManager extends EventEmitter {
         // 模拟浏览结果滚轮
         await page.mouse.wheel(0, rewardsApi.randomRange(350, 800));
         await this.delay(rewardsApi.randomRange(3000, 5000));
+
+        // 每完成一次搜索就回调一次，让 WebUI 实时看到进度增长
+        if (typeof onProgress === 'function') {
+          try {
+            onProgress(completed, totalSearches);
+          } catch {}
+        }
 
         // 如果已经是最后一次，不等待
         if (i === totalSearches - 1) break;
