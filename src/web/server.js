@@ -106,6 +106,30 @@ export function createServer() {
     }
   });
 
+  // 7.5 单独测试并保存 Cookie
+  app.post('/api/auth/test-cookie', async (req, res) => {
+    const { cookie } = req.body;
+    if (!cookie) {
+      return res.status(400).json({ success: false, message: '请提供 Cookie' });
+    }
+    try {
+      configManager.update({ account: { cookie } });
+      const status = await authManager.checkCookieStatus(cookie);
+      if (status.valid) {
+        if (status.balance > 0) {
+          taskManager.stats.balance = status.balance;
+        }
+        if (status.streakDays > 0) {
+          taskManager.stats.streakDays = status.streakDays;
+        }
+        taskManager.saveStats();
+      }
+      res.json({ success: true, data: status });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
   // 8. 全面测试账户状态并在 Docker 中完成体检
   app.post('/api/auth/test', async (req, res) => {
     try {

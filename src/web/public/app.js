@@ -73,18 +73,22 @@ function initUIEvents() {
       resultDiv.innerHTML = '<span style="color:#EF4444;">请先粘贴 Cookie</span>';
       return;
     }
-    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在检测 Cookie...</span>';
-    // 先暂存到后台
-    await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account: { cookie } })
-    });
-    const testRes = await fetch('/api/auth/test', { method: 'POST' }).then(r => r.json());
-    if (testRes.success && testRes.data?.cookie?.valid) {
-      resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${testRes.data.cookie.message}</span>`;
-    } else {
-      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ ${testRes.data?.cookie?.message || 'Cookie 检测无效'}</span>`;
+    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在请求微软官网验证 Cookie...</span>';
+    try {
+      const testRes = await fetch('/api/auth/test-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie })
+      }).then(r => r.json());
+      if (testRes.success && testRes.data?.valid) {
+        resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${testRes.data.message}（已自动保存）</span>`;
+        fetchStatus();
+        fetchConfig();
+      } else {
+        resultDiv.innerHTML = `<span style="color:#EF4444;">❌ ${testRes.data?.message || testRes.message || 'Cookie 检测无效'}</span>`;
+      }
+    } catch (e) {
+      resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 检测请求出错: ${e.message}</span>`;
     }
   });
 

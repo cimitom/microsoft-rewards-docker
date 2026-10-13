@@ -168,65 +168,90 @@ export class AuthManager {
   /**
    * 验证网页端 Cookie 是否有效并拉取账号详情
    */
-  async checkCookieStatus() {
+  async checkCookieStatus(cookieOverride = null) {
     const cfg = configManager.get();
-    if (!cfg.account?.cookie) {
+    const cookie = cookieOverride || cfg.account?.cookie;
+    if (!cookie) {
       return { valid: false, message: '尚未配置网页端 Cookie' };
     }
 
+    // 优先采用微软最新 Next.js earn 页面进行鉴权检测（解决官方 getuserinfo 接口频报 401 的缺陷）
     try {
-      const res = await networkClient.request({
-        url: `https://rewards.bing.com/api/getuserinfo?type=1&X-Requested-With=XMLHttpRequest&_=${Date.now()}`,
-        headers: {
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-          'referer': 'https://rewards.bing.com/',
-          'x-requested-with': 'XMLHttpRequest'
-        }
-      });
-
-      const text = typeof res === 'string' ? res : JSON.stringify(res);
-      if (text.includes('"availablePoints"') || text.includes('"userStatus"')) {
-        const data = typeof res === 'string' ? JSON.parse(res) : res;
-        const userStatus = data.dashboard?.userStatus || {};
-        const balance = userStatus.availablePoints ?? data.dashboard?.availablePoints ?? 0;
-        const level = userStatus.levelInfo?.activeLevelName || userStatus.levelInfo?.activeLevel || 'Level 2';
-        const pcSearchArr = userStatus.counters?.pcSearch || [];
-        let pcProgress = 0, pcMax = 0;
-        for (const item of pcSearchArr) {
-          pcProgress += Number(item.pointProgress || 0);
-          pcMax += Number(item.pointProgressMax || item.pointMax || 0);
-        }
-
-        return {
-          valid: true,
-          balance: Number(balance),
-          level,
-          pcSearch: `${pcProgress}/${pcMax || 60}`,
-          message: `网页端已登录 | 积分: ${balance} | 等级: ${level} | 搜索配额: ${pcProgress}/${pcMax || 60}`
-        };
-      }
-
-      // 备用检测：请求 earn 页面
       const earnHtml = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
         headers: {
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0'
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+          'referer': 'https://rewards.bing.com/',
+          'cookie': cookie
         }
       });
+
       const clean = String(earnHtml).replace(/\\"/g, '"');
-      if (clean.includes('pointsCounters') || clean.includes('activityCards')) {
-        const balMatch = clean.match(/"totalPoints":(\d+)/) || clean.match(/"balance":(\d+)/) || clean.match(/"availablePoints":(\d+)/);
-        const balance = balMatch ? parseInt(balMatch[1], 10) : 0;
+      const isAuthValid = clean.includes('pointsCounters') || clean.includes('pointsHistory') || clean.includes('activityCards');
+
+      if (isAuthValid) {
+        let balance = 0;
+        let pcProgress = 0, pcMax = 60;
+        let streakDays = 0;
+        let userName = '';
+
+        // 1. 提取 PC 搜索配额
+        const pcIdx = clean.indexOf('"pointsCounters":{');
+        if (pcIdx !== -1) {
+          let start = pcIdx + 17, depth = 0, end = start;
+          for (let i = start; i < clean.length && i < start + 500; i++) {
+            if (clean[i] === '{') depth++;
+            if (clean[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+          }
+          try {
+            const pts = JSON.parse(clean.substring(start, end));
+            pcMax = pts.pc?.max ?? 60;
+            pcProgress = pts.pc?.progress ?? 0;
+            if (pts.totalPoints != null) balance = Number(pts.totalPoints);
+          } catch {}
+        }
+
+        // 2. 提取当前总积分余额
+        const balMatch = clean.match(/"balance":(\d+)/) 
+          || clean.match(/"availablePoints":(\d+)/)
+          || cookie.match(/rc=(\d+)/) 
+          || cookie.match(/rb=(\d+)/);
+        if (balMatch) {
+          balance = parseInt(balMatch[1], 10);
+        }
+
+        // 3. 提取连续签到打卡天数
+        const streakMatch = clean.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').match(/每日连续打卡\s*(\d+)/);
+        if (streakMatch) {
+          streakDays = parseInt(streakMatch[1], 10);
+        }
+
+        // 4. 提取用户名
+        const nameMatch = cookie.match(/N=([^;]+)/);
+        if (nameMatch) {
+          try { userName = decodeURIComponent(nameMatch[1]); } catch {}
+        }
+
         return {
           valid: true,
           balance,
-          level: '正常',
-          message: `网页端已登录 | 当前积分: ${balance}`
+          userName: userName || '微软用户',
+          streakDays,
+          pcSearch: `${pcProgress}/${pcMax}`,
+          message: `网页端已登录成功！${userName ? `用户: ${userName} | ` : ''}积分: ${balance} | 连续签到: ${streakDays}天 | 搜索配额: ${pcProgress}/${pcMax}`
         };
       }
 
-      return { valid: false, message: 'Cookie 已失效或未登录，请重新从浏览器复制粘贴' };
+      // 如果返回了页面但未包含 pointsCounters，检测是否跳转到了微软登录页
+      if (clean.includes('login.live.com') || clean.includes('Sign in')) {
+        return { valid: false, message: 'Cookie 已过期失效，页面提示需要重新登录' };
+      }
+
+      return { valid: false, message: '未能识别微软 Rewards 登录态，请检查是否复制了完整 Cookie' };
     } catch (e) {
+      if (e.message && e.message.includes('401')) {
+        return { valid: false, message: '微软官方返回 HTTP 401（未授权），Cookie 已过期，请在浏览器重新登录后获取' };
+      }
       return { valid: false, message: `网页端请求失败: ${e.message}` };
     }
   }
