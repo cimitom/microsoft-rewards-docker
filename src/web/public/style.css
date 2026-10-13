@@ -745,6 +745,43 @@ body {
   gap: 8px;
 }
 
+/* Slot Presets Pill Buttons */
+.slot-presets-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.slot-pill-btn {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-sub);
+  padding: 7px 13px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+}
+
+.slot-pill-btn:hover {
+  border-color: var(--border-light);
+  color: var(--text-main);
+  transform: translateY(-1px);
+}
+
+.slot-pill-btn.active {
+  background: linear-gradient(135deg, #0284C7, #0078D4);
+  border-color: transparent;
+  color: #FFFFFF !important;
+  box-shadow: 0 3px 10px rgba(0, 120, 212, 0.35);
+}
+
 /* Bottom Grid: Timeline + Terminal */
 .bottom-grid {
   display: grid;

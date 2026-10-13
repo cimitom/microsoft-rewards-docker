@@ -165,13 +165,61 @@ function initUIEvents() {
   });
 
   // 时段开始时间联动计算结束时间 (+4h)
-  document.getElementById('cfg-account-starthour')?.addEventListener('input', (e) => {
-    let sh = parseInt(e.target.value, 10);
+  const syncEndHour = (startInputId, endInputId) => {
+    const sElem = document.getElementById(startInputId);
+    const eElem = document.getElementById(endInputId);
+    if (!sElem || !eElem) return;
+    let sh = parseInt(sElem.value, 10);
     if (isNaN(sh)) sh = 6;
     sh = Math.max(0, Math.min(23, sh));
     const eh = (sh + 4) % 24;
-    const endElem = document.getElementById('cfg-account-endhour');
-    if (endElem) endElem.value = `${String(eh).padStart(2, '0')}:00`;
+    eElem.value = `${String(eh).padStart(2, '0')}:00`;
+  };
+
+  document.getElementById('cfg-account-starthour')?.addEventListener('input', () => {
+    syncEndHour('cfg-account-starthour', 'cfg-account-endhour');
+  });
+
+  document.getElementById('guide-account-starthour')?.addEventListener('input', () => {
+    syncEndHour('guide-account-starthour', 'guide-account-endhour');
+  });
+
+  // 配置中心：拟人错峰时段 4 个快捷按钮 + 自定义交互
+  document.querySelectorAll('#cfg-slot-presets .slot-pill-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#cfg-slot-presets .slot-pill-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const startVal = btn.getAttribute('data-start');
+      const customBox = document.getElementById('cfg-custom-slot-box');
+      const shInput = document.getElementById('cfg-account-starthour');
+      if (startVal === 'custom') {
+        if (customBox) customBox.style.display = 'block';
+        if (shInput) shInput.focus();
+      } else {
+        if (customBox) customBox.style.display = 'none';
+        if (shInput) shInput.value = startVal;
+        syncEndHour('cfg-account-starthour', 'cfg-account-endhour');
+      }
+    });
+  });
+
+  // 配置向导：拟人错峰时段 4 个快捷按钮 + 自定义交互
+  document.querySelectorAll('#guide-slot-presets .slot-pill-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#guide-slot-presets .slot-pill-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const startVal = btn.getAttribute('data-start');
+      const customBox = document.getElementById('guide-custom-slot-box');
+      const shInput = document.getElementById('guide-account-starthour');
+      if (startVal === 'custom') {
+        if (customBox) customBox.style.display = 'block';
+        if (shInput) shInput.focus();
+      } else {
+        if (customBox) customBox.style.display = 'none';
+        if (shInput) shInput.value = startVal;
+        syncEndHour('guide-account-starthour', 'guide-account-endhour');
+      }
+    });
   });
 
   // 测试词库来源按钮
@@ -985,6 +1033,23 @@ function loadAccountIntoForm(accId) {
   if (shInput) shInput.value = sh;
   const ehInput = document.getElementById('cfg-account-endhour');
   if (ehInput) ehInput.value = `${String(eh).padStart(2, '0')}:00`;
+
+  // 联动高亮 4 个快捷按钮或自定义
+  const standardHours = [6, 10, 14, 18];
+  const customBox = document.getElementById('cfg-custom-slot-box');
+  document.querySelectorAll('#cfg-slot-presets .slot-pill-btn').forEach(b => {
+    const bStart = b.getAttribute('data-start');
+    if (standardHours.includes(sh) && bStart === String(sh)) {
+      b.classList.add('active');
+    } else if (!standardHours.includes(sh) && bStart === 'custom') {
+      b.classList.add('active');
+    } else {
+      b.classList.remove('active');
+    }
+  });
+  if (customBox) {
+    customBox.style.display = standardHours.includes(sh) ? 'none' : 'block';
+  }
 }
 
 async function saveSettingsFromModal() {
@@ -992,7 +1057,17 @@ async function saveSettingsFromModal() {
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
 
-  const sh = parseInt(document.getElementById('cfg-account-starthour')?.value, 10) || 6;
+  let sh = 6;
+  const activePreset = document.querySelector('#cfg-slot-presets .slot-pill-btn.active');
+  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '6';
+  if (presetVal === 'custom') {
+    sh = parseInt(document.getElementById('cfg-account-starthour')?.value, 10);
+    if (isNaN(sh)) sh = 6;
+  } else {
+    sh = parseInt(presetVal, 10) || 6;
+  }
+  sh = Math.max(0, Math.min(23, sh));
+
   const updatedAccountData = {
     id: currentAccId,
     name: document.getElementById('cfg-account-name').value.trim() || '账号',
@@ -1076,14 +1151,36 @@ async function saveGuideSettings() {
   const proxyUrl = document.getElementById('guide-proxy-url').value.trim();
   const lockRegion = document.getElementById('guide-lock-region').checked;
 
+  let sh = 6;
+  const activePreset = document.querySelector('#guide-slot-presets .slot-pill-btn.active');
+  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '6';
+  if (presetVal === 'custom') {
+    sh = parseInt(document.getElementById('guide-account-starthour')?.value, 10);
+    if (isNaN(sh)) sh = 6;
+  } else {
+    sh = parseInt(presetVal, 10) || 6;
+  }
+  sh = Math.max(0, Math.min(23, sh));
+  const eh = (sh + 4) % 24;
+
   await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      network: { useProxy, proxyUrl, lockRegion }
+      network: { useProxy, proxyUrl, lockRegion },
+      account: {
+        timeSlot: {
+          startHour: sh,
+          endHour: eh,
+          randomDelayMin: 60,
+          durationHours: 2
+        }
+      }
     })
   });
 
+  fetchConfig();
+  fetchStatus();
   switchStep(4);
 }
 

@@ -16,7 +16,7 @@
         <div class="brand">
           <div class="title-wrap">
             <h1 class="title">微软积分自动化控制台</h1>
-            <span class="badge badge-version">v1.4.0 Docker</span>
+            <span class="badge badge-version">v1.4.1 Docker</span>
           </div>
           <div class="subtitle-wrap">
             <span id="system-status-badge" class="status-pill status-idle">
@@ -282,7 +282,7 @@
 
         <!-- Step 3 -->
         <div class="step-content" id="step-3">
-          <h3 class="step-title">第三步：网络环境与代理配置 (防风控)</h3>
+          <h3 class="step-title">第三步：网络代理、国区保护与拟人错峰时段 (防风控)</h3>
           <p class="step-desc">为避免被微软风控锁区或封号，系统默认仅允许在中国大陆 IP 环境下打卡。如果您的 NAS/VPS 在境外，必须配置国内代理。</p>
           <div class="form-group">
             <label class="form-label checkbox-label">
@@ -300,6 +300,34 @@
           </div>
           <button id="guide-btn-test-proxy" class="btn btn-secondary">一键检测出口 IP 与地区</button>
           <div id="guide-proxy-result" class="hint-msg"></div>
+
+          <hr class="divider">
+
+          <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color);">
+            <label class="form-label">🕒 拟人化错峰时段选择 (4小时作息窗口)</label>
+            <div class="slot-presets-wrap" id="guide-slot-presets">
+              <button type="button" class="slot-pill-btn active" data-start="6">🌅 06:00 - 10:00 (早间)</button>
+              <button type="button" class="slot-pill-btn" data-start="10">☀️ 10:00 - 14:00 (午间)</button>
+              <button type="button" class="slot-pill-btn" data-start="14">☕ 14:00 - 18:00 (下午)</button>
+              <button type="button" class="slot-pill-btn" data-start="18">🌙 18:00 - 22:00 (晚间)</button>
+              <button type="button" class="slot-pill-btn" data-start="custom">✏️ 自定义时间</button>
+            </div>
+            
+            <div id="guide-custom-slot-box" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
+                <div>
+                  <label style="font-size: 11.5px; color: var(--text-sub);">开始时间 (0-23点)</label>
+                  <input type="number" id="guide-account-starthour" class="form-input" min="0" max="23" value="6">
+                </div>
+                <div>
+                  <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动计算 +4h)</label>
+                  <input type="text" id="guide-account-endhour" class="form-input" readonly value="10:00" style="opacity: 0.85;">
+                </div>
+              </div>
+            </div>
+            <small class="form-hint" style="margin-top: 6px;">时段内 0~60 分钟随机启动，PC 搜索将在 2 小时内平缓分散执行，彻底模拟真实作息防风控。</small>
+          </div>
+
           <div class="step-footer">
             <button class="btn btn-secondary" onclick="switchStep(2)">上一步</button>
             <button class="btn btn-primary" onclick="saveGuideSettings()">保存并进入主界面 ➜</button>
@@ -379,19 +407,29 @@
             <input type="password" id="cfg-refresh-token" class="form-input" readonly placeholder="未获取">
           </div>
 
-          <div class="form-group" style="background: var(--card-inner); padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color); margin-top: 10px;">
+          <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color); margin-top: 10px;">
             <label class="form-label">🕒 拟人化错峰时段设定 (4小时时间窗)</label>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
-              <div>
-                <label style="font-size: 11.5px; color: var(--text-sub);">开始时间 (0-23点)</label>
-                <input type="number" id="cfg-account-starthour" class="form-input" min="0" max="23" value="6">
-              </div>
-              <div>
-                <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动+4h)</label>
-                <input type="text" id="cfg-account-endhour" class="form-input" readonly value="10:00" style="opacity: 0.85;">
+            <div class="slot-presets-wrap" id="cfg-slot-presets">
+              <button type="button" class="slot-pill-btn active" data-start="6">🌅 06:00 - 10:00 (早间)</button>
+              <button type="button" class="slot-pill-btn" data-start="10">☀️ 10:00 - 14:00 (午间)</button>
+              <button type="button" class="slot-pill-btn" data-start="14">☕ 14:00 - 18:00 (下午)</button>
+              <button type="button" class="slot-pill-btn" data-start="18">🌙 18:00 - 22:00 (晚间)</button>
+              <button type="button" class="slot-pill-btn" data-start="custom">✏️ 自定义时间</button>
+            </div>
+            
+            <div id="cfg-custom-slot-box" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
+                <div>
+                  <label style="font-size: 11.5px; color: var(--text-sub);">自定义开始时间 (0-23点)</label>
+                  <input type="number" id="cfg-account-starthour" class="form-input" min="0" max="23" value="6">
+                </div>
+                <div>
+                  <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动计算 +4h)</label>
+                  <input type="text" id="cfg-account-endhour" class="form-input" readonly value="10:00" style="opacity: 0.85;">
+                </div>
               </div>
             </div>
-            <small class="form-hint" id="cfg-account-slot-hint">区间内 0~60 分钟随机启动，单账号搜索平摊至约 2 小时，彻底模拟真人上网作息</small>
+            <small class="form-hint" id="cfg-account-slot-hint" style="margin-top: 8px;">区间内 0~60 分钟随机启动，PC 搜索将在 2 小时内平缓分散执行，彻底模拟真人上网作息</small>
           </div>
 
           <div style="display: flex; gap: 10px; margin-top: 14px;">
@@ -435,7 +473,7 @@
           <div class="form-group">
             <label class="form-label">PC 搜索间隔基准时间（秒）</label>
             <input type="number" id="cfg-search-span" class="form-input" min="20" max="120" value="30">
-            <small class="form-hint">自动附加 ±10 秒随机浮动，模拟真实人工节奏，避免触发速率限制</small>
+            <small class="form-hint">提示：该秒数仅在「纯 HTTP 极速协议模式」生效。推荐的「Playwright 拟人浏览器模式」将自动在 2 小时时段内平摊搜索（平均 ~3.5-4 分钟/次，两者不冲突）。</small>
           </div>
           <div class="form-group">
             <label class="form-label">界面主题风格 (日夜模式)</label>
