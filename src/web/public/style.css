@@ -130,22 +130,23 @@ body {
 .subtitle-wrap {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-top: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .refresh-countdown {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 3px 10px;
+  padding: 3px 9px;
   border-radius: 999px;
   background: rgba(245, 158, 11, 0.12);
   color: #F59E0B;
   border: 1px solid rgba(245, 158, 11, 0.3);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .refresh-countdown strong {
@@ -155,13 +156,14 @@ body {
 }
 
 .status-pill {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
-  padding: 3px 10px;
+  padding: 3px 9px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .status-idle {
@@ -239,7 +241,7 @@ body {
 
 /* Buttons */
 .btn {
-  padding: 10px 16px;
+  padding: 9px 15px;
   border-radius: 12px;
   font-size: 13px;
   font-weight: 600;
@@ -250,12 +252,28 @@ body {
   gap: 6px;
   transition: all 0.2s;
   text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .btn-sm {
-  padding: 7px 12px;
+  padding: 6px 11px;
   font-size: 12px;
-  border-radius: 9px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.badge-mini {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--card-inner);
+  color: var(--text-sub);
+  border: 1px solid var(--border-color);
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
 .btn-primary {
@@ -335,10 +353,19 @@ body {
 }
 
 .account-chip.active {
-  background: linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(0, 120, 212, 0.2));
-  border-color: var(--accent);
-  color: #fff;
-  box-shadow: 0 4px 18px rgba(0, 120, 212, 0.35);
+  background: linear-gradient(135deg, #0284C7, #0078D4);
+  border-color: transparent;
+  color: #FFFFFF !important;
+  box-shadow: 0 4px 16px rgba(0, 120, 212, 0.35);
+}
+
+.account-chip.active .chip-badge {
+  background: rgba(255, 255, 255, 0.22);
+  color: #FFFFFF !important;
+}
+
+.account-chip.active .chip-sub {
+  color: rgba(255, 255, 255, 0.85) !important;
 }
 
 .chip-icon {
@@ -413,9 +440,10 @@ body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  background: rgba(0, 0, 0, 0.08);
-  padding: 10px 12px;
-  border-radius: 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  padding: 11px 13px;
+  border-radius: 12px;
 }
 
 .acc-stat-box {
@@ -460,6 +488,7 @@ body {
   box-shadow: 0 8px 25px rgba(0, 0, 0, 0.25);
   position: relative;
   overflow: hidden;
+  min-width: 0;
 }
 
 .hero-card::after {
@@ -476,12 +505,14 @@ body {
   font-size: 13px;
   color: var(--text-sub);
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .hero-val {
   font-size: 32px;
   font-weight: 800;
   letter-spacing: -0.5px;
+  white-space: nowrap;
 }
 
 .hero-earned {
@@ -501,6 +532,9 @@ body {
 .hero-desc {
   font-size: 12px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Section Card */
@@ -574,17 +608,19 @@ body {
   font-size: 22px;
   width: 38px;
   height: 38px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
   border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .task-name {
   font-size: 14px;
   font-weight: 600;
-  color: #F1F5F9;
+  color: var(--text-main);
 }
 
 .task-subtext {

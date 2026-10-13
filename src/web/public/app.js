@@ -475,9 +475,17 @@ function renderDashboard(data) {
   const displayPercent = isAllMode ? (summary?.overallPercent || 0) : Math.round((Object.values(stats.tasks || {}).filter(t => t.done || (t.max > 0 && t.progress >= t.max)).length / Math.max(1, Object.keys(stats.tasks || {}).length)) * 100);
   const stamps = isAllMode ? (summary?.stamps || { progress: 8, max: 12 }) : (stats.stamps || { progress: 8, max: 12 });
 
+  const doneTasksCount = isAllMode
+    ? (summary?.doneTasksCount || 0)
+    : Object.values(stats.tasks || {}).filter(t => t.done || (t.max > 0 && t.progress >= t.max)).length;
+  const totalTasksCount = isAllMode
+    ? (summary?.totalTasksCount || 6)
+    : Math.max(1, Object.keys(stats.tasks || {}).length);
+
   document.getElementById('stat-earned').innerText = `+${displayEarned}`;
   document.getElementById('stat-balance').innerText = displayBalance.toLocaleString();
   document.getElementById('stat-percent').innerText = `${displayPercent}%`;
+  document.getElementById('stat-done-count').innerText = `${doneTasksCount} / ${totalTasksCount} 项任务完成`;
   document.getElementById('stat-streak').innerText = `${displayStreak} 天`;
 
   const statStamps = document.getElementById('stat-stamps');
@@ -487,7 +495,7 @@ function renderDashboard(data) {
   }
   if (statStampsDesc) {
     const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 8));
-    statStampsDesc.innerText = diff > 0 ? `还差 ${diff} 个集满 1,000 积分大奖` : '1,000 奖励印章已集满！';
+    statStampsDesc.innerText = diff > 0 ? `差 ${diff} 个集满 1,000 分大奖` : '1,000 奖励印章已集满！';
   }
 
   // 运行按钮提示
