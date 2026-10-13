@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   microsoft-rewards:
-    image: ghcr.io/wangheqiang530/microsoft-rewards-docker:latest
+    image: wangheqiang/microsoft-rewards-docker:latest
+    # 或者使用 GitHub Packages 镜像：
+    # image: ghcr.io/wangheqiang530/microsoft-rewards-docker:latest
     build:
       context: .
       dockerfile: Dockerfile

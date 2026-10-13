@@ -71,7 +71,9 @@ version: '3.8'
 
 services:
   microsoft-rewards:
-    image: ghcr.io/wangheqiang530/microsoft-rewards-docker:latest
+    image: wangheqiang/microsoft-rewards-docker:latest
+    # 或者使用 GitHub 镜像：
+    # image: ghcr.io/wangheqiang530/microsoft-rewards-docker:latest
     container_name: ms-rewards
     restart: unless-stopped
     ports:
@@ -101,7 +103,7 @@ docker run -d \
   -p 5308:5308 \
   -v $(pwd)/data:/app/data \
   -e TZ=Asia/Shanghai \
-  ghcr.io/wangheqiang530/microsoft-rewards-docker:latest
+  wangheqiang/microsoft-rewards-docker:latest
 ```
 
 ---
