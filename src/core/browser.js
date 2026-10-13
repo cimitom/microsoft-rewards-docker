@@ -167,6 +167,10 @@ class BrowserManager extends EventEmitter {
     const accName = acc?.name || '当前账号';
     logger.log('🔍', `启动无头浏览器执行「单次安全验证搜索」...`, '', accName);
 
+    if (acc?.cookie && !acc.cookie.includes('_U=')) {
+      logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请前往 cn.bing.com 登录后重新抓取完整 Cookie`, '', accName);
+    }
+
     try {
       this.shouldStop = false;
       const { browser, context } = await this.launchBrowser(acc);
@@ -244,6 +248,10 @@ class BrowserManager extends EventEmitter {
     const durationHours = options.durationHours || 2; // 默认平摊到 2 小时
     const totalSeconds = durationHours * 3600;
     const baseIntervalSec = Math.max(45, Math.floor(totalSeconds / totalSearches)); // 平均每 3.5~4 分钟一次
+
+    if (acc?.cookie && !acc.cookie.includes('_U=')) {
+      logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请在配置中心更新包含 _U 的完整 Cookie`, '', accName);
+    }
 
     logger.log('🖥️', `启动 Playwright 拟人真机搜索：总计需 ${totalSearches} 次，将在约 ${durationHours} 小时内平滑分散执行（每 ~${(baseIntervalSec/60).toFixed(1)} 分钟搜索一次，彻底避开冷却限制）`, '', accName);
 

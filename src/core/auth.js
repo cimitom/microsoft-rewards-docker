@@ -249,8 +249,13 @@ export class AuthManager {
           stampsProgress = parseInt(stampMatch[2], 10) || 8;
         }
 
+        // 6. 检查是否存在必应搜索关键登录标头 _U
+        const hasU = cookie.includes('_U=');
+        const uWarning = hasU ? '' : ' | ⚠️缺少 _U 登录标头，必应搜索无法关联账号计分！请在电脑登录 cn.bing.com 重新抓取完整 Cookie';
+
         return {
           valid: true,
+          hasU,
           balance,
           userName: userName || '微软用户',
           streakDays,
@@ -259,7 +264,7 @@ export class AuthManager {
             max: stampsMax
           },
           pcSearch: `${pcProgress}/${pcMax}`,
-          message: `网页端已登录成功！${userName ? `用户: ${userName} | ` : ''}积分: ${balance} | 连续签到: ${streakDays}天 | 印章进度: ${stampsProgress}/${stampsMax} | 搜索配额: ${pcProgress}/${pcMax}`
+          message: `网页端已登录成功！${userName ? `用户: ${userName} | ` : ''}积分: ${balance} | 连续签到: ${streakDays}天 | 印章进度: ${stampsProgress}/${stampsMax} | 搜索配额: ${pcProgress}/${pcMax}${uWarning}`
         };
       }
 

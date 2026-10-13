@@ -83,7 +83,7 @@ class HistoryManager {
     const history = this.load();
     const result = [];
     const now = new Date();
-    const currentBalance = currentStats.balance || 51218;
+    const currentBalance = currentStats.balance || 0;
 
     // 默认明细模板
     const defaultBreakdown = [

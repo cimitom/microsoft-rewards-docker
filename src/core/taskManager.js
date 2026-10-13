@@ -180,10 +180,12 @@ export class TaskManager {
       ]);
 
       if (info) {
-        if (info.balance > 1000) {
-          accStats.balance = info.balance;
-        } else if (accStats.balance < 1000) {
-          accStats.balance = 51218;
+        if (info.balance !== undefined && info.balance !== null) {
+          accStats.balance = Number(info.balance);
+          // 自动修复历史遗留错误（如新号误存为51218）
+          if (accStats.startBalance > 1000 && accStats.balance < 1000) {
+            accStats.startBalance = accStats.balance;
+          }
         }
 
         // 1. 同步 PC 搜索真实配额

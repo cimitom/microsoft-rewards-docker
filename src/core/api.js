@@ -291,6 +291,14 @@ export class RewardsApi {
           }
         }
 
+        // 如果页面未取到有效余额，尝试通过移动端 DAPI 接口获取真实账户余额
+        if (balance === 0) {
+          try {
+            const tokenBal = await this.getBalance();
+            if (tokenBal > 0) balance = tokenBal;
+          } catch {}
+        }
+
         const todayDetails = [];
         const toNum = v => parseInt(String(v).replace(/,/g, ''), 10) || 0;
         const searchRowMatch = clean.match(/<p>\s*必应搜索\s*<\/p>\s*<\/div>\s*<div(?=[^>]*justify-self-end)[^>]*>([\s\S]{0,500}?)<\/div>/i);
