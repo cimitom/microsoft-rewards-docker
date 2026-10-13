@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: '是否推送镜像（关闭则只做构建校验，latest 不会移动）'
+        description: '是否推送镜像（关闭则只做构建校验，不推送任何标签）'
         required: false
         type: boolean
-        default: false
+        default: true
 
 jobs:
   build-and-push:
@@ -23,22 +23,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 判断本次是「发版推送」还是「仅构建校验」
-      #   push tag v*  -> 推送镜像：版本号 + 次版本号 + latest
-      #   push main    -> 只构建校验，不推送，latest 保持不动
-      #   手动触发      -> 由 publish 入参决定
+      # 发布策略（全自动，推上去就发）：
+      #   push main   -> 构建并推送 latest（latest 永远等于 main 最新代码）
+      #   push tag v* -> 构建并推送 版本号 + 主.次 + latest
+      #   手动触发     -> 由 publish 入参控制，关掉可只做构建校验
       - name: Determine publish mode
         id: mode
         run: |
-          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::发版推送，将构建并发布多架构镜像"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::手动触发并开启发布，将构建并发布镜像"
-          else
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" != "true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice::仅构建校验，不推送任何镜像标签"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::将构建并发布镜像（linux/amd64 + linux/arm64）"
           fi
 
       - name: Set up QEMU
@@ -65,8 +62,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME || 'wangheqiang' }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 3. 提取元数据和 Tag（仅发版时执行）
-      #    latest 只在发版推送/手动发布时更新，普通 main 推送不会移动它
+      # 3. 提取元数据和 Tag
+      #    main 推送：只有 latest（自动跟随最新代码）
+      #    tag 推送：版本号 + 主.次 + latest
       - name: Extract metadata for Docker
         id: meta
         if: steps.mode.outputs.publish == 'true'
@@ -80,9 +78,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      # 4. 构建镜像
-      #    发版：构建 amd64 + arm64 并推送
-      #    校验：只构建 amd64 不推送，用于验证 Dockerfile 未损坏（速度也更快）
+      # 4. 构建并推送多架构镜像 (linux/amd64, linux/arm64)
       - name: Build and push multi-arch Docker image
         uses: docker/build-push-action@v5
         with:
