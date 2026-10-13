@@ -12,12 +12,14 @@ document.addEventListener('DOMContentLoaded', () => {
   initUIEvents();
   startCountdownTimer();
   fetchStatus();
+  fetchBrowserStatus();
   fetchConfig();
   fetchHistory(7);
   initLogStream();
   // 首次打开自动触发官网真实完成度同步（解决新部署到 NAS 时任务全显为 0 的问题）
   fetch('/api/status/sync', { method: 'POST' }).then(() => fetchStatus()).catch(() => {});
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
+  setInterval(fetchBrowserStatus, 2500); // 2.5秒轮询无头浏览器状态
 });
 
 // 初始化日夜模式与跟随系统
@@ -135,6 +137,41 @@ function initUIEvents() {
     } finally {
       btn.innerHTML = origHtml;
     }
+  });
+
+  // 单次安全测试搜索按钮 (真实按键输入，不触发冷冻)
+  document.getElementById('btn-trigger-single-search')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-trigger-single-search');
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = '<span>⏳</span> 搜索验证中...';
+    try {
+      const targetId = selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || 'acc_1');
+      const res = await fetch('/api/tasks/single-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: targetId })
+      }).then(r => r.json());
+      if (res.success) {
+        alert(`🎉 单次测试搜索成功！\n${res.data.message}\n已完成拟人按键输入与积分同步。`);
+        fetchStatus();
+      } else {
+        alert(`搜索测试失败: ${res.message}`);
+      }
+    } catch (e) {
+      alert(`请求出错: ${e.message}`);
+    } finally {
+      btn.innerHTML = origHtml;
+    }
+  });
+
+  // 时段开始时间联动计算结束时间 (+4h)
+  document.getElementById('cfg-account-starthour')?.addEventListener('input', (e) => {
+    let sh = parseInt(e.target.value, 10);
+    if (isNaN(sh)) sh = 6;
+    sh = Math.max(0, Math.min(23, sh));
+    const eh = (sh + 4) % 24;
+    const endElem = document.getElementById('cfg-account-endhour');
+    if (endElem) endElem.value = `${String(eh).padStart(2, '0')}:00`;
   });
 
   // 测试词库来源按钮
@@ -425,6 +462,50 @@ async function fetchStatus() {
   }
 }
 
+// 获取并渲染无头浏览器实时状态监控数据
+async function fetchBrowserStatus() {
+  try {
+    const res = await fetch('/api/browser/status').then(r => r.json());
+    if (res.success && res.data) {
+      renderBrowserMonitor(res.data);
+    }
+  } catch {}
+}
+
+function renderBrowserMonitor(b) {
+  const pill = document.getElementById('browser-pill-status');
+  const pillText = document.getElementById('browser-pill-text');
+  const bmAccount = document.getElementById('bm-account');
+  const bmQuery = document.getElementById('bm-query');
+  const bmRound = document.getElementById('bm-round');
+  const bmCountdown = document.getElementById('bm-countdown');
+  const bmMem = document.getElementById('bm-mem');
+  const bmAction = document.getElementById('bm-action-text');
+
+  if (!pill) return;
+
+  const isRunning = b.status !== 'idle' && b.status !== 'stopped';
+  pill.className = `browser-status-pill ${isRunning ? 'status-running' : 'status-idle'}`;
+
+  const statusMap = {
+    idle: '空闲休眠中 (0 MB)',
+    starting: '正在启动 Chromium...',
+    navigating: '打开 Bing 页面中...',
+    typing: '正在模拟真人键盘打字...',
+    dwelling: '等待页面渲染与滚动...',
+    waiting: '拟人呼吸休眠中...',
+    stopped: '已停止'
+  };
+
+  pillText.innerText = statusMap[b.status] || (isRunning ? '运行中' : '空闲休眠中');
+  bmAccount.innerText = b.activeAccountName || '--';
+  bmQuery.innerText = b.currentQuery || '--';
+  bmRound.innerText = b.totalTarget > 0 ? `${b.searchCount} / ${b.totalTarget}` : '0 / 0';
+  bmCountdown.innerText = b.nextSearchIn > 0 ? `${b.nextSearchIn} 秒` : '--';
+  bmMem.innerText = isRunning ? `${b.memoryMB || 180} MB` : '0 MB';
+  bmAction.innerText = b.lastAction || '浏览器当前处于空闲休眠状态 (0 内存占用)';
+}
+
 // 渲染多账号切换胶囊栏
 function renderAccountSelectorBar(summary) {
   const bar = document.getElementById('account-selector-bar');
@@ -679,12 +760,37 @@ function renderAccountsOverviewGrid(accounts) {
         <button class="btn btn-secondary btn-sm btn-toggle-single" title="${acc.enabled ? '暂停此账号自动巡检' : '继续此账号自动巡检'}">
           ${acc.enabled ? '⏸️ 暂停' : '▶️ 继续'}
         </button>
-        <button class="btn btn-secondary btn-sm btn-test-single" title="测试该账号登录状态">🔍 测试</button>
-        <button class="btn btn-secondary btn-sm btn-view-acc">查看详情 ➜</button>
+        <button class="btn btn-secondary btn-sm btn-test-single-search" title="单独搜索一次 (拟人键盘输入，安全验证)">🔍 单次测搜</button>
+        <button class="btn btn-secondary btn-sm btn-test-single" title="测试该账号登录状态">📋 诊断</button>
+        <button class="btn btn-secondary btn-sm btn-view-acc">详情 ➜</button>
       </div>
     `;
 
     // 绑定卡片上的各快捷按钮
+    card.querySelector('.btn-test-single-search')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.target;
+      const origText = btn.innerText;
+      btn.innerText = '⏳ 测搜中...';
+      try {
+        const res = await fetch('/api/tasks/single-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId: acc.id })
+        }).then(r => r.json());
+        if (res.success) {
+          alert(`🎉 账号 [${acc.name}] 单次测试搜索成功！\n${res.data.message}\n已完成拟人键盘输入与积分同步。`);
+          fetchStatus();
+        } else {
+          alert(`测搜失败: ${res.message}`);
+        }
+      } catch (err) {
+        alert(`请求出错: ${err.message}`);
+      } finally {
+        btn.innerText = origText;
+      }
+    });
+
     card.querySelector('.btn-run-single')?.addEventListener('click', async (e) => {
       e.stopPropagation();
       const res = await fetch('/api/tasks/run', {
@@ -840,7 +946,8 @@ function populateSettingsForm() {
   document.getElementById('cfg-task-desktop').checked = c.tasks?.desktopApp !== false;
   document.getElementById('cfg-task-keep').checked = c.tasks?.keepRunning !== false;
   document.getElementById('cfg-search-span').value = c.tasks?.searchSpan || 30;
-  document.getElementById('cfg-search-api').value = c.tasks?.searchApi || 'offline';
+  document.getElementById('cfg-search-engine').value = c.tasks?.searchEngineMode || 'browser';
+  document.getElementById('cfg-search-api').value = c.tasks?.searchApi || 'baidu.official';
   // 主题
   const themeVal = c.ui?.theme || localStorage.getItem('ms_rewards_theme') || 'auto';
   const themeSelect = document.getElementById('cfg-ui-theme');
@@ -869,6 +976,15 @@ function loadAccountIntoForm(accId) {
   document.getElementById('cfg-cookie').value = acc.cookie || '';
   document.getElementById('cfg-authcode').value = acc.authCodeUrl || '';
   document.getElementById('cfg-refresh-token').value = acc.refreshToken ? '********' : '';
+
+  // 拟人化错峰时段
+  const slot = acc.timeSlot || { startHour: 6, endHour: 10, randomDelayMin: 60, durationHours: 2 };
+  const sh = slot.startHour ?? 6;
+  const eh = slot.endHour ?? ((sh + 4) % 24);
+  const shInput = document.getElementById('cfg-account-starthour');
+  if (shInput) shInput.value = sh;
+  const ehInput = document.getElementById('cfg-account-endhour');
+  if (ehInput) ehInput.value = `${String(eh).padStart(2, '0')}:00`;
 }
 
 async function saveSettingsFromModal() {
@@ -876,12 +992,19 @@ async function saveSettingsFromModal() {
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
 
+  const sh = parseInt(document.getElementById('cfg-account-starthour')?.value, 10) || 6;
   const updatedAccountData = {
     id: currentAccId,
     name: document.getElementById('cfg-account-name').value.trim() || '账号',
     enabled: document.getElementById('cfg-account-enabled').checked,
     cookie: document.getElementById('cfg-cookie').value.trim(),
-    authCodeUrl: document.getElementById('cfg-authcode').value.trim()
+    authCodeUrl: document.getElementById('cfg-authcode').value.trim(),
+    timeSlot: {
+      startHour: sh,
+      endHour: (sh + 4) % 24,
+      randomDelayMin: 60,
+      durationHours: 2
+    }
   };
 
   if (idx !== -1) {
@@ -909,7 +1032,8 @@ async function saveSettingsFromModal() {
       desktopApp: document.getElementById('cfg-task-desktop').checked,
       keepRunning: document.getElementById('cfg-task-keep').checked,
       searchSpan: Number(document.getElementById('cfg-search-span').value) || 30,
-      searchApi: document.getElementById('cfg-search-api').value
+      searchEngineMode: document.getElementById('cfg-search-engine')?.value || 'browser',
+      searchApi: document.getElementById('cfg-search-api')?.value || 'baidu.official'
     },
     ui: {
       theme: selectedTheme

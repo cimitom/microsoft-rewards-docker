@@ -1,8 +1,15 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
-# 安装 tzdata 确保时区正常
-RUN apk add --no-cache tzdata
+# 安装 tzdata、chromium 与中文字体支持
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    fonts-wqy-zenhei \
+    tzdata \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV TZ=Asia/Shanghai
+ENV CHROMIUM_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
@@ -20,7 +27,7 @@ RUN mkdir -p /app/data
 EXPOSE 5308
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:5308/api/status || exit 1
+  CMD node -e "fetch('http://127.0.0.1:5308/api/status').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
 
 VOLUME ["/app/data"]
 

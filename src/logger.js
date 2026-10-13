@@ -33,7 +33,8 @@ class Logger extends EventEmitter {
     return now.toLocaleString('zh-CN', { hour12: false });
   }
 
-  log(icon, msg, tag = '') {
+  log(icon, msg, tag = '', accountName = '') {
+    const acc = accountName || '';
     const entry = {
       id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
       timestamp: Date.now(),
@@ -41,10 +42,12 @@ class Logger extends EventEmitter {
       fullTime: this.getFullTimeStr(),
       icon: icon || 'ℹ️',
       tag: tag || '',
+      accountName: acc,
       message: String(msg)
     };
 
-    const line = `[${entry.fullTime}] ${entry.icon} ${entry.tag ? `[${entry.tag}] ` : ''}${entry.message}\n`;
+    const accPrefix = acc ? `[${acc}] ` : (tag ? `[${tag}] ` : '');
+    const line = `[${entry.fullTime}] ${entry.icon} ${accPrefix}${entry.message}\n`;
     console.log(line.trimEnd());
 
     // 持久化追加写入 data/app.log

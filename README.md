@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.3.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.4.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -12,10 +12,21 @@
 
 ## ✨ 核心特性
 
-- 👥 **多账号矩阵管理与一键切换 (全新 v1.2.0)**：
-  - 支持绑定并同时托管多个微软账户，各账号独立 Cookie / Token，环境彻底隔离；
-  - 顶部一键切换胶囊：支持 **「全部账号汇总大屏」** 与 **「单账号深度看板」** 自由穿梭；
-  - 顺序轮询巡检打卡，账号间内置 **安全随机防风控间隔**，防止关联风控。
+- 🖥️ **Playwright / Chromium 真机拟人引擎 (全新 v1.4.0 重大升级)**：
+  - 彻底抛弃纯 HTTP GET 的易风控搜索方式，引入真正的无头浏览器内核；
+  - 模拟真实键盘输入事件流 (`keydown`/`keypress`/`keyup`)，带 50~120ms 随机按键延时与自动补全触发；
+  - 模拟回车提交与鼠标滚轮向下浏览搜索结果，100% 触发微软官方反欺诈遥测，彻底免疫“搜索暂停 / 15分钟冷却限制”；
+  - **用完即焚极速释放**：仅在搜索期间唤醒浏览器，任务结束立即关闭释放，平时常驻内存低至 ~60MB。
+- 🕒 **4 时段错峰离散作息排程 (6-10 / 10-14 / 14-18 / 18-22)**：
+  - 针对单个家庭 IP 最多 4 账号的黄金安全阈值，预设 4 个错峰作息窗口；
+  - 支持自定义开始时间（结束时间自动计算 +4 小时），区间内注入 0~60 分钟随机泊松延时；
+  - **单账号搜索拉长至约 2 小时**：平均每 3.5 ~ 4 分钟检索一次，极致模拟人类上班摸鱼作息。
+- 🖥️ **无头浏览器实时状态监控卡片**：
+  - Web 控制台直观呈现当前无头浏览器运行动作（打字中、呼吸休眠倒计时、当前检索词、内存占用 MB）。
+- 🔍 **单次安全验证搜索**：
+  - 提供一键「单次测搜」功能（15秒单次输入验证增分，完全避免触发频率惩罚）。
+- 👥 **多账号矩阵管理与一键切换**：
+  - 各账号独立凭据、环境严格隔离，日志全量标记 `[账号名]` 规范前缀。
 - 🖥️ **完全脱离电脑与浏览器**：基于轻量 Docker 容器后台静默常驻，7×24 小时自动巡检。
 - 📊 **现代化 Fluent 毛玻璃 Web 控制台**：
   - 五核 Hero 指标大屏：今日已增积分、当前总积分、今日任务达成率、连续签到天数、连签印章进度 (8/12)；

@@ -16,16 +16,15 @@
         <div class="brand">
           <div class="title-wrap">
             <h1 class="title">微软积分自动化控制台</h1>
-            <span class="badge badge-version">v1.3.1 Docker</span>
+            <span class="badge badge-version">v1.4.0 Docker</span>
           </div>
           <div class="subtitle-wrap">
             <span id="system-status-badge" class="status-pill status-idle">
               <span class="status-dot"></span> <span id="status-text">系统就绪</span>
             </span>
             <span class="refresh-countdown" id="daily-countdown-pill">
-              <span class="countdown-sandglass">⏳</span> 距离每日刷新: <strong id="countdown-timer">--:--:--</strong>
+              <span class="countdown-sandglass">⏳</span> 刷新倒计时: <strong id="countdown-timer">--:--:--</strong>
             </span>
-            <span class="next-cron" id="cron-hint">定时巡检: 开启</span>
           </div>
         </div>
       </div>
@@ -123,6 +122,51 @@
 
         <div class="task-grid" id="task-grid">
           <!-- 动态渲染任务卡片 -->
+        </div>
+      </section>
+
+      <!-- 无头浏览器真实引擎监控卡片 (全新 v1.4.0) -->
+      <section class="section-card browser-monitor-card" id="browser-monitor-card">
+        <div class="section-header">
+          <div class="section-title">
+            <span>🖥️</span> 无头浏览器工作状态监控 (Playwright / Chromium 拟人引擎)
+          </div>
+          <div class="browser-header-actions">
+            <span class="browser-status-pill status-idle" id="browser-pill-status">
+              <span class="status-dot"></span> <span id="browser-pill-text">空闲休眠中 (0 MB)</span>
+            </span>
+            <button class="btn btn-secondary btn-sm" id="btn-trigger-single-search" title="单独搜索一次检验真实输入与积分变化，完全安全不触发冷冻">
+              <span>🔍</span> 单次测试搜索
+            </button>
+          </div>
+        </div>
+
+        <div class="browser-monitor-body">
+          <div class="browser-metric-row">
+            <div class="browser-metric-item">
+              <span class="browser-metric-lbl">当前活动账号</span>
+              <span class="browser-metric-val" id="bm-account">--</span>
+            </div>
+            <div class="browser-metric-item">
+              <span class="browser-metric-lbl">实时输入关键词</span>
+              <span class="browser-metric-val" id="bm-query" style="color:var(--accent);">--</span>
+            </div>
+            <div class="browser-metric-item">
+              <span class="browser-metric-lbl">平缓搜索轮次</span>
+              <span class="browser-metric-val" id="bm-round">0 / 0</span>
+            </div>
+            <div class="browser-metric-item">
+              <span class="browser-metric-lbl">距离下次搜索</span>
+              <span class="browser-metric-val" id="bm-countdown" style="color:#F59E0B;">--</span>
+            </div>
+            <div class="browser-metric-item">
+              <span class="browser-metric-lbl">浏览器内存占用</span>
+              <span class="browser-metric-val" id="bm-mem">0 MB</span>
+            </div>
+          </div>
+          <div class="browser-action-banner" id="bm-action-text">
+            浏览器当前处于空闲休眠状态，内存完全释放 (0 内存占用)
+          </div>
         </div>
       </section>
 
@@ -335,7 +379,22 @@
             <input type="password" id="cfg-refresh-token" class="form-input" readonly placeholder="未获取">
           </div>
 
-          <div style="display: flex; gap: 10px;">
+          <div class="form-group" style="background: var(--card-inner); padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color); margin-top: 10px;">
+            <label class="form-label">🕒 拟人化错峰时段设定 (4小时时间窗)</label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
+              <div>
+                <label style="font-size: 11.5px; color: var(--text-sub);">开始时间 (0-23点)</label>
+                <input type="number" id="cfg-account-starthour" class="form-input" min="0" max="23" value="6">
+              </div>
+              <div>
+                <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动+4h)</label>
+                <input type="text" id="cfg-account-endhour" class="form-input" readonly value="10:00" style="opacity: 0.85;">
+              </div>
+            </div>
+            <small class="form-hint" id="cfg-account-slot-hint">区间内 0~60 分钟随机启动，单账号搜索平摊至约 2 小时，彻底模拟真人上网作息</small>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 14px;">
             <button id="btn-test-account" class="btn btn-secondary">🔍 测试当前账号</button>
           </div>
           <div id="test-account-result" class="hint-msg"></div>
@@ -387,13 +446,21 @@
             </select>
           </div>
           <div class="form-group">
+            <label class="form-label">PC 搜索执行引擎</label>
+            <select id="cfg-search-engine" class="form-select">
+              <option value="browser">Playwright / Chromium 拟人浏览器引擎 (强烈推荐：真实键盘打字/滚轮，抗封锁最强)</option>
+              <option value="http">纯 HTTP 极速协议模式 (轻量低开销)</option>
+            </select>
+            <small class="form-hint">无头浏览器仅在搜索期间启动，执行完毕立即彻底释放内存</small>
+          </div>
+          <div class="form-group">
             <label class="form-label">搜索词库来源</label>
             <div class="input-with-btn">
               <select id="cfg-search-api" class="form-select">
-                <option value="offline">本地离线智能词库（推荐，最稳定）</option>
-                <option value="hot.baiwumm.com">Baidu 热搜榜单 (baiwumm)</option>
-                <option value="hot.cnxiaobai.com">Baidu 热搜榜单 (cnxiaobai)</option>
-                <option value="hot.nntool.cc">Baidu 热搜榜单 (nntool)</option>
+                <option value="baidu.official">百度官方实时热搜榜 (直连 top.baidu.com，推荐)</option>
+                <option value="offline">本地离线智能词库 (52条生活高频词，零网络依赖)</option>
+                <option value="hot.cnxiaobai.com">DailyHotApi 聚合热搜榜 (cnxiaobai)</option>
+                <option value="hot.nntool.cc">今日热榜聚合榜单 (nntool)</option>
               </select>
               <button class="btn btn-secondary btn-sm" id="btn-test-search-api">🔍 测试获取词库</button>
             </div>

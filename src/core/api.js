@@ -824,7 +824,7 @@ export class RewardsApi {
   }
 
   /**
-   * 探测并获取当前词库明细列表（用于前端测试）
+   * 探测并获取当前词库明细列表（用于前端测试与热词轮询）
    */
   async fetchSearchWordList(mode = 'offline') {
     if (mode === 'offline') {
@@ -833,23 +833,30 @@ export class RewardsApi {
     }
 
     const apiMap = {
-      'hot.baiwumm.com': { url: 'https://hot.baiwumm.com/api/baidu', name: 'Baidu 热搜榜单 (baiwumm)' },
-      'hot.cnxiaobai.com': { url: 'https://cnxiaobai.com/DailyHotApi/baidu', name: 'Baidu 热搜榜单 (cnxiaobai)' },
-      'hot.nntool.cc': { url: 'https://hotapi.nntool.cc/baidu', name: 'Baidu 热搜榜单 (nntool)' }
+      'baidu.official': { url: 'https://top.baidu.com/api/board?platform=wise&tab=realtime', name: '百度官方实时热搜榜 (直连)' },
+      'hot.cnxiaobai.com': { url: 'https://cnxiaobai.com/DailyHotApi/baidu', name: 'DailyHotApi 聚合榜单 (cnxiaobai)' },
+      'hot.nntool.cc': { url: 'https://hotapi.nntool.cc/baidu', name: '今日热榜聚合榜单 (nntool)' }
     };
 
-    const target = apiMap[mode] || apiMap['hot.baiwumm.com'];
+    const target = apiMap[mode] || apiMap['baidu.official'];
     try {
       const res = await networkClient.request({ url: target.url });
       const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
       let words = [];
-      if (data && Array.isArray(data.data)) {
-        words = data.data.map(item => item.title).filter(Boolean);
+
+      if (mode === 'baidu.official') {
+        const rawList = data?.data?.cards?.[0]?.content?.[0]?.content || [];
+        words = rawList.map(item => item.word).filter(Boolean);
+      } else {
+        if (data && Array.isArray(data.data)) {
+          words = data.data.map(item => item.title || item.word).filter(Boolean);
+        }
       }
+
       if (words.length > 0) {
         return { success: true, mode, name: target.name, count: words.length, sample: words.slice(0, 20) };
       }
-      return { success: false, mode, name: target.name, message: '接口返回数据格式异常或列表为空' };
+      return { success: false, mode, name: target.name, message: '接口返回数据为空或格式变动' };
     } catch (e) {
       return { success: false, mode, name: target.name, message: `网络请求失败: ${e.message}` };
     }
@@ -860,7 +867,7 @@ export class RewardsApi {
    */
   async getHotSearchWord() {
     const cfg = configManager.get();
-    const mode = cfg.tasks?.searchApi || 'offline';
+    const mode = cfg.tasks?.searchApi || 'baidu.official';
     const baseWord = SEARCH_POOL[this.randomRange(0, SEARCH_POOL.length - 1)];
     const randomSuffix = Math.random().toString(36).slice(2, 6);
     let sentence = `${baseWord} ${randomSuffix}`;
@@ -868,16 +875,9 @@ export class RewardsApi {
     if (mode !== 'offline') {
       try {
         if (this.hotWordList.length === 0 || this.hotWordIndex >= this.hotWordList.length) {
-          const apiMap = {
-            'hot.baiwumm.com': 'https://hot.baiwumm.com/api/baidu',
-            'hot.cnxiaobai.com': 'https://cnxiaobai.com/DailyHotApi/baidu',
-            'hot.nntool.cc': 'https://hotapi.nntool.cc/baidu'
-          };
-          const targetUrl = apiMap[mode] || apiMap['hot.baiwumm.com'];
-          const res = await networkClient.request({ url: targetUrl });
-          const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
-          if (data && Array.isArray(data.data) && data.data.length > 0) {
-            this.hotWordList = data.data.map(item => item.title).filter(Boolean);
+          const listResult = await this.fetchSearchWordList(mode);
+          if (listResult.success && Array.isArray(listResult.sample) && listResult.sample.length > 0) {
+            this.hotWordList = listResult.sample;
             this.hotWordIndex = 0;
           }
         }
@@ -886,7 +886,7 @@ export class RewardsApi {
           return sentence.slice(0, 30);
         }
       } catch (e) {
-        logger.log('🟡', `热搜词获取接口异常: ${e.message}，切换到离线词池`);
+        logger.log('🟡', `热搜词获取接口异常: ${e.message}，切换到离线词池`, '', this.currentAccountName || '');
       }
     }
     return sentence;

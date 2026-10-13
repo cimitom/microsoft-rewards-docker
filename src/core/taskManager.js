@@ -6,6 +6,7 @@ import rewardsApi from './api.js';
 import authManager from './auth.js';
 import notifier from './notifier.js';
 import historyManager from './history.js';
+import browserManager from './browser.js';
 
 const STATS_FILE = path.join(process.cwd(), 'data', 'stats.json');
 
@@ -379,6 +380,23 @@ export class TaskManager {
       this.running = false;
       this.runningAccountId = null;
     }
+    browserManager.stop();
+  }
+
+  /**
+   * 单次安全测试搜索 (仅搜 1 次，检验按键输入流与积分变化)
+   */
+  async runSingleTestSearch(accountId = null) {
+    const acc = configManager.getAccount(accountId);
+    if (!acc) throw new Error('未找到对应账号');
+    const accName = acc.name || acc.id;
+
+    rewardsApi.setCurrentAccount(acc);
+    const result = await browserManager.singleTestSearch(acc);
+
+    // 搜索完成后同步一次最新官网数据
+    await this.syncAccountOfficialStatus(acc);
+    return result;
   }
 
   /**
@@ -527,29 +545,30 @@ export class TaskManager {
         this.updateTask('search', { progress: maxSearch, max: maxSearch, points: maxSearch, done: true }, accountId);
       } else {
         const neededPoints = maxSearch - curSearch;
-        const searchCount = Math.min(Math.ceil(neededPoints / 3), 7);
-        logger.log('🔍', `本轮计划执行 ${searchCount} 次智能搜索`, accountName);
+        const searchMode = globalCfg.tasks?.searchEngineMode || 'browser';
+        const hasBrowser = !!browserManager.getExecutablePath();
 
-        for (let i = 0; i < searchCount && this.running; i++) {
-          const word = await rewardsApi.getHotSearchWord();
-          logger.log('🔍', `[搜索 ${i + 1}/${searchCount}] 关键词: "${word}"`, accountName);
-          await rewardsApi.doSearchOnce(word);
-
-          const span = Number(globalCfg.tasks?.searchSpan || 30);
-          const waitTime = rewardsApi.randomRange(Math.max(10, span - 10) * 1000, (span + 10) * 1000);
-          logger.log('⏳', `等待 ${(waitTime / 1000).toFixed(1)} 秒...`, accountName);
-          await rewardsApi.delay(waitTime);
+        if (searchMode === 'browser' && hasBrowser) {
+          try {
+            const duration = accCfg.timeSlot?.durationHours || 2;
+            await browserManager.runPacedSearch(accCfg, neededPoints, { durationHours: duration });
+          } catch (e) {
+            logger.log('🟡', `无头浏览器运行异常: ${e.message}，正在切换为轻量协议兜底`, '', accountName);
+            await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg);
+          }
+        } else {
+          await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg);
         }
 
         const afterInfo = await rewardsApi.getRewardsInfo();
-        const finalSearch = afterInfo?.pc?.progress || (curSearch + searchCount * 3);
+        const finalSearch = afterInfo?.pc?.progress || curSearch;
         this.updateTask('search', {
           progress: finalSearch,
           max: maxSearch,
           points: finalSearch,
           done: finalSearch >= maxSearch
         }, accountId);
-        logger.addTimeline(accountName, `PC 搜索进度 ${finalSearch}/${maxSearch}`);
+        logger.addTimeline(accountName, `PC 搜索打卡完成，当前配额 ${finalSearch}/${maxSearch}`);
       }
     }
 
@@ -570,6 +589,23 @@ export class TaskManager {
     this.saveStats();
 
     logger.log('✅', `账号 [${accountName}] 任务完成！今日新增: +${accStats.earned} | 当前余额: ${accStats.balance}`, accountName);
+  }
+
+  async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg) {
+    const accountName = accCfg.name || accCfg.id;
+    const searchCount = Math.min(Math.ceil(neededPoints / 3), 7);
+    logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求`, '', accountName);
+
+    for (let i = 0; i < searchCount && this.running; i++) {
+      const word = await rewardsApi.getHotSearchWord();
+      logger.log('🔍', `[搜索 ${i + 1}/${searchCount}] 关键词: "${word}"`, '', accountName);
+      await rewardsApi.doSearchOnce(word);
+
+      const span = Number(globalCfg.tasks?.searchSpan || 30);
+      const waitTime = rewardsApi.randomRange(Math.max(10, span - 10) * 1000, (span + 10) * 1000);
+      logger.log('⏳', `等待 ${(waitTime / 1000).toFixed(1)} 秒...`, '', accountName);
+      await rewardsApi.delay(waitTime);
+    }
   }
 
   /**

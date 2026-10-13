@@ -14,7 +14,13 @@ const DEFAULT_CONFIG = {
       authCodeUrl: '',
       refreshToken: '',
       accessToken: '',
-      tokenTime: 0
+      tokenTime: 0,
+      timeSlot: {
+        startHour: 6,
+        endHour: 10,
+        randomDelayMin: 60,
+        durationHours: 2
+      }
     }
   ],
   account: {
@@ -38,7 +44,8 @@ const DEFAULT_CONFIG = {
     desktopApp: true,
     dailySet: true,
     searchSpan: 30,
-    searchApi: 'offline',
+    searchApi: 'baidu.official', // 'offline' | 'baidu.official' | 'hot.nntool.cc' | 'hot.cnxiaobai.com'
+    searchEngineMode: 'browser', // 'browser' (Playwright 真机拟人) | 'http' (轻量HTTP)
     keepRunning: true
   },
   schedule: {
@@ -109,6 +116,22 @@ class ConfigManager {
     return this.config;
   }
 
+  getDefaultTimeSlot(index = 0) {
+    const slots = [
+      { startHour: 6, endHour: 10 },
+      { startHour: 10, endHour: 14 },
+      { startHour: 14, endHour: 18 },
+      { startHour: 18, endHour: 22 }
+    ];
+    const s = slots[index % slots.length];
+    return {
+      startHour: s.startHour,
+      endHour: s.endHour,
+      randomDelayMin: 60,
+      durationHours: 2
+    };
+  }
+
   migrateLegacyAccount(parsed) {
     if (!Array.isArray(parsed.accounts) || parsed.accounts.length === 0) {
       const legacy = parsed.account || {};
@@ -122,12 +145,16 @@ class ConfigManager {
           authCodeUrl: legacy.authCodeUrl || '',
           refreshToken: legacy.refreshToken || '',
           accessToken: legacy.accessToken || '',
-          tokenTime: legacy.tokenTime || 0
+          tokenTime: legacy.tokenTime || 0,
+          timeSlot: this.getDefaultTimeSlot(0)
         }
       ];
       this.save();
     } else {
-      this.config.accounts = parsed.accounts;
+      this.config.accounts = parsed.accounts.map((acc, i) => ({
+        ...acc,
+        timeSlot: acc.timeSlot || this.getDefaultTimeSlot(i)
+      }));
     }
 
     // 同步第一个账号到 config.account 以保持向后兼容
@@ -198,21 +225,45 @@ class ConfigManager {
     }
 
     if (idx !== -1) {
+      const existing = cfg.accounts[idx];
+      let timeSlot = accountData.timeSlot || existing.timeSlot || this.getDefaultTimeSlot(idx);
+      if (accountData.timeSlot?.startHour !== undefined) {
+        const sh = Number(accountData.timeSlot.startHour);
+        timeSlot = {
+          startHour: sh,
+          endHour: (sh + 4) % 24,
+          randomDelayMin: Number(accountData.timeSlot.randomDelayMin) || 60,
+          durationHours: Number(accountData.timeSlot.durationHours) || 2
+        };
+      }
       cfg.accounts[idx] = {
-        ...cfg.accounts[idx],
+        ...existing,
         ...accountData,
-        name: name || cfg.accounts[idx].name
+        name: name || existing.name,
+        timeSlot
       };
     } else {
+      const newIdx = cfg.accounts.length;
+      let timeSlot = accountData.timeSlot || this.getDefaultTimeSlot(newIdx);
+      if (accountData.timeSlot?.startHour !== undefined) {
+        const sh = Number(accountData.timeSlot.startHour);
+        timeSlot = {
+          startHour: sh,
+          endHour: (sh + 4) % 24,
+          randomDelayMin: Number(accountData.timeSlot.randomDelayMin) || 60,
+          durationHours: Number(accountData.timeSlot.durationHours) || 2
+        };
+      }
       cfg.accounts.push({
         id,
-        name: name || `账号 ${cfg.accounts.length + 1}`,
+        name: name || `账号 ${newIdx + 1}`,
         enabled: accountData.enabled !== false,
         cookie: accountData.cookie || '',
         authCodeUrl: accountData.authCodeUrl || '',
         refreshToken: accountData.refreshToken || '',
         accessToken: accountData.accessToken || '',
-        tokenTime: accountData.tokenTime || 0
+        tokenTime: accountData.tokenTime || 0,
+        timeSlot
       });
     }
 

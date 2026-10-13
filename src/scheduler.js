@@ -6,6 +6,36 @@ import taskManager from './core/taskManager.js';
 class Scheduler {
   constructor() {
     this.job = null;
+    this.plannedDailyRuns = {};
+  }
+
+  getTodayNum() {
+    const d = new Date();
+    return Number(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`);
+  }
+
+  initTodayPlan() {
+    const today = this.getTodayNum();
+    if (!this.plannedDailyRuns[today]) {
+      this.plannedDailyRuns[today] = {};
+    }
+
+    const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
+    for (let i = 0; i < accounts.length; i++) {
+      const acc = accounts[i];
+      const slot = acc.timeSlot || configManager.getDefaultTimeSlot(i);
+      if (!this.plannedDailyRuns[today][acc.id]) {
+        // 在时段开始时刻内生成 0 ~ randomDelayMin (默认60分钟) 的随机延迟分钟
+        const maxDelay = slot.randomDelayMin || 60;
+        const randomMin = Math.floor(Math.random() * Math.min(59, maxDelay));
+        this.plannedDailyRuns[today][acc.id] = {
+          startHour: slot.startHour ?? 6,
+          endHour: slot.endHour ?? 10,
+          plannedMinute: randomMin,
+          executed: false
+        };
+      }
+    }
   }
 
   start() {
@@ -16,37 +46,43 @@ class Scheduler {
       return;
     }
 
-    const cronExpr = cfg.schedule?.cron || '*/25 * * * *';
-    if (!cron.validate(cronExpr)) {
-      logger.log('🔴', `无效的 Cron 表达式 "${cronExpr}"，已回退至默认 "*/25 * * * *"`);
-    }
+    // 每分钟检查一次拟人化时段调度
+    this.job = cron.schedule('* * * * *', async () => {
+      if (taskManager.running) return;
 
-    const validExpr = cron.validate(cronExpr) ? cronExpr : '*/25 * * * *';
-    this.job = cron.schedule(validExpr, async () => {
+      const today = this.getTodayNum();
+      this.initTodayPlan();
+
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+      const todayPlans = this.plannedDailyRuns[today] || {};
+
       const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
-      const hasValidAccount = accounts.some(a => a.cookie || a.refreshToken);
-      if (!hasValidAccount) {
-        logger.log('🟡', '定时任务跳过：尚未配置任何已启用的微软账户 Cookie 或 Token');
-        return;
-      }
+      for (const acc of accounts) {
+        if (!acc.cookie && !acc.refreshToken) continue;
 
-      const status = taskManager.getStatus('all');
-      const allDone = status.summary?.overallPercent === 100;
-      const currentCfg = configManager.get();
-      if (allDone && !currentCfg.tasks?.keepRunning) {
-        logger.log('💤', '今日所有账号任务均已全部达成，跳过本次巡检');
-        return;
-      }
+        const plan = todayPlans[acc.id];
+        if (!plan || plan.executed) continue;
 
-      // 随机延迟 5~45 秒启动以防固定时间点特征风控
-      const delaySec = Math.floor(Math.random() * 40) + 5;
-      logger.log('⏰', `定时巡检触发，将在 ${delaySec} 秒随机安全延时后启动...`);
-      setTimeout(() => {
-        taskManager.runAll(false);
-      }, delaySec * 1000);
+        // 检查是否到达该账号的专属拟人作息时间窗口
+        const isStartHourMatch = (currentHour === plan.startHour && currentMinute >= plan.plannedMinute);
+        const isWithinWindow = (currentHour > plan.startHour && currentHour < plan.endHour);
+
+        if (isStartHourMatch || isWithinWindow) {
+          plan.executed = true;
+          logger.log('⏰', `到达账号 [${acc.name}] 拟人作息窗口 (${plan.startHour}:00 - ${plan.endHour}:00，今日随机命中 ${String(plan.startHour).padStart(2,'0')}:${String(plan.plannedMinute).padStart(2,'0')})，启动打卡...`, '', acc.name);
+          try {
+            await taskManager.runAll(false, acc.id);
+          } catch (e) {
+            logger.log('🔴', `定时任务执行异常: ${e.message}`, '', acc.name);
+          }
+          break; // 一次只启动一个账号，保持单队列
+        }
+      }
     });
 
-    logger.log('🟢', `后台定时调度器已启动，执行周期: [${validExpr}]`);
+    logger.log('🟢', `后台时段拟人调度引擎已就绪 (6-10 / 10-14 / 14-18 / 18-22 时段错峰 + 60分钟随机浮动)`);
   }
 
   stop() {

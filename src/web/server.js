@@ -9,6 +9,7 @@ import notifier from '../core/notifier.js';
 import scheduler from '../scheduler.js';
 import rewardsApi from '../core/api.js';
 import historyManager from '../core/history.js';
+import browserManager from '../core/browser.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,6 +97,25 @@ export function createServer() {
       const mode = req.body?.searchApi || 'offline';
       const result = await rewardsApi.fetchSearchWordList(mode);
       res.json(result);
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  // 获取无头浏览器实时状态监控数据
+  app.get('/api/browser/status', (req, res) => {
+    res.json({
+      success: true,
+      data: browserManager.getStatus()
+    });
+  });
+
+  // 单独安全测试搜索一次（验证按键与加分，完全避免冷却限制）
+  app.post('/api/tasks/single-search', async (req, res) => {
+    try {
+      const accountId = req.body?.accountId || null;
+      const result = await taskManager.runSingleTestSearch(accountId);
+      res.json({ success: true, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }
