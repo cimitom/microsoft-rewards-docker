@@ -44,6 +44,9 @@ const DEFAULT_CONFIG = {
       chatId: ''
     }
   },
+  ui: {
+    theme: 'auto' // 'auto' | 'light' | 'dark'
+  },
   server: {
     port: 5308,
     authPassword: ''

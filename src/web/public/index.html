@@ -31,6 +31,13 @@
       </div>
 
       <div class="header-right">
+        <!-- 主题切换胶囊 -->
+        <div class="theme-toggle-wrap" id="theme-toggle-wrap">
+          <button class="theme-btn active" data-theme-val="auto" title="跟随系统" id="btn-theme-auto">💻</button>
+          <button class="theme-btn" data-theme-val="light" title="日间模式" id="btn-theme-light">☀️</button>
+          <button class="theme-btn" data-theme-val="dark" title="夜间模式" id="btn-theme-dark">🌙</button>
+        </div>
+
         <button id="btn-check-account" class="btn btn-secondary">
           <span>🔍</span> 测试账号状态
         </button>
@@ -150,7 +157,7 @@
 
     <!-- 页脚 -->
     <footer class="footer">
-      <p>Microsoft Rewards 微软积分全能自动化助手 (Docker/NAS/VPS) · 开源协议 MIT · 7×24h 智能巡检</p>
+      <p>Microsoft Rewards 微软积分全能自动化助手</p>
     </footer>
   </div>
 
@@ -316,6 +323,14 @@
             <label class="form-label">PC 搜索间隔基准时间（秒）</label>
             <input type="number" id="cfg-search-span" class="form-input" min="20" max="120" value="30">
             <small class="form-hint">自动附加 ±10 秒随机浮动，模拟真实人工节奏，避免触发速率限制</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">界面主题风格 (日夜模式)</label>
+            <select id="cfg-ui-theme" class="form-select">
+              <option value="auto">跟随操作系统 (默认推荐)</option>
+              <option value="dark">固定夜间模式 (深色毛玻璃)</option>
+              <option value="light">固定日间模式 (浅色清爽)</option>
+            </select>
           </div>
           <div class="form-group">
             <label class="form-label">搜索词库来源</label>

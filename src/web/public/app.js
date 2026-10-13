@@ -3,8 +3,10 @@ let currentStatus = null;
 let currentConfig = null;
 let eventSource = null;
 let currentHistoryDays = 7;
+let currentTheme = localStorage.getItem('ms_rewards_theme') || 'auto';
 
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   initUIEvents();
   startCountdownTimer();
   fetchStatus();
@@ -13,6 +15,65 @@ document.addEventListener('DOMContentLoaded', () => {
   initLogStream();
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
 });
+
+// 初始化日夜模式与跟随系统
+function initTheme() {
+  applyTheme(currentTheme);
+
+  // 监听操作系统深色/浅色模式切换
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (currentTheme === 'auto') {
+      applyTheme('auto');
+    }
+  });
+
+  // 顶部胶囊切换事件
+  document.querySelectorAll('.theme-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetTheme = btn.getAttribute('data-theme-val');
+      setTheme(targetTheme);
+    });
+  });
+
+  // 配置中心下拉框切换事件
+  document.getElementById('cfg-ui-theme')?.addEventListener('change', (e) => {
+    setTheme(e.target.value);
+  });
+}
+
+function setTheme(theme, syncServer = true) {
+  currentTheme = theme;
+  localStorage.setItem('ms_rewards_theme', theme);
+  applyTheme(theme);
+  const selectElem = document.getElementById('cfg-ui-theme');
+  if (selectElem) selectElem.value = theme;
+  if (syncServer) {
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ui: { theme } })
+    }).catch(() => {});
+  }
+}
+
+function applyTheme(theme) {
+  let isDark = true;
+  if (theme === 'dark') {
+    isDark = true;
+  } else if (theme === 'light') {
+    isDark = false;
+  } else {
+    // auto: 跟随系统
+    isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+
+  // 更新顶部胶囊按钮状态
+  document.querySelectorAll('.theme-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-theme-val') === theme);
+  });
+}
 
 // 启动每日刷新剩余时间倒计时 (距离次日 00:00:00)
 function startCountdownTimer() {
@@ -417,6 +478,9 @@ async function fetchConfig() {
     const res = await fetch('/api/config').then(r => r.json());
     if (res.success) {
       currentConfig = res.data;
+      if (res.data.ui?.theme && !localStorage.getItem('ms_rewards_theme')) {
+        setTheme(res.data.ui.theme, false);
+      }
       const cronHint = document.getElementById('cron-hint');
       if (cronHint) {
         cronHint.innerText = `定时巡检: ${res.data.schedule?.enabled ? res.data.schedule?.cron : '已停用'}`;
@@ -430,6 +494,11 @@ async function fetchConfig() {
 function populateSettingsForm() {
   if (!currentConfig) return;
   const c = currentConfig;
+  // 主题
+  const themeVal = c.ui?.theme || localStorage.getItem('ms_rewards_theme') || 'auto';
+  const themeSelect = document.getElementById('cfg-ui-theme');
+  if (themeSelect) themeSelect.value = themeVal;
+
   // 账户
   document.getElementById('cfg-cookie').value = c.account?.cookie || '';
   document.getElementById('cfg-authcode').value = c.account?.authCodeUrl || '';
@@ -482,6 +551,9 @@ async function saveSettingsFromModal() {
       keepRunning: document.getElementById('cfg-task-keep').checked,
       searchSpan: Number(document.getElementById('cfg-search-span').value) || 30,
       searchApi: document.getElementById('cfg-search-api').value
+    },
+    ui: {
+      theme: document.getElementById('cfg-ui-theme')?.value || 'auto'
     },
     schedule: {
       enabled: document.getElementById('cfg-sched-enabled').checked,
