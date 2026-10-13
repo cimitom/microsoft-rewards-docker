@@ -1,0 +1,50 @@
+name: Rebuild Historical Tag
+
+# 临时工作流：从指定的历史 git ref 重新构建并推送镜像，用于修复被错误覆盖的版本标签。
+# 用完即删。
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: '要构建的 git ref（例如 v1.3.0）'
+        required: true
+        type: string
+      image_tag:
+        description: '要推送的 Docker 标签（例如 1.3.0）'
+        required: true
+        type: string
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || 'wangheqiang' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME || 'wangheqiang' }}/microsoft-rewards-docker:${{ inputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
