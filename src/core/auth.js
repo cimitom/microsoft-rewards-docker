@@ -65,6 +65,9 @@ export class AuthManager {
       grant_type: 'authorization_code'
     });
 
+    const prevCtx = logger.getAccountContext();
+    logger.setAccountContext(targetAccount?.name || targetId);
+
     try {
       logger.log('🔑', `正在为账号 [${targetAccount?.name || targetId}] 换取访问令牌 (Token)...`);
       const res = await networkClient.request({
@@ -100,6 +103,8 @@ export class AuthManager {
     } catch (e) {
       logger.log('🔴', `换取 Token 失败: ${e.message}`);
       throw e;
+    } finally {
+      logger.setAccountContext(prevCtx);
     }
   }
 
@@ -110,6 +115,10 @@ export class AuthManager {
     const acc = configManager.getAccount(accountId);
     if (!acc) return false;
 
+    // 本函数内的日志统一归属到该账号
+    const prevCtx = logger.getAccountContext();
+    logger.setAccountContext(acc.name || acc.id);
+
     let refreshToken = acc.refreshToken;
     const tokenTime = acc.tokenTime || 0;
 
@@ -117,11 +126,13 @@ export class AuthManager {
     const diffHours = (Date.now() - tokenTime) / (1000 * 60 * 60);
     if (!force && acc.accessToken && diffHours < 12) {
       this.accessToken = acc.accessToken;
+      logger.setAccountContext(prevCtx);
       return true;
     }
 
     if (!refreshToken) {
       logger.log('🟡', `账号 [${acc.name || acc.id}] 未配置 Refresh Token，跳过 Token 刷新`);
+      logger.setAccountContext(prevCtx);
       return false;
     }
 
@@ -170,6 +181,8 @@ export class AuthManager {
     } catch (e) {
       logger.log('🔴', `刷新 Token 请求异常: ${e.message}`);
       return false;
+    } finally {
+      logger.setAccountContext(prevCtx);
     }
   }
 
@@ -336,6 +349,8 @@ export class AuthManager {
   async testAccount(accountId = null) {
     const acc = configManager.getAccount(accountId);
     const name = acc?.name || accountId || '当前账号';
+    const prevCtx = logger.getAccountContext();
+    logger.setAccountContext(name);
     logger.log('🔍', `开始检测账号 [${name}] 在 Docker 容器中的登录状态...`);
 
     const [cookieStatus, tokenStatus] = await Promise.all([
@@ -360,6 +375,8 @@ export class AuthManager {
     } else {
       logger.log('🔴', `账号 [${name}] 尚未登录或凭证已失效`);
     }
+
+    logger.setAccountContext(prevCtx);
 
     return {
       accountId: acc?.id || 'acc_1',

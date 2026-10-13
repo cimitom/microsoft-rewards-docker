@@ -11,7 +11,30 @@ class Logger extends EventEmitter {
     this.maxTimeline = maxTimeline;
     this.logs = [];
     this.timeline = [];
+    // 当前正在操作的账号名：让未显式传账号名的日志也能被正确归属
+    this.accountContext = '';
     this.ensureLogFile();
+  }
+
+  setAccountContext(name) {
+    this.accountContext = name || '';
+  }
+
+  getAccountContext() {
+    return this.accountContext;
+  }
+
+  /**
+   * 在指定账号上下文内执行一段逻辑，结束后自动还原（避免上下文串台）
+   */
+  async withAccount(name, fn) {
+    const prev = this.accountContext;
+    if (name) this.accountContext = name;
+    try {
+      return await fn();
+    } finally {
+      this.accountContext = prev;
+    }
   }
 
   ensureLogFile() {
@@ -34,7 +57,7 @@ class Logger extends EventEmitter {
   }
 
   log(icon, msg, tag = '', accountName = '') {
-    const acc = accountName || '';
+    const acc = accountName || this.accountContext || '';
     const entry = {
       id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
       timestamp: Date.now(),
@@ -65,11 +88,12 @@ class Logger extends EventEmitter {
     return entry;
   }
 
-  addTimeline(tag, text) {
+  addTimeline(tag, text, accountName = '') {
     const item = {
       time: this.getTimeStr(),
       fullTime: this.getFullTimeStr(),
       tag,
+      accountName: accountName || this.accountContext || tag || '',
       text
     };
     this.timeline.unshift(item);

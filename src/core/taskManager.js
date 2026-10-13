@@ -138,10 +138,22 @@ export class TaskManager {
       }
       fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2), 'utf-8');
 
-      // 同步记录历史账单（按所有账号汇总记录当日增长）
+      // 同步记录历史账单（包含单账号账单与全局汇总）
       const summary = this.computeSummary();
       const todayStr = historyManager.formatDate(new Date());
-      historyManager.recordDay(todayStr, {
+
+      // 1. 记录每个账号的账单
+      if (stats.accounts) {
+        for (const [accId, aStat] of Object.entries(stats.accounts)) {
+          historyManager.recordAccountDay(accId, todayStr, {
+            earned: aStat.earned || 0,
+            balance: aStat.balance || 0
+          });
+        }
+      }
+
+      // 2. 记录全局汇总账单
+      historyManager.recordGlobalDay(todayStr, {
         earned: summary.totalEarned || stats.earned || 0,
         balance: summary.totalBalance || stats.balance || 0
       });
@@ -171,6 +183,10 @@ export class TaskManager {
     if (!accCfg?.cookie && !accCfg?.refreshToken) return null;
     const accountId = accCfg.id;
     const accStats = this.ensureAccountStats(accountId);
+
+    // 同步期间的日志统一归属到该账号（结束后还原，避免串台）
+    const prevCtx = logger.getAccountContext();
+    logger.setAccountContext(accCfg.name || accountId);
 
     try {
       rewardsApi.setCurrentAccount(accCfg);
@@ -272,6 +288,8 @@ export class TaskManager {
       }
     } catch (e) {
       console.error(`[TaskManager] 同步账号 [${accCfg.name}] 官方状态失败:`, e.message);
+    } finally {
+      logger.setAccountContext(prevCtx);
     }
     return null;
   }
@@ -366,13 +384,23 @@ export class TaskManager {
       };
     }
 
+    // 打卡明细按账号过滤：单账号视图只保留该账号的记录，汇总视图返回全部
+    const allTimeline = logger.getTimeline();
+    let timeline = allTimeline;
+    if (accountId && accountId !== 'all') {
+      const targetName = (configManager.getAccounts().find(a => a.id === accountId) || {}).name;
+      if (targetName) {
+        timeline = allTimeline.filter(t => (t.accountName || t.tag) === targetName);
+      }
+    }
+
     return {
       running: this.running,
       runningAccountId: this.runningAccountId,
       selectedAccountId: accountId || 'all',
       summary,
       stats: activeStats,
-      timeline: logger.getTimeline()
+      timeline
     };
   }
 
@@ -412,6 +440,8 @@ export class TaskManager {
 
     // 切换当前 API 执行上下文到该账号
     rewardsApi.setCurrentAccount(accCfg);
+    // 切换日志账号上下文：该账号下未显式传账号名的日志也会自动带上账号名
+    logger.setAccountContext(accountName);
 
     logger.log('👤', `>>> 开始执行账号 [${accountName}] 的自动化打卡任务 <<<`, accountName);
 
@@ -684,6 +714,7 @@ export class TaskManager {
     } finally {
       this.running = false;
       this.runningAccountId = null;
+      logger.setAccountContext('');
     }
   }
 }

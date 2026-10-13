@@ -120,6 +120,8 @@ export class RewardsApi {
   setCurrentAccount(acc) {
     this.currentAccountId = acc?.id || 'acc_1';
     networkClient.setActiveCookie(acc?.cookie || null);
+    // 同步日志归属上下文：该账号下所有未显式传账号名的日志都会自动带上账号名
+    logger.setAccountContext(acc?.name || this.currentAccountId);
   }
 
   async withTokenRetry(requestFn) {

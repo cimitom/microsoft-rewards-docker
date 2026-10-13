@@ -20,6 +20,7 @@ let guideDraftAccount = {
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initUIEvents();
+  initInstantTooltips();
   startCountdownTimer();
   fetchStatus();
   fetchSystemMetrics();
@@ -27,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchConfig();
   fetchHistory(7);
   initLogStream();
+  checkVersionUpdate();
   // 首次打开自动触发官网真实完成度同步（解决新部署到 NAS 时任务全显为 0 的问题）
   fetch('/api/status/sync', { method: 'POST' }).then(() => fetchStatus()).catch(() => {});
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
@@ -111,10 +113,77 @@ function startCountdownTimer() {
   setInterval(updateTimer, 1000);
 }
 
+// ===== 即时悬停提示：替代浏览器原生 title（原生有约 1 秒延迟） =====
+let instantTooltipEl = null;
+let instantTooltipTarget = null;
+
+function ensureInstantTooltipEl() {
+  if (!instantTooltipEl) {
+    instantTooltipEl = document.createElement('div');
+    instantTooltipEl.className = 'instant-tooltip';
+    document.body.appendChild(instantTooltipEl);
+  }
+  return instantTooltipEl;
+}
+
+function showInstantTooltip(target) {
+  let text = target.getAttribute('data-tip');
+  if (!text && target.hasAttribute('title')) {
+    text = target.getAttribute('title');
+    target.setAttribute('data-tip', text);
+  }
+  // 无论走哪条分支都摘掉原生 title，否则约 1 秒后浏览器还会弹出第二套提示
+  if (target.hasAttribute('title')) target.removeAttribute('title');
+  if (!text) return;
+
+  const el = ensureInstantTooltipEl();
+  el.textContent = text;
+  el.classList.add('visible');
+
+  const rect = target.getBoundingClientRect();
+  const tipRect = el.getBoundingClientRect();
+  const left = Math.max(12, Math.min(rect.left + rect.width / 2 - tipRect.width / 2, window.innerWidth - tipRect.width - 12));
+  let top = rect.bottom + 8;
+  if (top + tipRect.height > window.innerHeight - 8) {
+    top = rect.top - tipRect.height - 8;
+  }
+  el.style.left = `${left}px`;
+  el.style.top = `${Math.max(8, top)}px`;
+  instantTooltipTarget = target;
+}
+
+function hideInstantTooltip() {
+  if (instantTooltipEl) instantTooltipEl.classList.remove('visible');
+  instantTooltipTarget = null;
+}
+
+function initInstantTooltips() {
+  document.addEventListener('mouseover', (e) => {
+    const target = e.target?.closest?.('[title], [data-tip]');
+    if (!target || target === instantTooltipTarget) return;
+    showInstantTooltip(target);
+  });
+
+  document.addEventListener('mouseout', (e) => {
+    const target = e.target?.closest?.('[title], [data-tip]');
+    if (!target) return;
+    if (e.relatedTarget && target.contains(e.relatedTarget)) return;
+    hideInstantTooltip();
+  });
+
+  window.addEventListener('scroll', hideInstantTooltip, true);
+  window.addEventListener('resize', hideInstantTooltip);
+}
+
 function initUIEvents() {
-  // 立即运行 & 停止
-  document.getElementById('btn-run').addEventListener('click', runTasks);
-  document.getElementById('btn-stop').addEventListener('click', stopTasks);
+  // 立即运行 & 停止 (支持全局与单账号)
+  document.getElementById('btn-run')?.addEventListener('click', runTasks);
+  document.getElementById('btn-stop')?.addEventListener('click', stopTasks);
+  document.getElementById('btn-run-single-header')?.addEventListener('click', runTasks);
+  document.getElementById('btn-stop-single-header')?.addEventListener('click', stopTasks);
+
+  // 版本与状态复合胶囊点击检测更新
+  document.getElementById('version-status-pill')?.addEventListener('click', handleVersionCheckClick);
 
   // 历史记录天数切换
   document.getElementById('btn-history-7')?.addEventListener('click', () => switchHistoryDays(7));
@@ -128,6 +197,14 @@ function initUIEvents() {
   document.getElementById('btn-close-diag').addEventListener('click', () => closeModal('diag-modal'));
   document.getElementById('btn-confirm-diag').addEventListener('click', () => closeModal('diag-modal'));
   document.getElementById('btn-retest-diag').addEventListener('click', runAccountDiagnosis);
+
+  // 硬件监控指标点击立即刷新
+  document.getElementById('sys-metrics-pill')?.addEventListener('click', async () => {
+    const pill = document.getElementById('sys-metrics-pill');
+    pill?.classList.add('refreshing');
+    await fetchSystemMetrics();
+    setTimeout(() => pill?.classList.remove('refreshing'), 600);
+  });
 
   // 顶部一键同步微软官网真实状态
   document.getElementById('btn-sync-status')?.addEventListener('click', async () => {
@@ -593,11 +670,68 @@ async function fetchSystemMetrics() {
       const cpuEl = document.getElementById('metric-cpu');
       const memEl = document.getElementById('metric-mem');
       const pingEl = document.getElementById('metric-ping');
+      const pill = document.getElementById('sys-metrics-pill');
       if (cpuEl) cpuEl.innerText = `CPU ${d.cpu}`;
       if (memEl) memEl.innerText = `内存 ${d.procMem}`;
       if (pingEl) pingEl.innerText = `延时 ${d.ping}`;
+
+      if (pill && d.containerDetails) {
+        const cd = d.containerDetails;
+        pill.setAttribute('data-tip', `📦 容器运行环境: Node.js ${cd.nodeVersion} on ${cd.platform}\n⏱️ 容器运行时间: ${cd.uptime}\n⚡ 容器进程内存占用: ${cd.processRss} (堆内存: ${cd.heap})\n💾 宿主机物理内存: ${cd.systemMemory}\n💻 系统 CPU 负载率: ${d.cpu} | 🌐 微软网络延时: ${d.ping}\n🔄 提示: 点击立即刷新`);
+      }
     }
   } catch {}
+}
+
+let updateInfo = null;
+let taskRunning = false;
+
+// 版本与状态复合胶囊的悬停提示（状态 + 是否有新版本，统一在这里合成）
+function refreshVersionPillTooltip() {
+  const pill = document.getElementById('version-status-pill');
+  if (!pill) return;
+  const current = updateInfo?.currentVersion || '1.4.4';
+  const statusLine = taskRunning
+    ? '🟦 系统状态：正在执行自动化任务打卡中…'
+    : '🟢 系统状态：后台定时就绪中';
+  let text = `${statusLine}\n当前版本：v${current}`;
+  if (updateInfo?.hasUpdate) {
+    text += `\n\n🚀 发现新版本 v${updateInfo.latestVersion}！\n${updateInfo.releaseTitle || ''}\n点击查看更新日志与升级方式`;
+  } else {
+    text += `\n✅ 已是最新版本`;
+  }
+  pill.setAttribute('data-tip', text);
+}
+
+async function checkVersionUpdate() {
+  try {
+    const res = await fetch('/api/system/check-update').then(r => r.json());
+    if (res.success && res.data) {
+      updateInfo = res.data;
+      const indicator = document.getElementById('update-indicator');
+      const updateText = document.getElementById('update-text');
+      const pill = document.getElementById('version-status-pill');
+      if (res.data.hasUpdate) {
+        if (indicator) indicator.style.display = 'inline-flex';
+        if (updateText) updateText.innerText = `发现新版 v${res.data.latestVersion}`;
+        if (pill) pill.classList.add('has-update');
+      } else {
+        if (indicator) indicator.style.display = 'none';
+        if (pill) pill.classList.remove('has-update');
+      }
+      refreshVersionPillTooltip();
+    }
+  } catch {}
+}
+
+function handleVersionCheckClick() {
+  if (updateInfo?.hasUpdate) {
+    if (confirm(`🚀 发现新版本 v${updateInfo.latestVersion} (当前 v${updateInfo.currentVersion})！\n\n更新说明: ${updateInfo.releaseTitle || ''}\n\n是否前往 GitHub 查看更新日志？`)) {
+      window.open(updateInfo.releaseUrl, '_blank');
+    }
+  } else {
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.4'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+  }
 }
 
 function renderBrowserMonitor(b) {
@@ -642,6 +776,10 @@ function renderAccountSelectorBar(summary) {
   const accounts = summary.accountsList || [];
   let html = '';
 
+  // 记录 id → 账号名映射，供日志与打卡明细按账号过滤使用
+  accountNameById = {};
+  accounts.forEach(acc => { accountNameById[acc.id] = acc.name; });
+
   // 1. 全部账号汇总胶囊
   const isAllActive = selectedAccountId === 'all';
   html += `
@@ -679,6 +817,7 @@ function renderAccountSelectorBar(summary) {
       selectedAccountId = chip.getAttribute('data-acc-id');
       fetchStatus();
       fetchHistory(currentHistoryDays);
+      renderLogs(); // 日志按选中账号实时过滤
     });
   });
 
@@ -696,26 +835,44 @@ function renderDashboard(data) {
     renderAccountSelectorBar(summary);
   }
 
-  // 2. 系统运行状态
-  const statusBadge = document.getElementById('system-status-badge');
-  const statusText = document.getElementById('status-text');
+  // 2. 系统运行状态与复合胶囊
+  const versionPill = document.getElementById('version-status-pill');
   const btnRun = document.getElementById('btn-run');
   const btnStop = document.getElementById('btn-stop');
+  const btnRunSingle = document.getElementById('btn-run-single-header');
+  const btnStopSingle = document.getElementById('btn-stop-single-header');
+
+  const isAllMode = selectedAccountId === 'all';
+
+  taskRunning = !!running;
 
   if (running) {
-    statusBadge.className = 'status-pill status-running';
-    statusText.innerText = '正在执行打卡巡检...';
-    btnRun.style.display = 'none';
-    btnStop.style.display = 'inline-flex';
+    if (versionPill) {
+      versionPill.classList.remove('status-idle');
+      versionPill.classList.add('status-running');
+    }
+    if (btnRun) btnRun.style.display = 'none';
+    if (btnStop) btnStop.style.display = 'inline-flex';
+    if (btnRunSingle) btnRunSingle.style.display = 'none';
+    if (btnStopSingle) btnStopSingle.style.display = 'inline-flex';
   } else {
-    statusBadge.className = 'status-pill status-idle';
-    statusText.innerText = '后台定时就绪中';
-    btnRun.style.display = 'inline-flex';
-    btnStop.style.display = 'none';
+    if (versionPill) {
+      versionPill.classList.remove('status-running');
+      versionPill.classList.add('status-idle');
+    }
+    if (btnRun) btnRun.style.display = 'inline-flex';
+    if (btnStop) btnStop.style.display = 'none';
+    if (btnRunSingle) btnRunSingle.style.display = isAllMode ? 'none' : 'inline-flex';
+    if (btnStopSingle) btnStopSingle.style.display = 'none';
+  }
+
+  refreshVersionPillTooltip();
+
+  if (btnRunSingle && !isAllMode) {
+    btnRunSingle.innerHTML = `<span>▶️</span> 运行当前账号 [${escapeHtml(stats.name || '')}]`;
   }
 
   // 3. Hero 5 大卡片数据渲染
-  const isAllMode = selectedAccountId === 'all';
   const displayEarned = isAllMode ? (summary?.totalEarned || 0) : (stats.earned || 0);
   const displayBalance = isAllMode ? (summary?.totalBalance || 0) : (stats.balance || 0);
   const displayStreak = isAllMode ? (summary?.maxStreak || 0) : (stats.streakDays || 0);
@@ -752,6 +909,15 @@ function renderDashboard(data) {
   // 4. 汇总视图 vs 单账号视图渲染
   const overviewCard = document.getElementById('accounts-overview-card');
   const taskListTitle = document.getElementById('task-list-title');
+  const historyTitle = document.getElementById('history-chart-title');
+
+  if (historyTitle) {
+    if (isAllMode) {
+      historyTitle.innerText = `每日积分增长历史记录 (全部账号汇总)`;
+    } else {
+      historyTitle.innerText = `每日积分增长历史记录 [${stats.name || selectedAccountId}]`;
+    }
+  }
 
   if (isAllMode) {
     // 显示各账号概览卡片矩阵
@@ -820,16 +986,24 @@ function renderDashboard(data) {
     taskGrid.appendChild(card);
   }
 
-  // 6. 渲染时间轴
+  // 6. 渲染时间轴（每行带账号名，服务端已按选中账号过滤）
   const timelineList = document.getElementById('timeline-list');
-  if (timeline && timeline.length > 0) {
-    timelineList.innerHTML = timeline.map(item => `
+  if (timelineList) {
+    if (timeline && timeline.length > 0) {
+      timelineList.innerHTML = timeline.map(item => {
+        const acc = item.accountName || item.tag || '系统';
+        return `
       <div class="timeline-item">
         <span class="timeline-time">${item.time}</span>
-        <span class="timeline-tag">[${escapeHtml(item.tag)}]</span>
+        <span class="timeline-tag">[${escapeHtml(acc)}]</span>
         <span>${escapeHtml(item.text)}</span>
-      </div>
-    `).join('');
+      </div>`;
+      }).join('');
+    } else {
+      timelineList.innerHTML = selectedAccountId === 'all'
+        ? '<div class="timeline-empty">暂无打卡明细</div>'
+        : '<div class="timeline-empty">当前账号暂无打卡明细</div>';
+    }
   }
 }
 
@@ -986,36 +1160,72 @@ function renderAccountsOverviewGrid(accounts) {
 }
 
 // 建立 SSE 实时日志流
+// 实时日志：保留全量日志，按当前选中账号过滤后渲染
+let allLogs = [];
+let accountNameById = {};
+
+function logAccountName(log) {
+  return log?.accountName || log?.tag || '系统';
+}
+
+function logMatchesSelectedAccount(log) {
+  if (selectedAccountId === 'all') return true;
+  const target = accountNameById[selectedAccountId];
+  if (!target) return true;
+  return logAccountName(log) === target;
+}
+
+function buildLogLine(log) {
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  const acc = logAccountName(log);
+  const cls = acc === '系统' ? 'log-acc log-acc-system' : 'log-acc';
+  div.innerHTML = `<span class="log-time">[${log.time}]</span> <span>${log.icon}</span> <strong class="${cls}">[${escapeHtml(acc)}]</strong> ${escapeHtml(log.message)}`;
+  return div;
+}
+
+function renderLogs() {
+  const terminal = document.getElementById('terminal-logs');
+  if (!terminal) return;
+  const chkAutoScroll = document.getElementById('chk-auto-scroll');
+  const visible = allLogs.filter(logMatchesSelectedAccount);
+  terminal.innerHTML = '';
+  if (visible.length === 0) {
+    terminal.innerHTML = '<div class="log-empty">当前账号暂无日志记录</div>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  visible.forEach(log => frag.appendChild(buildLogLine(log)));
+  terminal.appendChild(frag);
+  if (chkAutoScroll?.checked) terminal.scrollTop = terminal.scrollHeight;
+}
+
 function initLogStream() {
   if (eventSource) eventSource.close();
   eventSource = new EventSource('/api/logs/stream');
-
-  const terminal = document.getElementById('terminal-logs');
-  const chkAutoScroll = document.getElementById('chk-auto-scroll');
 
   eventSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'history') {
-        terminal.innerHTML = '';
-        data.logs.forEach(log => appendLog(log));
+        allLogs = Array.isArray(data.logs) ? data.logs : [];
+        renderLogs();
       } else if (data.type === 'log') {
-        appendLog(data.entry);
+        allLogs.push(data.entry);
+        if (allLogs.length > 800) allLogs.shift();
+        if (logMatchesSelectedAccount(data.entry)) {
+          const terminal = document.getElementById('terminal-logs');
+          const chkAutoScroll = document.getElementById('chk-auto-scroll');
+          if (terminal) {
+            terminal.appendChild(buildLogLine(data.entry));
+            if (chkAutoScroll?.checked) terminal.scrollTop = terminal.scrollHeight;
+          }
+        }
       }
     } catch (e) {
       console.error('解析日志流失败:', e);
     }
   };
-
-  function appendLog(log) {
-    const div = document.createElement('div');
-    div.className = 'log-line';
-    div.innerHTML = `<span class="log-time">[${log.time}]</span> <span>${log.icon}</span> ${log.tag ? `<strong>[${escapeHtml(log.tag)}]</strong> ` : ''}${escapeHtml(log.message)}`;
-    terminal.appendChild(div);
-    if (chkAutoScroll.checked) {
-      terminal.scrollTop = terminal.scrollHeight;
-    }
-  }
 }
 
 function escapeHtml(str) {
@@ -1457,13 +1667,14 @@ function switchHistoryDays(days) {
   currentHistoryDays = days;
   document.getElementById('btn-history-7')?.classList.toggle('active', days === 7);
   document.getElementById('btn-history-30')?.classList.toggle('active', days === 30);
-  fetchHistory(days);
+  fetchHistory(days, selectedAccountId);
 }
 
-// 拉取历史记录数据
-async function fetchHistory(days = 7) {
+// 拉取历史记录数据 (支持单账号与全局汇总)
+async function fetchHistory(days = 7, accId = selectedAccountId) {
   try {
-    const res = await fetch(`/api/history?days=${days}`).then(r => r.json());
+    const target = accId || 'all';
+    const res = await fetch(`/api/history?days=${days}&accountId=${target}`).then(r => r.json());
     if (res.success && Array.isArray(res.data)) {
       renderHistoryChart(res.data, days);
     }
@@ -1505,7 +1716,25 @@ function renderHistoryChart(dataList, days) {
       document.getElementById('tt-earned').innerText = `+${item.earned} 积分`;
       
       const bdList = document.getElementById('tt-breakdown');
-      if (item.breakdown && item.breakdown.length > 0) {
+      const accList = Array.isArray(item.accounts) ? item.accounts : null;
+
+      if (accList && accList.length > 0) {
+        // 全部账号汇总模式：显示每个账号的当日数值与占比
+        const total = Number(item.earned || 0);
+        const rows = [...accList].sort((a, b) => Number(b.earned || 0) - Number(a.earned || 0));
+        bdList.innerHTML = `
+          <div class="tooltip-section-title">各账号占比（${rows.length} 个账号）</div>
+          ${rows.map(a => {
+            const earned = Number(a.earned || 0);
+            const pct = total > 0 ? (earned / total) * 100 : 0;
+            return `
+              <div class="tooltip-item">
+                <span class="tt-acc-name">👤 ${escapeHtml(a.name)}</span>
+                <span class="tt-acc-val">+${earned}<em>${pct.toFixed(1)}%</em></span>
+              </div>`;
+          }).join('')}
+        `;
+      } else if (item.breakdown && item.breakdown.length > 0) {
         bdList.innerHTML = item.breakdown.map(b => `
           <div class="tooltip-item">
             <span>${b.icon || '📌'} ${b.name}</span>
@@ -1518,13 +1747,25 @@ function renderHistoryChart(dataList, days) {
 
       document.getElementById('tt-balance').innerText = `当日结余: ${(item.balance || 0).toLocaleString()} 积分`;
 
+      tooltip.style.display = 'block';
+
+      // 先显示再测量，保证多账号长列表时提示框不会被视口裁掉
       const barEl = col.querySelector('.chart-bar') || col;
       const rect = barEl.getBoundingClientRect();
-      const centerX = Math.max(120, Math.min(window.innerWidth - 120, rect.left + rect.width / 2));
-      const topY = Math.max(160, rect.top);
-      tooltip.style.left = `${centerX}px`;
-      tooltip.style.top = `${topY}px`;
-      tooltip.style.display = 'block';
+      const tipRect = tooltip.getBoundingClientRect();
+      const tipW = tipRect.width;
+      const tipH = tipRect.height;
+      const centerX = Math.max(
+        tipW / 2 + 8,
+        Math.min(window.innerWidth - tipW / 2 - 8, rect.left + rect.width / 2)
+      );
+      let top = rect.top - tipH - 12;
+      if (top < 8) top = rect.bottom + 12; // 上方放不下就改放到柱子下方
+      if (top + tipH > window.innerHeight - 8) {
+        top = Math.max(8, window.innerHeight - tipH - 8);
+      }
+      tooltip.style.left = `${centerX - tipW / 2}px`;
+      tooltip.style.top = `${top}px`;
     };
 
     col.addEventListener('mouseenter', showTooltip);

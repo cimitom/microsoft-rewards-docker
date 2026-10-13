@@ -15,6 +15,8 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const CURRENT_VERSION = '1.4.4';
+
 let lastCpuInfo = os.cpus().map(c => c.times);
 function getCpuUsage() {
   const cpus = os.cpus();
@@ -63,10 +65,18 @@ export function createServer() {
       const totalMemBytes = os.totalmem();
       const freeMemBytes = os.freemem();
       const usedMemBytes = totalMemBytes - freeMemBytes;
-      const procMemMB = Math.round(process.memoryUsage().rss / (1024 * 1024));
+      const memUsage = process.memoryUsage();
+      const procMemMB = Math.round(memUsage.rss / (1024 * 1024));
+      const heapUsedMB = Math.round(memUsage.heapUsed / (1024 * 1024));
+      const heapTotalMB = Math.round(memUsage.heapTotal / (1024 * 1024));
       const totalMemGB = (totalMemBytes / (1024 * 1024 * 1024)).toFixed(1);
       const usedMemGB = (usedMemBytes / (1024 * 1024 * 1024)).toFixed(1);
       const memPercent = Math.round((usedMemBytes / totalMemBytes) * 100);
+
+      const uptimeSec = Math.floor(process.uptime());
+      const uptimeStr = uptimeSec > 3600
+        ? `${Math.floor(uptimeSec / 3600)}小时 ${Math.floor((uptimeSec % 3600) / 60)}分`
+        : `${Math.floor(uptimeSec / 60)}分 ${uptimeSec % 60}秒`;
 
       res.json({
         success: true,
@@ -75,11 +85,63 @@ export function createServer() {
           procMem: `${procMemMB} MB`,
           sysMem: `${usedMemGB}G/${totalMemGB}G`,
           memPercent,
-          ping: `${ping} ms`
+          ping: `${ping} ms`,
+          containerDetails: {
+            processRss: `${procMemMB} MB`,
+            heap: `${heapUsedMB} MB / ${heapTotalMB} MB`,
+            systemMemory: `${usedMemGB} GB / ${totalMemGB} GB (${memPercent}%)`,
+            uptime: uptimeStr,
+            platform: `${os.type()} ${os.arch()}`,
+            nodeVersion: process.version
+          }
         }
       });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  // 0.5 检查版本更新
+  let cachedRelease = null;
+  let cachedReleaseTime = 0;
+  app.get('/api/system/check-update', async (req, res) => {
+    try {
+      if (!cachedRelease || Date.now() - cachedReleaseTime > 10 * 60 * 1000) {
+        const ghRes = await fetch('https://api.github.com/repos/wangheqiang530/microsoft-rewards-docker/releases/latest', {
+          headers: { 'User-Agent': 'microsoft-rewards-docker' },
+          signal: AbortSignal.timeout(3500)
+        }).then(r => r.json());
+        if (ghRes && ghRes.tag_name) {
+          cachedRelease = ghRes;
+          cachedReleaseTime = Date.now();
+        }
+      }
+
+      const currentVersion = CURRENT_VERSION;
+      const latestTag = cachedRelease?.tag_name?.replace(/^v/, '') || currentVersion;
+      const hasUpdate = latestTag !== currentVersion && latestTag > currentVersion;
+
+      res.json({
+        success: true,
+        data: {
+          currentVersion,
+          latestVersion: latestTag,
+          hasUpdate,
+          releaseUrl: cachedRelease?.html_url || 'https://github.com/wangheqiang530/microsoft-rewards-docker/releases/latest',
+          releaseTitle: cachedRelease?.name || `v${latestTag}`,
+          releaseNotes: cachedRelease?.body || ''
+        }
+      });
+    } catch {
+      res.json({
+        success: true,
+        data: {
+          currentVersion: CURRENT_VERSION,
+          latestVersion: CURRENT_VERSION,
+          hasUpdate: false,
+          releaseUrl: 'https://github.com/wangheqiang530/microsoft-rewards-docker/releases'
+        }
+      });
     }
   });
 
@@ -353,10 +415,11 @@ export function createServer() {
     }
   });
 
-  // 11. 获取历史积分趋势与明细
+  // 11. 获取历史积分趋势与明细 (支持单账号与全局汇总)
   app.get('/api/history', (req, res) => {
     const days = parseInt(req.query.days, 10) || 7;
-    const history = historyManager.getHistory(days, taskManager.stats);
+    const accountId = req.query.accountId || 'all';
+    const history = historyManager.getHistory(days, accountId, taskManager.stats);
     res.json({ success: true, data: history });
   });
 

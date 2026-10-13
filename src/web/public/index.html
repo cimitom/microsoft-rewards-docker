@@ -9,69 +9,75 @@
 </head>
 <body>
   <div class="app-container">
-    <!-- 顶部导航栏 -->
+    <!-- 顶部主控台导航栏 -->
     <header class="header">
-      <div class="header-left">
-        <div class="logo-icon">🎁</div>
-        <div class="brand">
+      <div class="header-top-bar">
+        <div class="header-brand">
+          <div class="logo-icon">🎁</div>
           <div class="title-wrap">
             <h1 class="title">微软积分自动化控制台</h1>
-            <span class="badge badge-version">v1.4.3 Docker</span>
           </div>
-          <div class="subtitle-wrap">
-            <span id="system-status-badge" class="status-pill status-idle">
-              <span class="status-dot"></span> <span id="status-text">系统就绪</span>
-            </span>
-            <span class="sys-metrics-pill" id="sys-metrics-pill" title="容器与主机硬件及网络实时状态">
-              <span class="metric-item"><span class="metric-icon">💻</span> <span id="metric-cpu">CPU --</span></span>
-              <span class="metric-sep">|</span>
-              <span class="metric-item"><span class="metric-icon">🧠</span> <span id="metric-mem">内存 --</span></span>
-              <span class="metric-sep">|</span>
-              <span class="metric-item"><span class="metric-icon">🌐</span> <span id="metric-ping">延时 --</span></span>
-            </span>
-            <span class="refresh-countdown" id="daily-countdown-pill">
-              <span class="countdown-sandglass">⏳</span> 刷新倒计时: <strong id="countdown-timer">--:--:--</strong>
+          <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
+          <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
+            <span class="status-dot"></span>
+            <span class="version-label" id="version-label">v1.4.4</span>
+            <span class="update-indicator" id="update-indicator" style="display: none;">
+              <span class="update-icon">🚀</span>
+              <span class="update-text" id="update-text">有更新</span>
             </span>
           </div>
         </div>
-      </div>
 
-      <div class="header-right">
-        <!-- 主题切换胶囊 -->
-        <div class="theme-toggle-wrap" id="theme-toggle-wrap">
-          <button class="theme-btn active" data-theme-val="auto" title="跟随系统" id="btn-theme-auto">💻</button>
-          <button class="theme-btn" data-theme-val="light" title="日间模式" id="btn-theme-light">☀️</button>
-          <button class="theme-btn" data-theme-val="dark" title="夜间模式" id="btn-theme-dark">🌙</button>
+        <div class="header-right-group">
+          <!-- 实时硬件监控 (可点击立即刷新) -->
+          <div class="sys-metrics-pill" id="sys-metrics-pill" title="立即刷新请点击">
+            <span class="metric-item"><span class="metric-icon">💻</span> <span id="metric-cpu">CPU --</span></span>
+            <span class="metric-sep">|</span>
+            <span class="metric-item"><span class="metric-icon">⚡</span> <span id="metric-mem">内存 --</span></span>
+            <span class="metric-sep">|</span>
+            <span class="metric-item"><span class="metric-icon">🌐</span> <span id="metric-ping">延时 --</span></span>
+            <span class="metric-refresh-icon">🔄</span>
+          </div>
+
+          <!-- 刷新倒计时 -->
+          <div class="refresh-countdown" id="daily-countdown-pill">
+            <span class="countdown-sandglass">⏳</span> 刷新倒计时: <strong id="countdown-timer">--:--:--</strong>
+          </div>
+
+          <!-- 功能按钮组 -->
+          <div class="header-actions">
+            <button id="btn-sync-status" class="btn btn-secondary btn-sm" title="从微软官网同步今日真实任务完成度">
+              <span>🔄</span> 官网同步
+            </button>
+            <button id="btn-check-account" class="btn btn-secondary btn-sm" title="体检当前选中的账号">
+              <span>🔍</span> 账号体检
+            </button>
+            <button id="btn-guide" class="btn btn-secondary btn-sm" title="添加新账号配置向导">
+              <span>💡</span> 配置向导
+            </button>
+            <button id="btn-settings" class="btn btn-secondary btn-sm" title="全局参数设置">
+              <span>⚙️</span> 配置中心
+            </button>
+            <!-- 主题切换胶囊 -->
+            <div class="theme-toggle-wrap" id="theme-toggle-wrap">
+              <button class="theme-btn active" data-theme-val="auto" title="跟随系统" id="btn-theme-auto">💻</button>
+              <button class="theme-btn" data-theme-val="light" title="日间模式" id="btn-theme-light">☀️</button>
+              <button class="theme-btn" data-theme-val="dark" title="夜间模式" id="btn-theme-dark">🌙</button>
+            </div>
+          </div>
         </div>
-
-        <button id="btn-sync-status" class="btn btn-secondary" title="从微软官网同步今日真实任务完成度">
-          <span>🔄</span> 同步数据
-        </button>
-        <button id="btn-check-account" class="btn btn-secondary">
-          <span>🔍</span> 账号体检
-        </button>
-        <button id="btn-guide" class="btn btn-secondary">
-          <span>💡</span> 配置向导
-        </button>
-        <button id="btn-settings" class="btn btn-secondary">
-          <span>⚙️</span> 配置中心
-        </button>
-        <button id="btn-run" class="btn btn-primary">
-          <span class="icon">▶️</span> 立即执行
-        </button>
-        <button id="btn-stop" class="btn btn-danger" style="display: none;">
-          <span class="icon">⏹️</span> 停止执行
-        </button>
       </div>
     </header>
 
+    <!-- 独立专属的多账号切换卡槽部分 (防止账号多了显示不全，全屏宽度自由横滑) -->
+    <section class="account-selector-section" id="account-selector-section">
+      <div class="account-selector-bar" id="account-selector-bar">
+        <!-- 动态渲染多账号切换卡槽 -->
+      </div>
+    </section>
+
     <!-- 主仪表大屏 -->
     <main class="main-content">
-      <!-- 顶部多账号快速切换胶囊栏 -->
-      <section class="account-selector-bar" id="account-selector-bar">
-        <!-- 动态渲染账号胶囊 -->
-      </section>
-
       <!-- 5 大核心数据卡片 -->
       <section class="hero-grid">
         <div class="hero-card">
@@ -107,9 +113,17 @@
           <div class="section-title">
             <span>👥</span> 各账号运行状态与积分概览
           </div>
-          <button class="btn btn-secondary btn-sm" id="btn-add-account-card">
-            <span>➕</span> 添加新账号
-          </button>
+          <div class="accounts-header-actions">
+            <button id="btn-run" class="btn btn-primary btn-sm">
+              <span class="icon">▶️</span> 立即执行全部账号
+            </button>
+            <button id="btn-stop" class="btn btn-danger btn-sm" style="display: none;">
+              <span class="icon">⏹️</span> 停止执行
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btn-add-account-card">
+              <span>➕</span> 添加新账号
+            </button>
+          </div>
         </div>
         <div class="accounts-grid" id="accounts-grid">
           <!-- 动态渲染各账号卡片 -->
@@ -122,7 +136,13 @@
           <div class="section-title">
             <span>📋</span> <span id="task-list-title">今日自动化任务进度清单</span>
           </div>
-          <div class="task-header-actions" style="display: flex; align-items: center; gap: 10px;">
+          <div class="task-header-actions">
+            <button id="btn-run-single-header" class="btn btn-primary btn-sm" style="display: none;">
+              <span>▶️</span> 立即执行当前账号
+            </button>
+            <button id="btn-stop-single-header" class="btn btn-danger btn-sm" style="display: none;">
+              <span>⏹️</span> 停止执行
+            </button>
             <button class="btn btn-secondary btn-sm" id="btn-sync-current-account" title="从微软官网同步当前账号今日真实任务进度">
               <span>🔄</span> 刷新此账号进度
             </button>
@@ -216,7 +236,7 @@
       <section class="section-card history-card">
         <div class="section-header">
           <div class="section-title">
-            <span>📈</span> 每日积分增长历史记录
+            <span>📈</span> <span id="history-chart-title">每日积分增长历史记录</span>
           </div>
           <div class="history-controls">
             <div class="pill-group">
