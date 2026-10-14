@@ -585,6 +585,8 @@ body {
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* 该账号正在执行任务时的高亮徽章 */
@@ -610,6 +612,20 @@ body {
 .badge-mini.badge-auth-unknown {
   background: rgba(148, 163, 184, 0.14);
   color: var(--text-sub);
+}
+
+/* 已登录但 Cookie 不完整（例如缺少 _U），需要用户修复 */
+.badge-mini.badge-auth-warn {
+  background: rgba(245, 158, 11, 0.16);
+  color: #F59E0B;
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+/* 下次自动启动时间 */
+.badge-mini.badge-schedule {
+  background: rgba(56, 189, 248, 0.13);
+  color: #38BDF8;
+  border-color: rgba(56, 189, 248, 0.3);
 }
 
 /* 呼吸动效：此前多处引用 pulse 但关键帧从未定义，动效一直是失效的 */
@@ -1579,6 +1595,12 @@ body {
   background: rgba(239, 68, 68, 0.2);
   color: #F87171;
   border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.diag-status-pill.pill-warn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #F59E0B;
+  border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 .diag-item-body {

@@ -274,6 +274,8 @@ export class AuthManager {
         return {
           valid: true,
           hasU,
+          warning: !hasU,
+          warningMessage: hasU ? '' : '缺少 _U 登录标头：必应搜索无法关联账号计分，请在电脑登录 cn.bing.com 后重新抓取完整 Cookie',
           balance,
           userName: userName || '微软用户',
           streakDays,
@@ -370,11 +372,15 @@ export class AuthManager {
     };
 
     const balance = cookieStatus.balance || tokenStatus.balance || 0;
-    const allValid = cookieStatus.valid && tokenStatus.valid;
+    // 缺少 _U 时虽然「已登录」，但 PC 搜索不会计分，不能算完全正常
+    const cookieUsable = cookieStatus.valid && !cookieStatus.warning;
+    const allValid = cookieUsable && tokenStatus.valid;
     const partialValid = cookieStatus.valid || tokenStatus.valid;
 
     if (allValid) {
       logger.log('🟢', `账号 [${name}] 登录检测完全通过！网页端与移动端均在线，当前总积分: ${balance}`);
+    } else if (cookieStatus.valid && cookieStatus.warning) {
+      logger.log('🟡', `账号 [${name}] 网页端 Cookie 异常：${cookieStatus.warningMessage}`);
     } else if (partialValid) {
       logger.log('🟡', `账号 [${name}] 部分登录有效：网页端(${cookieStatus.valid ? '正常' : '未就绪'}) / 移动端(${tokenStatus.valid ? '正常' : '未就绪'})`);
     } else {
@@ -391,7 +397,9 @@ export class AuthManager {
       token: tokenStatus,
       balance,
       allValid,
-      overallValid: partialValid
+      overallValid: partialValid,
+      warning: !!cookieStatus.warning,
+      warningMessage: cookieStatus.warningMessage || ''
     };
   }
 }

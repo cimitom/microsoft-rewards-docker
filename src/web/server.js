@@ -16,7 +16,7 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.4.10';
+const CURRENT_VERSION = '1.4.11';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -241,7 +241,7 @@ let lastPingTime = 0;
 
 /**
  * 语义化版本号比较（返回 >0 表示 a 比 b 新）。
- * 不能用字符串直接比较：'1.4.9' > '1.4.10' 在字符串比较下是 true，会误报有新版本。
+ * 不能用字符串直接比较：字符串比较下 "1.4.9" 会大于 "1.4.10"，从而误报有新版本。
  */
 function compareVersions(a, b) {
   const parse = v => String(v || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
@@ -417,9 +417,12 @@ export function createServer() {
   // 1. 获取当前状态（支持按账号过滤）
   app.get('/api/status', (req, res) => {
     const accountId = req.query.accountId || 'all';
+    const data = taskManager.getStatus(accountId);
+    // 附带各账号的下次计划启动时间，供卡片展示
+    data.schedule = scheduler.getNextRunInfo();
     res.json({
       success: true,
-      data: taskManager.getStatus(accountId)
+      data
     });
   });
 
@@ -651,6 +654,8 @@ export function createServer() {
       cookieValid: result.cookie?.valid,
       tokenValid: result.token?.valid,
       overallValid: result.overallValid,
+      warning: result.warning,
+      warningMessage: result.warningMessage,
       balance: result.balance,
       cookieMessage: result.cookie?.message,
       tokenMessage: result.token?.message

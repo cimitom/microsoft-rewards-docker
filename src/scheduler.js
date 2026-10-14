@@ -75,6 +75,84 @@ class Scheduler {
     }
   }
 
+  /**
+   * 供 WebUI 展示：每个账号的下次启动情况。
+   * 返回 { [accountId]: { status, plannedAt, minutesUntil, windowStart, windowEnd, isNextDay } }
+   * status: scheduled(今日已排定) / imminent(窗口内即将启动) / done(今日已完成)
+   *         / no-credential(未配凭据) / disabled(账号停用) / schedule-off(定时关闭)
+   */
+  getNextRunInfo() {
+    const cfg = configManager.get();
+    const scheduleEnabled = cfg.schedule?.enabled !== false;
+    if (scheduleEnabled) this.initTodayPlan();
+
+    const today = this.getTodayNum();
+    const plans = this.plannedDailyRuns[today] || {};
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const fmt = (m) => `${String(Math.floor((((m % 1440) + 1440) % 1440) / 60)).padStart(2, '0')}:${String(((m % 60) + 60) % 60).padStart(2, '0')}`;
+    const result = {};
+
+    const accounts = configManager.getAccounts();
+    accounts.forEach((acc, index) => {
+      const slot = acc.timeSlot || configManager.getDefaultTimeSlot(index);
+      const startHour = slot.startHour ?? 9;
+      const endHour = slot.endHour ?? ((startHour + 4) % 24);
+      const info = {
+        status: 'scheduled',
+        plannedAt: null,
+        minutesUntil: null,
+        isNextDay: false,
+        windowStart: fmt(startHour * 60),
+        windowEnd: fmt(endHour * 60)
+      };
+
+      if (acc.enabled === false) {
+        info.status = 'disabled';
+      } else if (!acc.cookie && !acc.refreshToken) {
+        info.status = 'no-credential';
+      } else if (!scheduleEnabled) {
+        info.status = 'schedule-off';
+      } else {
+        const plan = plans[acc.id];
+        if (plan?.executed) {
+          info.status = 'done';
+        } else if (plan) {
+          // 计划时刻 = 本次窗口起点 + 随机偏移。
+          // 跨零点窗口要注意：若当前处于凌晨尾部（如 21:00-01:00 的 00:30），
+          // 窗口起点在「昨天」，否则会把计划时刻算到明天去。
+          const startDate = new Date(now);
+          startDate.setHours(0, 0, 0, 0);
+          startDate.setMinutes(plan.startMin);
+          if (plan.wraps && nowMin < plan.endMin) {
+            startDate.setDate(startDate.getDate() - 1);
+          }
+          const planAt = new Date(startDate.getTime() + plan.offset * 60000);
+          const diffMin = Math.round((planAt.getTime() - now.getTime()) / 60000);
+          const nowOffset = this.minutesIntoWindow(plan.startMin, plan.wraps, nowMin);
+          const inWindow = nowOffset >= 0 && nowOffset < plan.windowLength;
+
+          if (inWindow && diffMin > 0) {
+            info.status = 'scheduled';
+            info.plannedAt = fmt(planAt.getHours() * 60 + planAt.getMinutes());
+            info.minutesUntil = diffMin;
+            info.isNextDay = planAt.getDate() !== now.getDate();
+          } else if (inWindow) {
+            // 计划时刻已过但还没执行：调度器下一分钟就会启动
+            info.status = 'imminent';
+            info.minutesUntil = 0;
+          } else {
+            // 今日窗口已经过去（且今日未执行），下次要等明天
+            info.status = 'window-passed';
+          }
+        }
+      }
+      result[acc.id] = info;
+    });
+
+    return result;
+  }
+
   start() {
     this.stop();
     const cfg = configManager.get();

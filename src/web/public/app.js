@@ -773,7 +773,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.10';
+  const current = updateInfo?.currentVersion || '1.4.11';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -813,7 +813,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.10'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.11'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -1015,7 +1015,7 @@ function renderDashboard(data) {
     // 显示各账号概览卡片矩阵
     if (overviewCard) {
       overviewCard.style.display = 'flex';
-      renderAccountsOverviewGrid(summary?.accountsList || [], { running, runningAccountId });
+      renderAccountsOverviewGrid(summary?.accountsList || [], { running, runningAccountId, schedule: data.schedule || {} });
     }
     if (taskListTitle) {
       taskListTitle.innerText = `今日全账号综合任务明细`;
@@ -1131,13 +1131,44 @@ function getAccountAuthStatus(acc) {
   const tokenLine = d.tokenValid ? '✅ Token 有效' : '❌ Token 失效';
   const tip = [
     `上次检测：${formatDiagnosisTime(d.checkedAt)}`,
-    `检测结果：${d.overallValid ? '整体有效' : '存在失效项'}`,
+    `检测结果：${d.overallValid ? (d.warning ? '已登录但存在异常' : '整体有效') : '存在失效项'}`,
     cookieLine,
-    tokenLine
+    tokenLine,
+    ...(d.warning ? [`⚠️ ${d.warningMessage || 'Cookie 存在异常，请重新抓取'}`] : [])
   ].join('\n');
+  if (d.overallValid && d.warning) {
+    return { text: '需修复', cls: 'badge-auth-warn', tip };
+  }
   return d.overallValid
     ? { text: '有效', cls: 'badge-auth-valid', tip }
     : { text: '失效', cls: 'badge-auth-invalid', tip };
+}
+
+// 下次自动启动时间：今日计划 / 即将启动 / 明日窗口 / 停用等
+function formatNextRun(sched) {
+  if (!sched) return { text: '⏰ --', tip: '调度信息尚未就绪' };
+  const windowText = `${sched.windowStart} - ${sched.windowEnd}`;
+  switch (sched.status) {
+    case 'scheduled':
+      return {
+        text: `⏰ ${sched.isNextDay ? '次日' : '今日'} ${sched.plannedAt}`,
+        tip: `下次自动启动：${sched.isNextDay ? '次日' : '今日'} ${sched.plannedAt}（约 ${sched.minutesUntil} 分钟后）\n作息窗口：${windowText}`
+      };
+    case 'imminent':
+      return { text: '⏰ 即将启动', tip: `已进入 ${windowText} 窗口，调度器将在下一分钟启动打卡` };
+    case 'done':
+      return { text: '⏰ 明日窗口', tip: `今日已完成，下次为明日 ${windowText} 窗口内随机启动` };
+    case 'window-passed':
+      return { text: '⏰ 明日窗口', tip: `今日 ${windowText} 窗口已过且未执行，下次为明日该窗口内随机启动` };
+    case 'disabled':
+      return { text: '⏰ 已停用', tip: '该账号已停用，不会自动启动' };
+    case 'no-credential':
+      return { text: '⏰ 未配凭据', tip: '未配置 Cookie / Token，不会自动启动' };
+    case 'schedule-off':
+      return { text: '⏰ 定时关闭', tip: '后台定时巡检已关闭（可在「配置中心 → 定时巡检」开启）' };
+    default:
+      return { text: '⏰ --', tip: '调度信息尚未就绪' };
+  }
 }
 
 function renderAccountsOverviewGrid(accounts, runtime = {}) {
@@ -1145,11 +1176,12 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
   if (!grid) return;
   grid.innerHTML = '';
 
-  const { running = false, runningAccountId = null } = runtime;
+  const { running = false, runningAccountId = null, schedule = {} } = runtime;
 
   accounts.forEach(acc => {
     const isRunning = running && runningAccountId === acc.id;
     const auth = getAccountAuthStatus(acc);
+    const nextRun = formatNextRun(schedule[acc.id]);
     const card = document.createElement('div');
     card.className = 'account-overview-card';
     card.innerHTML = `
@@ -1165,6 +1197,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
           <span class="badge-mini ${auth.cls}" data-tip="${escapeHtml(auth.tip)}">
             ${auth.text}
           </span>
+          <span class="badge-mini badge-schedule" data-tip="${escapeHtml(nextRun.tip)}">${nextRun.text}</span>
         </div>
       </div>
 
@@ -1883,6 +1916,11 @@ async function runSingleAccountDiagnosis(accountId) {
       bIcon.innerText = '🟢';
       bTitle.innerText = `账号 [${escapeHtml(accName)}] 登录完全正常 (双端在线)`;
       bSub.innerText = '当前 Docker 环境已完美就绪，所有任务通道与网络环境均处于最佳状态！';
+    } else if (data.warning) {
+      banner.className = 'diag-banner partial';
+      bIcon.innerText = '🟡';
+      bTitle.innerText = `账号 [${escapeHtml(accName)}] 已登录，但 Cookie 存在异常`;
+      bSub.innerText = data.warningMessage || '网页端 Cookie 缺少 _U 标头，PC 搜索不会计分，请重新抓取完整 Cookie。';
     } else if (data.overallValid) {
       banner.className = 'diag-banner partial';
       bIcon.innerText = '🟡';
@@ -1898,7 +1936,14 @@ async function runSingleAccountDiagnosis(accountId) {
     // 2. 网页端 Cookie 卡片
     const pillCookie = document.getElementById('diag-pill-cookie');
     const detailCookie = document.getElementById('diag-detail-cookie');
-    if (cookie.valid) {
+    if (cookie.valid && cookie.warning) {
+      pillCookie.className = 'diag-status-pill pill-warn';
+      pillCookie.innerText = '已登录 · 需修复';
+      detailCookie.innerHTML = `
+        <div style="color:#F59E0B;">状态：⚠️ 身份认证有效，但 Cookie 不完整 —— ${escapeHtml(cookie.warningMessage || '缺少 _U 登录标头')}</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：在电脑登录 cn.bing.com 后重新抓取完整 Cookie（必须包含 _U），否则 PC 搜索不会计分。</div>
+      `;
+    } else if (cookie.valid) {
       pillCookie.className = 'diag-status-pill pill-ok';
       pillCookie.innerText = '已登录正常';
       detailCookie.innerHTML = `

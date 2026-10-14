@@ -420,6 +420,8 @@ class ConfigManager {
       cookieValid: !!diagnosis.cookieValid,
       tokenValid: !!diagnosis.tokenValid,
       overallValid: !!diagnosis.overallValid,
+      warning: !!diagnosis.warning,
+      warningMessage: diagnosis.warningMessage || '',
       balance: Number(diagnosis.balance || 0),
       cookieMessage: diagnosis.cookieMessage || '',
       tokenMessage: diagnosis.tokenMessage || ''
