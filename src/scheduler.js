@@ -2,10 +2,12 @@ import cron from 'node-cron';
 import configManager from './config.js';
 import logger from './logger.js';
 import taskManager from './core/taskManager.js';
+import epicManager from './core/epic.js';
 
 class Scheduler {
   constructor() {
     this.job = null;
+    this.epicJob = null;
     this.plannedDailyRuns = {};
   }
 
@@ -189,6 +191,8 @@ class Scheduler {
     const cfg = configManager.get();
     if (!cfg.schedule?.enabled) {
       logger.log('⏸️', '后台自动定时巡检当前已禁用');
+      // Epic 自动领取独立于微软定时开关
+      this.startEpicJob();
       return;
     }
 
@@ -229,12 +233,58 @@ class Scheduler {
     });
 
     logger.log('🟢', `后台时段拟人调度引擎已就绪 (9-13 / 13-17 / 17-21 / 21-次日01 时段错峰 + 60分钟随机浮动)`);
+    this.startEpicJob();
+  }
+
+  /** Epic 免费游戏：每天过了配置整点后自动领取一次 */
+  startEpicJob() {
+    if (this.epicJob) {
+      this.epicJob.stop();
+      this.epicJob = null;
+    }
+    const cfg = configManager.get();
+    if (cfg.epic?.enabled === false) {
+      logger.log('⏸️', 'Epic 免费游戏自动领取已禁用');
+      return;
+    }
+
+    // 每小时第 5 分钟检查一次：过了设定整点且今天还没领过就执行
+    this.epicJob = cron.schedule('5 * * * *', async () => {
+      if (epicManager.running) return;
+      const c = configManager.get();
+      if (c.epic?.enabled === false) return;
+
+      const hour = Number(c.epic?.autoClaimHour ?? 10);
+      const now = new Date();
+      if (now.getHours() < hour) return;
+
+      const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+      if (c.epic?.lastAutoClaimDate === today) return;
+
+      const accounts = configManager.getEpicAccounts().filter(a => a.enabled !== false && a.storageState?.cookies?.length);
+      if (accounts.length === 0) return;
+
+      // 先记账再执行，避免异常导致每小时重复触发
+      configManager.update({ epic: { lastAutoClaimDate: today } });
+      logger.log('🎮', `Epic 每日自动领取开始（${accounts.length} 个账号）`);
+      try {
+        await epicManager.claimAll();
+      } catch (e) {
+        logger.log('🔴', `Epic 自动领取异常: ${e.message}`);
+      }
+    });
+
+    logger.log('🎮', `Epic 免费游戏自动领取已就绪（每天 ${cfg.epic?.autoClaimHour ?? 10}:05 后检查）`);
   }
 
   stop() {
     if (this.job) {
       this.job.stop();
       this.job = null;
+    }
+    if (this.epicJob) {
+      this.epicJob.stop();
+      this.epicJob = null;
     }
   }
 

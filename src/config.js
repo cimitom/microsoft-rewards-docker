@@ -74,6 +74,12 @@ const DEFAULT_CONFIG = {
   ui: {
     theme: 'auto'
   },
+  epic: {
+    enabled: true,
+    autoClaimHour: 10, // 每天几点后自动领取（0-23，容器本地时间）
+    accounts: [],
+    claimRecords: []
+  },
   server: {
     port: 5308,
     authPassword: ''
@@ -363,6 +369,80 @@ class ConfigManager {
     return true;
   }
 
+  // ===== Epic 免费游戏账号 =====
+
+  getEpicAccounts() {
+    const list = this.get().epic?.accounts || [];
+    return list.slice().sort((a, b) => {
+      const oa = Number.isFinite(Number(a.order)) ? Number(a.order) : 999;
+      const ob = Number.isFinite(Number(b.order)) ? Number(b.order) : 999;
+      return oa - ob;
+    });
+  }
+
+  findEpicAccount(id) {
+    if (!id) return null;
+    return (this.get().epic?.accounts || []).find(a => a.id === id) || null;
+  }
+
+  upsertEpicAccount(data = {}) {
+    const cfg = this.get();
+    if (!cfg.epic) cfg.epic = { enabled: true, autoClaimHour: 10, accounts: [], claimRecords: [] };
+    if (!Array.isArray(cfg.epic.accounts)) cfg.epic.accounts = [];
+
+    const id = data.id || `epic_${Date.now()}`;
+    const idx = cfg.epic.accounts.findIndex(a => a.id === id);
+    if (idx !== -1) {
+      cfg.epic.accounts[idx] = { ...cfg.epic.accounts[idx], ...data, id };
+    } else {
+      cfg.epic.accounts.push({
+        id,
+        name: data.name || `Epic 账号 ${cfg.epic.accounts.length + 1}`,
+        order: data.order !== undefined ? Number(data.order) : cfg.epic.accounts.length + 1,
+        enabled: data.enabled !== false,
+        storageState: data.storageState || null,
+        sessionValid: data.sessionValid ?? null,
+        lastVerifyAt: data.lastVerifyAt || 0,
+        lastVerifyMessage: data.lastVerifyMessage || '',
+        lastClaimAt: data.lastClaimAt || 0,
+        lastClaimMessage: data.lastClaimMessage || ''
+      });
+    }
+    this.save();
+    return this.findEpicAccount(id);
+  }
+
+  updateEpicAccount(id, patch = {}) {
+    const acc = this.findEpicAccount(id);
+    if (!acc) return null;
+    Object.assign(acc, patch, { id: acc.id });
+    this.save();
+    return acc;
+  }
+
+  deleteEpicAccount(id) {
+    const cfg = this.get();
+    if (!cfg.epic?.accounts) return false;
+    const before = cfg.epic.accounts.length;
+    cfg.epic.accounts = cfg.epic.accounts.filter(a => a.id !== id);
+    if (cfg.epic.accounts.length === before) return false;
+    this.save();
+    return true;
+  }
+
+  appendEpicClaimRecords(records = []) {
+    const cfg = this.get();
+    if (!cfg.epic) cfg.epic = { accounts: [], claimRecords: [] };
+    if (!Array.isArray(cfg.epic.claimRecords)) cfg.epic.claimRecords = [];
+    cfg.epic.claimRecords.unshift(...records);
+    if (cfg.epic.claimRecords.length > 60) cfg.epic.claimRecords.length = 60;
+    this.save();
+  }
+
+  getEpicClaimRecords(limit = 20) {
+    return (this.get().epic?.claimRecords || []).slice(0, limit);
+  }
+
   update(partial) {
     if (!this.config) {
       this.load();
@@ -448,6 +528,13 @@ class ConfigManager {
       for (const field of SECRET_ACCOUNT_FIELDS) {
         cfg.account[field] = cfg.account[field] ? SECRET_PLACEHOLDER : '';
       }
+    }
+    // Epic 会话同样属于凭据，不能下发到前端
+    if (cfg.epic && Array.isArray(cfg.epic.accounts)) {
+      cfg.epic.accounts = cfg.epic.accounts.map(acc => {
+        const hasSession = !!(acc.storageState && Array.isArray(acc.storageState.cookies) && acc.storageState.cookies.length);
+        return { ...acc, hasSession, storageState: hasSession ? SECRET_PLACEHOLDER : null };
+      });
     }
     return cfg;
   }

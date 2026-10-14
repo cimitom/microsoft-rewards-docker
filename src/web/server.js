@@ -12,11 +12,12 @@ import scheduler from '../scheduler.js';
 import rewardsApi from '../core/api.js';
 import historyManager from '../core/history.js';
 import browserManager from '../core/browser.js';
+import epicManager from '../core/epic.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.4.12';
+const CURRENT_VERSION = '1.5.0';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -755,6 +756,104 @@ export function createServer() {
     const accountId = req.query.accountId || 'all';
     const history = historyManager.getHistory(days, accountId, taskManager.stats);
     res.json({ success: true, data: history });
+  });
+
+  // ===== Epic 免费游戏领取 =====
+
+  app.get('/api/epic/accounts', (req, res) => {
+    const accounts = configManager.getEpicAccounts().map(a => {
+      const summary = epicManager.summarizeSession(a.storageState);
+      return {
+        id: a.id,
+        name: a.name,
+        order: a.order,
+        enabled: a.enabled !== false,
+        hasSession: summary.cookieCount > 0,
+        cookieCount: summary.cookieCount,
+        hasEpicSession: summary.hasEpicSession,
+        sessionValid: a.sessionValid ?? null,
+        lastVerifyAt: a.lastVerifyAt || 0,
+        lastVerifyMessage: a.lastVerifyMessage || '',
+        lastClaimAt: a.lastClaimAt || 0,
+        lastClaimMessage: a.lastClaimMessage || ''
+      };
+    });
+    res.json({ success: true, data: accounts });
+  });
+
+  app.post('/api/epic/accounts', (req, res) => {
+    try {
+      const saved = configManager.upsertEpicAccount(req.body || {});
+      res.json({ success: true, data: { id: saved.id } });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.delete('/api/epic/accounts/:id', (req, res) => {
+    const ok = configManager.deleteEpicAccount(req.params.id);
+    res.json({ success: ok, message: ok ? '账号已删除' : '账号不存在' });
+  });
+
+  // 导入会话（Cookie-Editor JSON / storageState / 原始 Cookie 串）
+  app.post('/api/epic/accounts/:id/session', (req, res) => {
+    try {
+      const acc = configManager.findEpicAccount(req.params.id);
+      if (!acc) return res.status(404).json({ success: false, message: '账号不存在' });
+      const storageState = epicManager.parseSessionInput(req.body?.session);
+      const summary = epicManager.summarizeSession(storageState);
+      configManager.updateEpicAccount(acc.id, {
+        storageState,
+        sessionValid: null,
+        lastVerifyAt: 0,
+        lastVerifyMessage: ''
+      });
+      logger.log('🎮', `Epic 账号 [${acc.name}] 会话已导入（${summary.cookieCount} 个 Cookie${summary.hasEpicSession ? '，包含 Epic 登录凭据' : '，⚠️ 未检测到 EPIC 登录 Cookie'}）`, '', acc.name);
+      res.json({ success: true, data: summary });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/epic/accounts/:id/verify', async (req, res) => {
+    try {
+      const result = await epicManager.verifySession(req.params.id);
+      res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.get('/api/epic/free-games', async (req, res) => {
+    try {
+      const games = await epicManager.fetchFreeGames();
+      res.json({ success: true, data: games });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/epic/claim', async (req, res) => {
+    try {
+      const accountId = req.body?.accountId || null;
+      const data = accountId ? await epicManager.claimOne(accountId) : await epicManager.claimAll();
+      res.json({ success: true, data });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.get('/api/epic/status', (req, res) => {
+    const cfg = configManager.get();
+    res.json({
+      success: true,
+      data: {
+        ...epicManager.getState(),
+        enabled: cfg.epic?.enabled !== false,
+        autoClaimHour: cfg.epic?.autoClaimHour ?? 10,
+        records: configManager.getEpicClaimRecords(20)
+      }
+    });
   });
 
   return app;

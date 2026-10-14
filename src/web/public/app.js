@@ -587,6 +587,7 @@ function initUIEvents() {
   document.querySelectorAll('#app-tabs .app-tab').forEach(btn => {
     btn.addEventListener('click', () => switchAppTab(btn.getAttribute('data-tab')));
   });
+  initEpicUI();
   switchAppTab(localStorage.getItem('ms_rewards_app_tab') || 'ms', false);
 }
 
@@ -601,6 +602,8 @@ function switchAppTab(tab, persist = true) {
   });
   if (persist) localStorage.setItem('ms_rewards_app_tab', target);
   hideInstantTooltip();
+  // 切到 Epic 时按需加载数据
+  if (target === 'epic') refreshEpicTab();
 }
 
 function initSecretToggles() {
@@ -792,7 +795,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.12';
+  const current = updateInfo?.currentVersion || '1.5.0';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -832,7 +835,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.12'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.5.0'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -2268,5 +2271,264 @@ async function handleTestSearchApi() {
     }
   } catch (e) {
     statusDiv.innerHTML = `<span style="color:#F87171;">❌ 请求异常: ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+// ===== Epic 免费游戏领取 =====
+let epicAccountCache = [];
+
+function initEpicUI() {
+  document.getElementById('btn-epic-add')?.addEventListener('click', () => openEpicModal(null));
+  document.getElementById('btn-close-epic-modal')?.addEventListener('click', () => closeModal('epic-account-modal'));
+  document.getElementById('btn-cancel-epic-modal')?.addEventListener('click', () => closeModal('epic-account-modal'));
+  document.getElementById('btn-save-epic-modal')?.addEventListener('click', saveEpicAccount);
+  document.getElementById('btn-epic-claim-all')?.addEventListener('click', () => claimEpic(null));
+  document.getElementById('btn-epic-refresh-games')?.addEventListener('click', () => fetchEpicFreeGames(true));
+}
+
+function formatEpicTime(ts) {
+  if (!ts) return '--';
+  try {
+    return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return '--';
+  }
+}
+
+async function fetchEpicAccounts() {
+  try {
+    const res = await fetch('/api/epic/accounts').then(r => r.json());
+    if (res.success) {
+      epicAccountCache = res.data || [];
+      renderEpicAccounts(epicAccountCache);
+    }
+  } catch {}
+}
+
+function renderEpicAccounts(accounts) {
+  const grid = document.getElementById('epic-accounts-grid');
+  const empty = document.getElementById('epic-empty');
+  if (!grid) return;
+  if (!accounts || accounts.length === 0) {
+    grid.innerHTML = '';
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+
+  grid.innerHTML = accounts.map(a => {
+    const sessionBadge = !a.hasSession
+      ? '<span class="epic-badge warn">未导入会话</span>'
+      : a.sessionValid === true
+        ? '<span class="epic-badge ok">会话有效</span>'
+        : a.sessionValid === false
+          ? '<span class="epic-badge err">会话失效</span>'
+          : '<span class="epic-badge idle">未校验</span>';
+    const enabledBadge = a.enabled ? '<span class="epic-badge ok">已启用</span>' : '<span class="epic-badge idle">已停用</span>';
+    const verifyMsg = a.lastVerifyMessage ? ` · ${escapeHtml(a.lastVerifyMessage)}` : '';
+    return `
+      <div class="epic-account-card">
+        <div class="epic-account-top">
+          <span class="epic-account-name" title="${escapeHtml(a.name)}">🎮 ${escapeHtml(a.name)}</span>
+          <span style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">${enabledBadge}${sessionBadge}</span>
+        </div>
+        <div class="epic-account-meta">
+          Cookie 数量：${a.cookieCount || 0}${a.hasEpicSession ? '（含 Epic 登录凭据）' : ''}<br>
+          上次校验：${formatEpicTime(a.lastVerifyAt)}${verifyMsg}<br>
+          上次领取：${formatEpicTime(a.lastClaimAt)}
+        </div>
+        <div class="epic-account-actions">
+          <button class="btn btn-primary btn-sm epic-claim" data-id="${a.id}">▶️ 领取</button>
+          <button class="btn btn-secondary btn-sm epic-verify" data-id="${a.id}">🔍 校验会话</button>
+          <button class="btn btn-secondary btn-sm epic-import" data-id="${a.id}">📋 更新会话</button>
+          <button class="btn btn-secondary btn-sm epic-toggle" data-id="${a.id}">${a.enabled ? '⏸️ 停用' : '▶️ 启用'}</button>
+          <button class="btn btn-danger btn-sm epic-delete" data-id="${a.id}">🗑️ 删除</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.epic-claim').forEach(b => b.addEventListener('click', () => claimEpic(b.getAttribute('data-id'))));
+  grid.querySelectorAll('.epic-verify').forEach(b => b.addEventListener('click', () => verifyEpicSession(b.getAttribute('data-id'))));
+  grid.querySelectorAll('.epic-import').forEach(b => b.addEventListener('click', () => openEpicModal(b.getAttribute('data-id'))));
+  grid.querySelectorAll('.epic-toggle').forEach(b => b.addEventListener('click', () => toggleEpicAccount(b.getAttribute('data-id'))));
+  grid.querySelectorAll('.epic-delete').forEach(b => b.addEventListener('click', () => deleteEpicAccount(b.getAttribute('data-id'))));
+}
+
+function renderEpicGames(games) {
+  const list = document.getElementById('epic-games-list');
+  const updated = document.getElementById('epic-games-updated');
+  if (!list) return;
+  if (updated) updated.innerText = `更新于 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+  if (!games || games.length === 0) {
+    list.innerHTML = '<div class="epic-empty">当前没有可领取的免费游戏</div>';
+    return;
+  }
+  list.innerHTML = games.map(g => {
+    const end = g.endDate ? new Date(g.endDate).toLocaleString('zh-CN', { hour12: false }) : '--';
+    const thumb = g.image
+      ? `<img class="epic-game-thumb" src="${escapeHtml(g.image)}" alt="">`
+      : '<div class="epic-game-thumb"></div>';
+    const link = g.url
+      ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(g.url)}" target="_blank" rel="noopener">打开页面</a>`
+      : '';
+    return `
+      <div class="epic-game-row">
+        ${thumb}
+        <span class="epic-game-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</span>
+        <span class="epic-game-deadline">截止 ${escapeHtml(end)}</span>
+        ${link}
+      </div>`;
+  }).join('');
+}
+
+function renderEpicRecords(records) {
+  const box = document.getElementById('epic-records');
+  if (!box) return;
+  if (!records || records.length === 0) {
+    box.innerHTML = '<div class="epic-empty">暂无领取记录</div>';
+    return;
+  }
+  box.innerHTML = records.map(r => `
+    <div class="epic-record-row">
+      <span class="epic-badge ${r.ok ? 'ok' : 'err'}">${r.ok ? '成功' : '失败'}</span>
+      <span class="epic-record-time">${formatEpicTime(r.at)}</span>
+      <span class="epic-record-title" title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</span>
+      <span class="epic-record-time">${escapeHtml(r.message || '')}</span>
+    </div>`).join('');
+}
+
+async function fetchEpicStatus() {
+  try {
+    const res = await fetch('/api/epic/status').then(r => r.json());
+    if (res.success) renderEpicRecords(res.data?.records || []);
+  } catch {}
+}
+
+async function fetchEpicFreeGames(manual = false) {
+  const list = document.getElementById('epic-games-list');
+  if (manual && list) list.innerHTML = '<div class="epic-empty">正在获取免费游戏列表...</div>';
+  try {
+    const res = await fetch('/api/epic/free-games').then(r => r.json());
+    if (res.success) renderEpicGames(res.data || []);
+    else if (list) list.innerHTML = `<div class="epic-empty">获取失败：${escapeHtml(res.message || '')}</div>`;
+  } catch (e) {
+    if (list) list.innerHTML = `<div class="epic-empty">获取失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function openEpicModal(accountId) {
+  const acc = accountId ? epicAccountCache.find(a => a.id === accountId) : null;
+  document.getElementById('epic-modal-title').innerText = acc ? `编辑 Epic 账号：${acc.name}` : '添加 Epic 账号';
+  document.getElementById('epic-account-name').value = acc ? acc.name : '';
+  document.getElementById('epic-account-name').dataset.accountId = acc ? acc.id : '';
+  document.getElementById('epic-session-input').value = '';
+  openModal('epic-account-modal');
+}
+
+async function saveEpicAccount() {
+  const nameEl = document.getElementById('epic-account-name');
+  const sessionEl = document.getElementById('epic-session-input');
+  const accountId = nameEl.dataset.accountId || '';
+  const name = nameEl.value.trim();
+  const session = sessionEl.value.trim();
+
+  if (!name && !accountId) return alert('请填写账号备注名称');
+
+  try {
+    const res = await fetch('/api/epic/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(accountId ? { id: accountId, name } : { name })
+    }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '保存失败');
+
+    const savedId = res.data?.id || accountId;
+    if (session && savedId) {
+      const sres = await fetch(`/api/epic/accounts/${savedId}/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session })
+      }).then(r => r.json());
+      if (!sres.success) throw new Error(sres.message || '会话导入失败');
+    }
+
+    closeModal('epic-account-modal');
+    await fetchEpicAccounts();
+    alert('Epic 账号已保存');
+  } catch (e) {
+    alert(`保存失败：${e.message}`);
+  }
+}
+
+async function verifyEpicSession(accountId) {
+  const acc = epicAccountCache.find(a => a.id === accountId);
+  if (!confirm(`校验 Epic 账号「${acc?.name || accountId}」的会话是否有效？（会启动一次无头浏览器，约 10 秒）`)) return;
+  try {
+    const res = await fetch(`/api/epic/accounts/${accountId}/verify`, { method: 'POST' }).then(r => r.json());
+    alert(res.success ? (res.data.valid ? '✅ 会话有效（已登录）' : `❌ ${res.data.message}`) : `校验失败：${res.message}`);
+    await fetchEpicAccounts();
+  } catch (e) {
+    alert(`校验异常：${e.message}`);
+  }
+}
+
+async function toggleEpicAccount(accountId) {
+  const acc = epicAccountCache.find(a => a.id === accountId);
+  if (!acc) return;
+  try {
+    await fetch('/api/epic/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: accountId, name: acc.name, enabled: !acc.enabled })
+    });
+    await fetchEpicAccounts();
+  } catch (e) {
+    alert(`操作失败：${e.message}`);
+  }
+}
+
+async function deleteEpicAccount(accountId) {
+  const acc = epicAccountCache.find(a => a.id === accountId);
+  if (!confirm(`确定删除 Epic 账号「${acc?.name || accountId}」吗？`)) return;
+  try {
+    const res = await fetch(`/api/epic/accounts/${accountId}`, { method: 'DELETE' }).then(r => r.json());
+    if (!res.success) alert(res.message || '删除失败');
+    await fetchEpicAccounts();
+  } catch (e) {
+    alert(`删除异常：${e.message}`);
+  }
+}
+
+async function claimEpic(accountId) {
+  const label = accountId
+    ? `Epic 账号「${epicAccountCache.find(a => a.id === accountId)?.name || accountId}」`
+    : '全部已启用的 Epic 账号';
+  if (!confirm(`立即为${label}领取当前免费游戏？会启动无头浏览器，可能持续 1~2 分钟。`)) return;
+  const btn = accountId ? null : document.getElementById('btn-epic-claim-all');
+  const orig = btn ? btn.innerHTML : '';
+  if (btn) btn.innerHTML = '⏳ 领取中...';
+  try {
+    const res = await fetch('/api/epic/claim', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(accountId ? { accountId } : {})
+    }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '领取失败');
+    await fetchEpicAccounts();
+    await fetchEpicStatus();
+  } catch (e) {
+    alert(`领取异常：${e.message}`);
+  } finally {
+    if (btn) btn.innerHTML = orig;
+  }
+}
+
+async function refreshEpicTab() {
+  await fetchEpicAccounts();
+  await fetchEpicStatus();
+  if (!document.getElementById('epic-games-list')?.dataset.loaded) {
+    await fetchEpicFreeGames(false);
+    const el = document.getElementById('epic-games-list');
+    if (el) el.dataset.loaded = '1';
   }
 }

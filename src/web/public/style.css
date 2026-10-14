@@ -152,6 +152,145 @@ body {
   color: var(--text-sub);
 }
 
+/* ===== Epic 免费游戏领取 ===== */
+.epic-accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.epic-account-card {
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.epic-account-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.epic-account-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epic-account-meta {
+  font-size: 11.5px;
+  color: var(--text-sub);
+  line-height: 1.7;
+}
+
+.epic-account-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.epic-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.epic-badge.ok { background: rgba(16, 185, 129, 0.15); color: #34D399; border-color: rgba(16, 185, 129, 0.35); }
+.epic-badge.err { background: rgba(239, 68, 68, 0.15); color: #F87171; border-color: rgba(239, 68, 68, 0.35); }
+.epic-badge.warn { background: rgba(245, 158, 11, 0.16); color: #F59E0B; border-color: rgba(245, 158, 11, 0.35); }
+.epic-badge.idle { background: rgba(148, 163, 184, 0.14); color: var(--text-sub); }
+
+.epic-games-list,
+.epic-records {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.epic-game-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.epic-game-thumb {
+  width: 64px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: rgba(148, 163, 184, 0.15);
+  flex: 0 0 auto;
+}
+
+.epic-game-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epic-game-deadline {
+  font-size: 11.5px;
+  color: var(--text-sub);
+  white-space: nowrap;
+}
+
+.epic-record-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+}
+
+.epic-record-time {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.epic-record-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epic-empty {
+  font-size: 12.5px;
+  color: var(--text-sub);
+  padding: 14px 0;
+  text-align: center;
+}
+
+.section-actions-inline {
+  font-size: 11.5px;
+  color: var(--text-sub);
+}
+
 /* Master Header Dashboard */
 .header {
   background: var(--card-bg);

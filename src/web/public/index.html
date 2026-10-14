@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.4.12</span>
+            <span class="version-label" id="version-label">v1.5.0</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -267,10 +267,36 @@
 
     <!-- ===== 选项卡面板：Epic 游戏领取 ===== -->
     <div class="tab-panel" id="tab-panel-epic">
-      <section class="section-card wip-card">
-        <div class="wip-icon">🎮</div>
-        <div class="wip-title">Epic 游戏领取</div>
-        <div class="wip-desc">功能开发中，敬请期待</div>
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title"><span>🎮</span> Epic 免费游戏领取</div>
+          <div class="accounts-header-actions">
+            <button class="btn btn-secondary btn-sm" id="btn-epic-add">➕ 添加账号</button>
+            <button class="btn btn-secondary btn-sm" id="btn-epic-refresh-games">🔄 刷新免费游戏</button>
+            <button class="btn btn-primary btn-sm" id="btn-epic-claim-all">▶️ 立即领取全部</button>
+          </div>
+        </div>
+        <div class="epic-accounts-grid" id="epic-accounts-grid"></div>
+        <div class="epic-empty" id="epic-empty">还没有 Epic 账号，点击右上角「添加账号」，导入浏览器会话后即可自动领取</div>
+      </section>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title"><span>🎁</span> 当前免费游戏</div>
+          <div class="section-actions-inline" id="epic-games-updated"></div>
+        </div>
+        <div class="epic-games-list" id="epic-games-list">
+          <div class="epic-empty">点击右上角「刷新免费游戏」获取当前可领取列表</div>
+        </div>
+      </section>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title"><span>🕒</span> 最近领取记录</div>
+        </div>
+        <div class="epic-records" id="epic-records">
+          <div class="epic-empty">暂无领取记录</div>
+        </div>
       </section>
     </div>
 
@@ -826,6 +852,31 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" id="btn-close-words-modal-btn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Epic 账号与会话导入弹窗 (Modal) -->
+  <div class="modal-backdrop" id="epic-account-modal">
+    <div class="modal-box" style="max-width: 640px;">
+      <div class="modal-header">
+        <div class="modal-title"><span>🎮</span> <span id="epic-modal-title">添加 Epic 账号</span></div>
+        <button class="btn-close" id="btn-close-epic-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">账号备注名称</label>
+          <input type="text" id="epic-account-name" class="form-input" placeholder="例如：主号">
+        </div>
+        <div class="form-group">
+          <label class="form-label">会话 Cookie / storageState</label>
+          <textarea id="epic-session-input" class="form-textarea" rows="6" placeholder="粘贴 Cookie-Editor 导出的 JSON、Playwright storageState，或 a=1; b=2 形式的 Cookie 串"></textarea>
+          <small class="form-hint">会话仅保存在本机配置文件（0600 权限），不会下发到浏览器；编辑已有账号时留空表示不修改。</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-epic-modal">取消</button>
+        <button class="btn btn-primary" id="btn-save-epic-modal">保存</button>
       </div>
     </div>
   </div>
