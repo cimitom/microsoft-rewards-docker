@@ -16,7 +16,7 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.4.11';
+const CURRENT_VERSION = '1.4.12';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 

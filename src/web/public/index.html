@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.4.11</span>
+            <span class="version-label" id="version-label">v1.4.12</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -68,6 +68,16 @@
         </div>
       </div>
     </header>
+
+    <!-- 顶层功能选项卡：微软积分 / Epic 游戏 / 施工中 -->
+    <nav class="app-tabs" id="app-tabs">
+      <button type="button" class="app-tab active" data-tab="ms">🎁 微软积分</button>
+      <button type="button" class="app-tab" data-tab="epic">🎮 Epic 游戏领取</button>
+      <button type="button" class="app-tab" data-tab="wip">🚧 施工中</button>
+    </nav>
+
+    <!-- ===== 选项卡面板：微软积分 ===== -->
+    <div class="tab-panel active" id="tab-panel-ms">
 
     <!-- 独立专属的多账号切换卡槽部分 (防止账号多了显示不全，全屏宽度自由横滑) -->
     <section class="account-selector-section" id="account-selector-section">
@@ -253,6 +263,25 @@
         </div>
       </section>
     </main>
+    </div><!-- /tab-panel-ms -->
+
+    <!-- ===== 选项卡面板：Epic 游戏领取 ===== -->
+    <div class="tab-panel" id="tab-panel-epic">
+      <section class="section-card wip-card">
+        <div class="wip-icon">🎮</div>
+        <div class="wip-title">Epic 游戏领取</div>
+        <div class="wip-desc">功能开发中，敬请期待</div>
+      </section>
+    </div>
+
+    <!-- ===== 选项卡面板：施工中 ===== -->
+    <div class="tab-panel" id="tab-panel-wip">
+      <section class="section-card wip-card">
+        <div class="wip-icon">🚧</div>
+        <div class="wip-title">施工中</div>
+        <div class="wip-desc">预留位：后续接入其他签到模块</div>
+      </section>
+    </div>
 
     <!-- 页脚 -->
     <footer class="footer">

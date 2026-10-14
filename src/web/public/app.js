@@ -582,6 +582,25 @@ function initUIEvents() {
   // 搜索节奏：输入时实时刷新预估执行时间与 3 小时窗口校验
   document.getElementById('cfg-search-interval')?.addEventListener('input', updateSearchRhythmHint);
   document.getElementById('cfg-search-jitter')?.addEventListener('input', updateSearchRhythmHint);
+
+  // 顶层功能选项卡切换（微软积分 / Epic 游戏 / 施工中）
+  document.querySelectorAll('#app-tabs .app-tab').forEach(btn => {
+    btn.addEventListener('click', () => switchAppTab(btn.getAttribute('data-tab')));
+  });
+  switchAppTab(localStorage.getItem('ms_rewards_app_tab') || 'ms', false);
+}
+
+// 切换顶层选项卡：同一时刻只显示一个面板
+function switchAppTab(tab, persist = true) {
+  const target = ['ms', 'epic', 'wip'].includes(tab) ? tab : 'ms';
+  document.querySelectorAll('#app-tabs .app-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-tab') === target);
+  });
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `tab-panel-${target}`);
+  });
+  if (persist) localStorage.setItem('ms_rewards_app_tab', target);
+  hideInstantTooltip();
 }
 
 function initSecretToggles() {
@@ -773,7 +792,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.11';
+  const current = updateInfo?.currentVersion || '1.4.12';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -813,7 +832,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.11'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.12'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -1145,21 +1164,28 @@ function getAccountAuthStatus(acc) {
 }
 
 // 下次自动启动时间：今日计划 / 即将启动 / 明日窗口 / 停用等
+// 倒计时格式化：把「距下次执行的分钟数」显示为 HH:MM
+function formatCountdown(minutes) {
+  const total = Math.max(0, Math.round(Number(minutes) || 0));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// 下次自动启动：统一只显示倒计时（如 ⏰21:50 = 21 小时 50 分后执行）
 function formatNextRun(sched) {
   if (!sched) return { text: '⏰ --', tip: '调度信息尚未就绪' };
   const windowText = `${sched.windowStart} - ${sched.windowEnd}`;
   switch (sched.status) {
-    case 'scheduled':
+    case 'scheduled': {
+      const mins = Math.max(0, Math.round(sched.minutesUntil || 0));
       return {
-        text: `⏰ ${sched.isNextDay ? '次日' : '今日'} ${sched.plannedAt}`,
-        tip: `下次自动启动：${sched.isNextDay ? '次日' : '今日'} ${sched.plannedAt}（约 ${sched.minutesUntil} 分钟后）\n作息窗口：${windowText}`
+        text: `⏰ ${formatCountdown(mins)}`,
+        tip: `距下次自动启动约 ${Math.floor(mins / 60)} 小时 ${mins % 60} 分\n作息窗口：${windowText}`
       };
+    }
     case 'imminent':
-      return { text: '⏰ 即将启动', tip: `已进入 ${windowText} 窗口，调度器将在下一分钟启动打卡` };
-    case 'done':
-      return { text: '⏰ 明日窗口', tip: `今日已完成，下次为明日 ${windowText} 窗口内随机启动` };
-    case 'window-passed':
-      return { text: '⏰ 明日窗口', tip: `今日 ${windowText} 窗口已过且未执行，下次为明日该窗口内随机启动` };
+      return { text: '⏰ 00:00', tip: `已进入 ${windowText} 窗口，调度器下一分钟启动` };
     case 'disabled':
       return { text: '⏰ 已停用', tip: '该账号已停用，不会自动启动' };
     case 'no-credential':

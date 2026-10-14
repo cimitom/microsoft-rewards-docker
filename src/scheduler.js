@@ -26,17 +26,32 @@ class Scheduler {
 
   initTodayPlan() {
     const today = this.getTodayNum();
-    if (!this.plannedDailyRuns[today]) {
-      this.plannedDailyRuns[today] = {};
-    }
+    this.ensureDayPlans(today, true);
 
+    // 只清理历史日期，保留今天与预排的明天
+    const todayKey = String(today);
+    for (const key of Object.keys(this.plannedDailyRuns)) {
+      if (key < todayKey) delete this.plannedDailyRuns[key];
+    }
+  }
+
+  /**
+   * 为指定日期生成各账号的当日计划（已存在则跳过）。
+   * isToday=true 时，若当前已在窗口内则把偏移推到「现在之后」，避免中途启动立刻开跑。
+   */
+  ensureDayPlans(dateNum, isToday) {
+    const key = String(dateNum);
+    if (!this.plannedDailyRuns[key]) {
+      this.plannedDailyRuns[key] = {};
+    }
+    const plans = this.plannedDailyRuns[key];
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
 
     const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
     for (let i = 0; i < accounts.length; i++) {
       const acc = accounts[i];
-      if (this.plannedDailyRuns[today][acc.id]) continue;
+      if (plans[acc.id]) continue;
 
       const slot = acc.timeSlot || configManager.getDefaultTimeSlot(i);
       const startHour = slot.startHour ?? 9;
@@ -51,13 +66,15 @@ class Scheduler {
       const maxDelay = Math.max(1, Math.min(59, slot.randomDelayMin || 60));
       let offset = Math.floor(Math.random() * maxDelay);
 
-      // 容器在窗口中途启动时不要立刻开跑，仍然随机延后 1~20 分钟（保持拟人化）
-      const nowOffset = this.minutesIntoWindow(startMin, wraps, nowMin);
-      if (nowOffset >= offset && nowOffset < windowLength) {
-        offset = Math.min(windowLength - 1, nowOffset + 1 + Math.floor(Math.random() * 20));
+      if (isToday) {
+        // 容器在窗口中途启动时不要立刻开跑，仍然随机延后 1~20 分钟（保持拟人化）
+        const nowOffset = this.minutesIntoWindow(startMin, wraps, nowMin);
+        if (nowOffset >= offset && nowOffset < windowLength) {
+          offset = Math.min(windowLength - 1, nowOffset + 1 + Math.floor(Math.random() * 20));
+        }
       }
 
-      this.plannedDailyRuns[today][acc.id] = {
+      plans[acc.id] = {
         startMin,
         endMin,
         wraps,
@@ -66,43 +83,64 @@ class Scheduler {
         executed: false
       };
     }
+  }
 
-    // 清理历史日期的计划，避免 plannedDailyRuns 无限增长
-    // 注意：对象 key 是字符串，today 是数字，必须转成字符串比较
-    const todayKey = String(today);
-    for (const key of Object.keys(this.plannedDailyRuns)) {
-      if (key !== todayKey) delete this.plannedDailyRuns[key];
-    }
+  /** 日期编号（YYYYMMDD）偏移若干天 */
+  shiftDateNum(dateNum, deltaDays) {
+    const d = new Date(
+      Math.floor(dateNum / 10000),
+      Math.floor((dateNum % 10000) / 100) - 1,
+      dateNum % 100,
+      12, 0, 0, 0
+    );
+    d.setDate(d.getDate() + deltaDays);
+    return Number(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`);
+  }
+
+  /** 某天计划的绝对执行时间戳（窗口起点日 + 偏移分钟） */
+  planTimestamp(dateNum, plan, baseDayOffset = 0) {
+    const base = new Date(
+      Math.floor(dateNum / 10000),
+      Math.floor((dateNum % 10000) / 100) - 1,
+      dateNum % 100
+    );
+    if (baseDayOffset) base.setDate(base.getDate() + baseDayOffset);
+    return base.getTime() + (plan.startMin + plan.offset) * 60000;
   }
 
   /**
-   * 供 WebUI 展示：每个账号的下次启动情况。
-   * 返回 { [accountId]: { status, plannedAt, minutesUntil, windowStart, windowEnd, isNextDay } }
-   * status: scheduled(今日已排定) / imminent(窗口内即将启动) / done(今日已完成)
+   * 供 WebUI 展示：每个账号距下次自动执行的倒计时。
+   * 返回 { [accountId]: { status, minutesUntil, nextRunAt, windowStart, windowEnd } }
+   * status: scheduled(已排定) / imminent(即将启动)
    *         / no-credential(未配凭据) / disabled(账号停用) / schedule-off(定时关闭)
    */
   getNextRunInfo() {
     const cfg = configManager.get();
     const scheduleEnabled = cfg.schedule?.enabled !== false;
-    if (scheduleEnabled) this.initTodayPlan();
-
     const today = this.getTodayNum();
-    const plans = this.plannedDailyRuns[today] || {};
+    const tomorrow = this.shiftDateNum(today, 1);
+
+    if (scheduleEnabled) {
+      this.initTodayPlan();
+      // 预排明天：这样「今日已完成」的账号也能给出确切的下次执行倒计时
+      this.ensureDayPlans(tomorrow, false);
+    }
+
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
+    const todayPlans = this.plannedDailyRuns[String(today)] || {};
+    const tomorrowPlans = this.plannedDailyRuns[String(tomorrow)] || {};
     const fmt = (m) => `${String(Math.floor((((m % 1440) + 1440) % 1440) / 60)).padStart(2, '0')}:${String(((m % 60) + 60) % 60).padStart(2, '0')}`;
     const result = {};
 
-    const accounts = configManager.getAccounts();
-    accounts.forEach((acc, index) => {
+    configManager.getAccounts().forEach((acc, index) => {
       const slot = acc.timeSlot || configManager.getDefaultTimeSlot(index);
       const startHour = slot.startHour ?? 9;
       const endHour = slot.endHour ?? ((startHour + 4) % 24);
       const info = {
-        status: 'scheduled',
-        plannedAt: null,
+        status: 'unknown',
         minutesUntil: null,
-        isNextDay: false,
+        nextRunAt: null,
         windowStart: fmt(startHour * 60),
         windowEnd: fmt(endHour * 60)
       };
@@ -114,37 +152,30 @@ class Scheduler {
       } else if (!scheduleEnabled) {
         info.status = 'schedule-off';
       } else {
-        const plan = plans[acc.id];
-        if (plan?.executed) {
-          info.status = 'done';
-        } else if (plan) {
-          // 计划时刻 = 本次窗口起点 + 随机偏移。
-          // 跨零点窗口要注意：若当前处于凌晨尾部（如 21:00-01:00 的 00:30），
-          // 窗口起点在「昨天」，否则会把计划时刻算到明天去。
-          const startDate = new Date(now);
-          startDate.setHours(0, 0, 0, 0);
-          startDate.setMinutes(plan.startMin);
-          if (plan.wraps && nowMin < plan.endMin) {
-            startDate.setDate(startDate.getDate() - 1);
-          }
-          const planAt = new Date(startDate.getTime() + plan.offset * 60000);
-          const diffMin = Math.round((planAt.getTime() - now.getTime()) / 60000);
-          const nowOffset = this.minutesIntoWindow(plan.startMin, plan.wraps, nowMin);
-          const inWindow = nowOffset >= 0 && nowOffset < plan.windowLength;
+        const todayPlan = todayPlans[acc.id];
+        const tomorrowPlan = tomorrowPlans[acc.id];
+        let nextAt = null;
 
-          if (inWindow && diffMin > 0) {
-            info.status = 'scheduled';
-            info.plannedAt = fmt(planAt.getHours() * 60 + planAt.getMinutes());
-            info.minutesUntil = diffMin;
-            info.isNextDay = planAt.getDate() !== now.getDate();
-          } else if (inWindow) {
-            // 计划时刻已过但还没执行：调度器下一分钟就会启动
-            info.status = 'imminent';
-            info.minutesUntil = 0;
+        if (todayPlan && !todayPlan.executed) {
+          // 跨零点窗口处于凌晨尾部时，窗口起点在昨天
+          const baseDayOffset = (todayPlan.wraps && nowMin < todayPlan.endMin) ? -1 : 0;
+          const plannedAt = this.planTimestamp(today, todayPlan, baseDayOffset);
+          if (plannedAt > now.getTime()) {
+            nextAt = plannedAt;
           } else {
-            // 今日窗口已经过去（且今日未执行），下次要等明天
-            info.status = 'window-passed';
+            const nowOffset = this.minutesIntoWindow(todayPlan.startMin, todayPlan.wraps, nowMin);
+            const inWindow = nowOffset >= 0 && nowOffset < todayPlan.windowLength;
+            if (inWindow) nextAt = now.getTime(); // 窗口内，调度器下一分钟启动
           }
+        }
+        if (nextAt === null && tomorrowPlan) {
+          nextAt = this.planTimestamp(tomorrow, tomorrowPlan, 0);
+        }
+
+        if (nextAt !== null) {
+          info.nextRunAt = nextAt;
+          info.minutesUntil = Math.max(0, Math.round((nextAt - now.getTime()) / 60000));
+          info.status = info.minutesUntil <= 0 ? 'imminent' : 'scheduled';
         }
       }
       result[acc.id] = info;
