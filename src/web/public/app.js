@@ -755,7 +755,7 @@ async function fetchSystemMetrics() {
       if (pill && d.containerDetails) {
         const cd = d.containerDetails;
         const memLine = cd.containerMemory
-          ? `🧠 容器内存占用: ${cd.containerMemory} / ${cd.containerMemoryLimit}${cd.containerMemoryPercent !== null ? ` (${cd.containerMemoryPercent}%)` : ''}`
+          ? `🧠 容器内存占用: ${cd.containerMemory} / ${cd.containerMemoryLimit}${cd.containerMemoryPercent !== null ? ` (${cd.containerMemoryPercent}%)` : ''}${cd.containerMemorySource ? ` [来源: ${cd.containerMemorySource}]` : ''}`
           : `🧠 容器内存占用: 读取不到 cgroup，回退为 Node 进程 ${cd.processRss}`;
         const cpuLine = d.cpuIsContainer
           ? `💻 容器 CPU 占用: ${d.cpu}（占单核百分比）`
@@ -773,7 +773,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.9';
+  const current = updateInfo?.currentVersion || '1.4.10';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -813,7 +813,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.9'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.10'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -1414,6 +1414,10 @@ async function fetchConfig() {
 // ===== 全局搜索节奏（任务与防风控） =====
 const SEARCH_MAX_ROUNDS = 20;            // 单账号最多 20 次搜索（60 分 ÷ 3 分/次）
 const SEARCH_WINDOW_MAX_SEC = 3 * 3600;  // 4 小时时段抛去首小时随机启动 = 3 小时执行窗口
+const SEARCH_INTERVAL_MIN = 60;          // 安全下限：基础间隔（秒）
+const SEARCH_INTERVAL_MAX = 900;
+const SEARCH_JITTER_MIN = 30;            // 安全下限：随机浮动（秒）
+const SEARCH_JITTER_MAX = 300;
 
 function readSearchRhythmInputs() {
   const intervalEl = document.getElementById('cfg-search-interval');
@@ -1422,8 +1426,8 @@ function readSearchRhythmInputs() {
   let jitter = parseInt(jitterEl?.value, 10);
   if (isNaN(interval)) interval = 180;
   if (isNaN(jitter)) jitter = 30;
-  interval = Math.max(30, Math.min(900, interval));
-  jitter = Math.max(0, Math.min(300, jitter));
+  interval = Math.max(1, Math.min(SEARCH_INTERVAL_MAX, interval));
+  jitter = Math.max(0, Math.min(SEARCH_JITTER_MAX, jitter));
   return { interval, jitter };
 }
 
@@ -1435,26 +1439,43 @@ function formatDurationCN(sec) {
   return `${m} 分钟`;
 }
 
-// 更新预估执行时间提示；返回是否满足「≤ 3 小时」的硬约束
+// 校验搜索节奏，返回错误文案；空字符串表示通过
+function validateSearchRhythm() {
+  const { interval, jitter } = readSearchRhythmInputs();
+  if (interval < SEARCH_INTERVAL_MIN) {
+    return `基础间隔不能低于 ${SEARCH_INTERVAL_MIN} 秒（防风控安全下限）`;
+  }
+  if (jitter < SEARCH_JITTER_MIN) {
+    return `随机浮动不能低于 ${SEARCH_JITTER_MIN} 秒（防风控安全下限）`;
+  }
+  const slowestSec = (interval + jitter) * SEARCH_MAX_ROUNDS;
+  if (slowestSec > SEARCH_WINDOW_MAX_SEC) {
+    return `按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算最慢需要 ${formatDurationCN(slowestSec)}，`
+      + `超过 3 小时上限；请让「基础间隔 + 随机浮动」≤ 540 秒`;
+  }
+  return '';
+}
+
+// 更新预估执行时间提示；返回是否通过全部校验
 function updateSearchRhythmHint() {
   const hint = document.getElementById('cfg-search-rhythm-hint');
   if (!hint) return true;
   const { interval, jitter } = readSearchRhythmInputs();
-  const fastestSec = Math.max(30, interval - jitter) * SEARCH_MAX_ROUNDS;
+  // 随机浮动是「只延后」的叠加模型：单次实际等待 = 间隔 + 0~浮动 秒
+  const fastestSec = interval * SEARCH_MAX_ROUNDS;
   const slowestSec = (interval + jitter) * SEARCH_MAX_ROUNDS;
-  const ok = slowestSec <= SEARCH_WINDOW_MAX_SEC;
+  const err = validateSearchRhythm();
 
-  if (ok) {
-    hint.innerHTML = `按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算：单次 ${interval}±${jitter} 秒，`
+  if (!err) {
+    hint.innerHTML = `按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算：单次 ${interval}~${interval + jitter} 秒，`
       + `总耗时约 <strong>${formatDurationCN(fastestSec)} ~ ${formatDurationCN(slowestSec)}</strong>，`
-      + `在 3 小时执行窗口内 ✅`;
+      + `在 3 小时执行窗口内 ✅（安全下限：间隔 ≥ ${SEARCH_INTERVAL_MIN} 秒、浮动 ≥ ${SEARCH_JITTER_MIN} 秒）`;
     hint.style.color = '';
   } else {
-    hint.innerHTML = `⚠️ 按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算最慢需要 <strong>${formatDurationCN(slowestSec)}</strong>，`
-      + `已超过 3 小时上限。请让「基础间隔 + 随机浮动」≤ 540 秒（例如 180+30）。`;
+    hint.innerHTML = `⚠️ ${err}`;
     hint.style.color = '#F87171';
   }
-  return ok;
+  return !err;
 }
 
 function populateSettingsForm() {
@@ -1576,9 +1597,11 @@ async function saveSettingsFromModal() {
     alert('配置尚未加载完成，为避免覆盖账号数据，请稍后重试。');
     return;
   }
-  // 搜索节奏必须落在 3 小时执行窗口内，否则拒绝保存（避免搜索跑不完就跨到下一个时段）
-  if (!updateSearchRhythmHint()) {
-    alert('搜索节奏超出 3 小时执行窗口：请让「基础间隔 + 随机浮动」≤ 540 秒（按最多 20 次搜索估算）。');
+  // 搜索节奏必须满足安全下限并落在 3 小时执行窗口内，否则拒绝保存
+  const rhythmError = validateSearchRhythm();
+  if (rhythmError) {
+    updateSearchRhythmHint();
+    alert(`搜索节奏设置无效：${rhythmError}`);
     return;
   }
   const searchRhythm = readSearchRhythmInputs();

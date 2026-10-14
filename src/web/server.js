@@ -16,7 +16,7 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.4.9';
+const CURRENT_VERSION = '1.4.10';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -41,8 +41,9 @@ function getHostCpuUsage() {
 // ===== 容器资源监控 =====
 // 说明：os.cpus()/os.totalmem() 读到的是「宿主机整机」数据，不是容器自身占用。
 // 在 Docker/NAS 里必须读 cgroup，才能得到用户实际关心的容器 CPU 与内存。
-// MSR_CGROUP_DIR 仅用于测试时指向伪造的 cgroup 目录。
-const CGROUP_ROOT = process.env.MSR_CGROUP_DIR || '/sys/fs/cgroup';
+// 不同 NAS 的 cgroup 形态差异很大（v1/v2、容器内私有命名空间、宿主机挂载），
+// 因此按 /proc/self/cgroup + /proc/self/mountinfo 动态解析容器自身的 cgroup 目录。
+// MSR_CGROUP_DIR 仅用于测试时覆盖解析结果。
 
 function readTextFile(filePath) {
   try {
@@ -52,17 +53,95 @@ function readTextFile(filePath) {
   }
 }
 
+/** 解析 /proc/self/cgroup：v2 统一层级路径 + v1 各 controller 路径 */
+function parseSelfCgroup() {
+  const text = readTextFile('/proc/self/cgroup') || '';
+  const v2Match = text.match(/^0::(.*)$/m);
+  const v1 = {};
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\d+:([^:]*):(.*)$/);
+    if (!m) continue;
+    for (const c of m[1].split(',')) {
+      if (c) v1[c] = m[2];
+    }
+  }
+  return { v2: v2Match ? v2Match[1] : null, v1 };
+}
+
+/** 解析 /proc/self/mountinfo 中的 cgroup 挂载点 */
+function parseCgroupMounts() {
+  const text = readTextFile('/proc/self/mountinfo') || '';
+  const mounts = [];
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    const parts = line.split(' ');
+    const sep = parts.indexOf('-');
+    if (sep === -1) continue;
+    mounts.push({
+      root: parts[3] || '/',
+      mountPoint: parts[4] || '',
+      fstype: parts[sep + 1] || '',
+      superOptions: parts[sep + 3] || ''
+    });
+  }
+  return mounts;
+}
+
+function joinCgroupPath(mountPoint, mountRoot, cgroupPath) {
+  let rel = cgroupPath || '/';
+  if (mountRoot && mountRoot !== '/' && rel.startsWith(mountRoot)) {
+    rel = rel.slice(mountRoot.length);
+  }
+  const joined = path.join(mountPoint, rel || '/');
+  // 去掉末尾多余的 '/'（path.join('/sys/fs/cgroup', '/') 会得到带尾斜杠的结果）
+  return joined.length > 1 ? joined.replace(/\/+$/, '') : joined;
+}
+
+/**
+ * 返回容器自身 cgroup 目录候选（按优先级）。
+ * controller 仅用于 cgroup v1（'memory' / 'cpuacct'）。
+ */
+function resolveCgroupDirs(controller) {
+  const override = process.env.MSR_CGROUP_DIR;
+  if (override) {
+    // 测试用：直接指定目录，v2/v1 文件都尝试
+    return [{ dir: override, version: 2 }, { dir: override, version: 1 }];
+  }
+
+  const { v2, v1 } = parseSelfCgroup();
+  const mounts = parseCgroupMounts();
+  const dirs = [];
+
+  if (v2 !== null) {
+    const mount = mounts.find(m => m.fstype === 'cgroup2');
+    if (mount) dirs.push({ dir: joinCgroupPath(mount.mountPoint, mount.root, v2), version: 2 });
+  }
+  const cgPath = v1[controller];
+  if (cgPath !== undefined) {
+    const mount = mounts.find(m => m.fstype === 'cgroup' && m.superOptions.split(',').includes(controller));
+    if (mount) dirs.push({ dir: joinCgroupPath(mount.mountPoint, mount.root, cgPath), version: 1 });
+  }
+  // 兜底：cgroup 命名空间私有时，/sys/fs/cgroup 根目录就是容器自身
+  if (v2 === '/') dirs.push({ dir: '/sys/fs/cgroup', version: 2 });
+  if (v1[controller] === '/') dirs.push({ dir: '/sys/fs/cgroup', version: 1 });
+
+  return dirs;
+}
+
 /** 容器累计 CPU 时间（微秒），读不到返回 null */
 function readContainerCpuUsec() {
-  // cgroup v2: /sys/fs/cgroup/cpu.stat -> usage_usec
-  const v2 = readTextFile(path.join(CGROUP_ROOT, 'cpu.stat'));
-  if (v2) {
-    const m = v2.match(/^usage_usec\s+(\d+)/m);
-    if (m) return Number(m[1]);
+  for (const { dir, version } of resolveCgroupDirs('cpuacct')) {
+    if (version === 2) {
+      // cgroup v2: cpu.stat -> usage_usec
+      const stat = readTextFile(path.join(dir, 'cpu.stat'));
+      const m = stat && stat.match(/^usage_usec\s+(\d+)/m);
+      if (m) return Number(m[1]);
+      continue;
+    }
+    // cgroup v1: cpuacct.usage 单位是纳秒
+    const raw = readTextFile(path.join(dir, 'cpuacct.usage'));
+    if (raw && /^\d+$/.test(raw)) return Math.floor(Number(raw) / 1000);
   }
-  // cgroup v1: cpuacct.usage 单位是纳秒
-  const v1 = readTextFile(path.join(CGROUP_ROOT, 'cpuacct/cpuacct.usage'));
-  if (v1 && /^\d+$/.test(v1)) return Math.floor(Number(v1) / 1000);
   return null;
 }
 
@@ -97,36 +176,85 @@ function getContainerCpuPercent() {
  * 否则会把页面缓存也算成占用。读不到 cgroup 时返回 null。
  */
 function readContainerMemory() {
-  // cgroup v2
-  let current = readTextFile(path.join(CGROUP_ROOT, 'memory.current'));
-  let limitRaw = readTextFile(path.join(CGROUP_ROOT, 'memory.max'));
-  let stat = readTextFile(path.join(CGROUP_ROOT, 'memory.stat'));
-  if (current) {
-    const inactiveFile = stat ? Number((stat.match(/^inactive_file\s+(\d+)/m) || [])[1] || 0) : 0;
-    const limit = limitRaw && limitRaw !== 'max' ? Number(limitRaw) : null;
-    return {
-      usage: Math.max(0, Number(current) - inactiveFile),
-      limit: limit && Number.isFinite(limit) ? limit : null
-    };
-  }
-  // cgroup v1
-  current = readTextFile(path.join(CGROUP_ROOT, 'memory/memory.usage_in_bytes'));
-  limitRaw = readTextFile(path.join(CGROUP_ROOT, 'memory/memory.limit_in_bytes'));
-  stat = readTextFile(path.join(CGROUP_ROOT, 'memory/memory.stat'));
-  if (current) {
+  for (const { dir, version } of resolveCgroupDirs('memory')) {
+    if (version === 2) {
+      const current = readTextFile(path.join(dir, 'memory.current'));
+      if (current === null) continue;
+      const stat = readTextFile(path.join(dir, 'memory.stat'));
+      const limitRaw = readTextFile(path.join(dir, 'memory.max'));
+      const inactiveFile = stat ? Number((stat.match(/^inactive_file\s+(\d+)/m) || [])[1] || 0) : 0;
+      const limit = limitRaw && limitRaw !== 'max' ? Number(limitRaw) : null;
+      return {
+        usage: Math.max(0, Number(current) - inactiveFile),
+        limit: limit && Number.isFinite(limit) ? limit : null,
+        source: 'cgroup v2'
+      };
+    }
+    const current = readTextFile(path.join(dir, 'memory.usage_in_bytes'));
+    if (current === null) continue;
+    const stat = readTextFile(path.join(dir, 'memory.stat'));
+    const limitRaw = readTextFile(path.join(dir, 'memory.limit_in_bytes'));
     const inactiveFile = stat ? Number((stat.match(/^total_inactive_file\s+(\d+)/m) || [])[1] || 0) : 0;
     const limitNum = limitRaw ? Number(limitRaw) : null;
     return {
       usage: Math.max(0, Number(current) - inactiveFile),
       // v1 的“无限制”是一个极大的数字（约 2^63），需要过滤掉
-      limit: limitNum && limitNum < 1e15 ? limitNum : null
+      limit: limitNum && limitNum < 1e15 ? limitNum : null,
+      source: 'cgroup v1'
     };
   }
   return null;
 }
 
+/**
+ * 兜底方案：累计容器内所有进程的 RSS。
+ * 容器 PID 命名空间下 /proc 只包含本容器进程，这样即使读不到 cgroup，
+ * 也能得到 node + Chromium 等全部进程的合计占用，而不是只有 Node 一个进程。
+ */
+function sumContainerProcessRss() {
+  const selfCgroup = readTextFile('/proc/self/cgroup') || '';
+  let totalBytes = 0;
+  let counted = 0;
+  let entries = [];
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch {
+    return null;
+  }
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    // 只统计与本进程同 cgroup 的进程，避免 --pid=host 时把宿主机进程也算进来
+    if (readTextFile(`/proc/${name}/cgroup`) !== selfCgroup) continue;
+    const status = readTextFile(`/proc/${name}/status`);
+    const m = status && status.match(/^VmRSS:\s+(\d+)\s+kB/m);
+    if (m) {
+      totalBytes += Number(m[1]) * 1024;
+      counted++;
+    }
+  }
+  if (counted === 0) return null;
+  return { usage: totalBytes, limit: null, source: `进程合计 (${counted} 个进程)` };
+}
+
 let lastPingMs = 28;
 let lastPingTime = 0;
+
+/**
+ * 语义化版本号比较（返回 >0 表示 a 比 b 新）。
+ * 不能用字符串直接比较：'1.4.9' > '1.4.10' 在字符串比较下是 true，会误报有新版本。
+ */
+function compareVersions(a, b) {
+  const parse = v => String(v || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 async function getNetworkPing() {
   if (Date.now() - lastPingTime < 8000) return lastPingMs;
   const start = Date.now();
@@ -186,8 +314,9 @@ export function createServer() {
       const usedMemBytes = totalMemBytes - freeMemBytes;
       const hostMemPercent = Math.round((usedMemBytes / totalMemBytes) * 100);
 
-      // 容器自身内存（含 Chromium 等子进程），这才是用户想看的数字
-      const containerMem = readContainerMemory();
+      // 容器自身内存（含 Chromium 等子进程），这才是用户想看的数字。
+      // 读不到 cgroup 时退而求其次，累计容器内所有进程的 RSS。
+      const containerMem = readContainerMemory() || sumContainerProcessRss();
       const memUsage = process.memoryUsage();
       const procMemMB = Math.round(memUsage.rss / (1024 * 1024));
       const heapUsedMB = Math.round(memUsage.heapUsed / (1024 * 1024));
@@ -227,6 +356,7 @@ export function createServer() {
             containerMemory: containerMem ? `${containerMemMB} MB` : null,
             containerMemoryLimit: containerLimitMB ? `${containerLimitMB} MB` : '无限制',
             containerMemoryPercent: containerMemPercent,
+            containerMemorySource: containerMem?.source || null,
             hostMemory: `${usedMemGB} GB / ${totalMemGB} GB (${hostMemPercent}%)`,
             hostCpu: `${hostCpuPercent}%`,
             uptime: uptimeStr,
@@ -258,7 +388,7 @@ export function createServer() {
 
       const currentVersion = CURRENT_VERSION;
       const latestTag = cachedRelease?.tag_name?.replace(/^v/, '') || currentVersion;
-      const hasUpdate = latestTag !== currentVersion && latestTag > currentVersion;
+      const hasUpdate = compareVersions(latestTag, currentVersion) > 0;
 
       res.json({
         success: true,

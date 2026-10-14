@@ -252,23 +252,25 @@ class BrowserManager extends EventEmitter {
     // 全局搜索节奏（配置中心「任务与防风控」→ 搜索节奏设置）
     const cfg = configManager.get();
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-    const wantedIntervalSec = clamp(Number(cfg.tasks?.searchIntervalSec ?? 180) || 180, 30, 900);
-    const jitterSec = clamp(Number(cfg.tasks?.searchJitterSec ?? 30) || 0, 0, 300);
+    // 安全下限：基础间隔 ≥ 60 秒、随机浮动 ≥ 30 秒，避免过于密集触发风控
+    const wantedIntervalSec = clamp(Number(cfg.tasks?.searchIntervalSec ?? 180) || 180, 60, 900);
+    const jitterSec = clamp(Number(cfg.tasks?.searchJitterSec ?? 30) || 30, 30, 300);
     // 3 小时硬上限：任何情况下 次数 × (间隔 + 浮动) 不得超过 10800 秒
     const MAX_WINDOW_SEC = 3 * 3600;
     const perSearchBudget = Math.floor(MAX_WINDOW_SEC / totalSearches);
-    const intervalSec = Math.max(30, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
-    const estimatedSec = totalSearches * intervalSec + Math.floor(totalSearches * jitterSec / 2);
+    const intervalSec = Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
+    // 随机浮动为「只延后」的叠加模型：单次实际等待 = 基础间隔 + 0~浮动 秒
+    const estimatedSec = totalSearches * (intervalSec + Math.floor(jitterSec / 2));
     const worstSec = totalSearches * (intervalSec + jitterSec);
     if (intervalSec < wantedIntervalSec) {
-      logger.log('⚠️', `为保证 ${totalSearches} 次搜索在 3 小时内完成，本次间隔已自动压缩为 ${intervalSec}±${jitterSec} 秒`, '', accName);
+      logger.log('⚠️', `为保证 ${totalSearches} 次搜索在 3 小时内完成，本次间隔已自动压缩为 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accName);
     }
 
     if (acc?.cookie && !acc.cookie.includes('_U=')) {
       logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请在配置中心更新包含 _U 的完整 Cookie`, '', accName);
     }
 
-    logger.log('🖥️', `启动 Playwright 拟人真机搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 ${intervalSec}±${jitterSec} 秒，预计约 ${(estimatedSec/60).toFixed(0)} 分钟（最长 ${(worstSec/60).toFixed(0)} 分钟，上限 180 分钟）`, '', accName);
+    logger.log('🖥️', `启动 Playwright 拟人真机搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动，预计约 ${(estimatedSec/60).toFixed(0)} 分钟（最长 ${(worstSec/60).toFixed(0)} 分钟，上限 180 分钟）`, '', accName);
 
     this.shouldStop = false;
     let completed = 0;
@@ -339,8 +341,8 @@ class BrowserManager extends EventEmitter {
         // 如果已经是最后一次，不等待
         if (i === totalSearches - 1) break;
 
-        // 计算下一次搜索的拟人休眠时间（全局基础间隔 ± 随机浮动）
-        const waitSec = Math.max(30, intervalSec + rewardsApi.randomRange(-jitterSec, jitterSec));
+        // 计算下一次搜索的拟人休眠时间（基础间隔 + 0~浮动 秒）
+        const waitSec = intervalSec + rewardsApi.randomRange(0, jitterSec);
         logger.log('⏳', `拟人呼吸间隔休眠：${(waitSec / 60).toFixed(1)} 分钟后执行第 ${completed + 1} 次搜索...`, '', accName);
 
         // 逐秒倒计时更新，便于 WebUI 前端实时显示倒计时

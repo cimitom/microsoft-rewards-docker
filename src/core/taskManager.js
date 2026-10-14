@@ -716,11 +716,11 @@ export class TaskManager {
     const searchCount = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
     // 与拟人模式共用全局搜索节奏，并同样受 3 小时执行窗口约束
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-    const wantedIntervalSec = clamp(Number(globalCfg.tasks?.searchIntervalSec ?? 180) || 180, 30, 900);
-    const jitterSec = clamp(Number(globalCfg.tasks?.searchJitterSec ?? 30) || 0, 0, 300);
+    const wantedIntervalSec = clamp(Number(globalCfg.tasks?.searchIntervalSec ?? 180) || 180, 60, 900);
+    const jitterSec = clamp(Number(globalCfg.tasks?.searchJitterSec ?? 30) || 30, 30, 300);
     const perSearchBudget = Math.floor((3 * 3600) / searchCount);
-    const intervalSec = Math.max(30, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
-    logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 ${intervalSec}±${jitterSec} 秒`, '', accountName);
+    const intervalSec = Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
+    logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accountName);
 
     for (let i = 0; i < searchCount && this.running; i++) {
       const word = await rewardsApi.getHotSearchWord();
@@ -734,7 +734,7 @@ export class TaskManager {
         } catch {}
       }
 
-      const waitSec = Math.max(10, intervalSec + rewardsApi.randomRange(-jitterSec, jitterSec));
+      const waitSec = intervalSec + rewardsApi.randomRange(0, jitterSec);
       const waitTime = waitSec * 1000;
       logger.log('⏳', `等待 ${(waitTime / 1000).toFixed(1)} 秒...`, '', accountName);
       await rewardsApi.delay(waitTime);
