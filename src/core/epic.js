@@ -3,6 +3,7 @@ import configManager from '../config.js';
 import logger from '../logger.js';
 import networkClient from '../network.js';
 import browserManager from './browser.js';
+import { browserSlotLock } from './contextLock.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
@@ -446,6 +447,9 @@ export class EpicManager {
     const execPath = browserManager.getExecutablePath();
     if (!execPath) throw new Error('未检测到 Chromium 内核');
 
+    // 与积分任务的搜索流程共用浏览器资源锁，避免两个 Chromium 同时占内存
+    const gotSlot = await browserSlotLock.acquire('epic-browser', 180000);
+    if (!gotSlot) throw new Error('浏览器资源正被积分任务占用，请稍后再试');
     const browser = await chromium.launch({ executablePath: execPath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
     try {
       const context = await browser.newContext({
@@ -472,6 +476,7 @@ export class EpicManager {
       return { valid, message };
     } finally {
       await browser.close().catch(() => {});
+      browserSlotLock.release('epic-browser');
     }
   }
 
@@ -503,9 +508,14 @@ export class EpicManager {
     let context = null;
     let page = null;
     const results = [];
+    let slotHeld = false;
 
     try {
       if (!demo) {
+        // 与积分任务的搜索流程共用浏览器资源锁，避免两个 Chromium 同时占内存
+        const gotSlot = await browserSlotLock.acquire('epic-browser', 180000);
+        if (!gotSlot) throw new Error('浏览器资源正被积分任务占用，请稍后再试');
+        slotHeld = true;
         browser = await chromium.launch({
           executablePath: execPath,
           headless: true,
@@ -568,6 +578,7 @@ export class EpicManager {
       configManager.updateEpicAccount(accountId, patch);
     } finally {
       if (browser) await browser.close().catch(() => {});
+      if (slotHeld) browserSlotLock.release('epic-browser');
     }
 
     this.recordResults(accountId, results);

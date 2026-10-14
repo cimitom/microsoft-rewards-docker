@@ -5,3 +5,5 @@ data/
 .github
 .DS_Store
 *.md
+test
+cookie.txt

@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.5.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -35,6 +35,17 @@
   - 「双端签入」「每日活动集」改为以官网连签任务真实状态为准，官网说没完成就会把误标的「已完成」纠正回来，并在卡片上直接显示「官网 App 连签 X/7 天（今日已签/未签）」；
   - 「最后更新」时间不再恒为 `--`；
   - App 签到未生效时会明确提示是 Token 失效还是移动端授权绑错了账号。
+- 🎯 **数据可信度与健壮性重构 (v1.6.0)**：
+  - **「今日已增积分」改用官网「今日积分」真实值**（取不到时回退到「当前余额 − 今日起始余额」），彻底废弃「各任务积分求和」的口径——旧口径实测会虚高几十点；
+  - **历史图表的任务明细改为真实分解**（由各任务实际积分生成），删除按固定模板编造的「签到10/阅读30/搜索(earned-80)/活动集30/Quiz10」；
+  - **不再无条件给分**：每日活动集、活动卡片只在真正完成/领到时才记分，不再出现「什么都没做也显示 +40」；
+  - **「每日活动集」「桌面端打孔卡」成为真正独立的开关**（旧版这两个开关后端根本不读），并删除无用的 `quiz`/`searchSpan` 配置；
+  - **单账号异常不再拖垮其它账号**：逐个账号隔离执行，失败账号会跳过并在报告里列出；
+  - **「停止」按钮立即生效**：轻量搜索模式的等待改为 1 秒切片，不再需要等最长 20 分钟；
+  - **Epic 领取与积分任务互斥浏览器资源**，避免两个 Chromium 同时跑把 NAS 内存打满；
+  - **`data/app.log` 增加 5MB 轮转**，「全部日志」改为只读文件尾部，不再整文件读入内存；
+  - **history.json 改为内存缓存 + 延迟合并落盘**，消除每次任务进度更新都全量读改写「账号数+1」次的写放大；
+  - **新增单元测试**（`npm test`，23 个用例覆盖账号上下文隔离、解析回归、历史分解、调度计划）。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；
@@ -144,9 +155,15 @@ npm install
 
 # 3. 启动服务
 npm start
+
+# 4. 运行单元测试（无需网络，使用独立临时数据目录）
+npm test
 ```
 
 服务启动后，浏览器访问 `http://localhost:5308`。
+
+> 可用环境变量 `MSR_DATA_DIR` 把数据目录指到别处（默认 `./data`），
+> 例如 `MSR_DATA_DIR=/tmp/msr-dev npm start`，方便本地调试时不动真实数据。
 
 ---
 

@@ -329,6 +329,17 @@ export class RewardsApi {
           }
         }
 
+        // 官方「今日积分」：earn 页顶部那张卡片直接展示的真实今日增量。
+        // 这是唯一权威的「今日已增」来源，比「各任务积分求和」可靠得多
+        // （旧实现求和会把没做的任务也算进去，实测能虚高几十点）。
+        let todayPoints = null;
+        const todayMatch = clean.match(/"children":"今日积分"[\s\S]{0,1600}?"className":"text-pageHeader","children":"(\d+)"/)
+          || clean.match(/今日积分<\/p>[\s\S]{0,1200}?class="text-pageHeader">(\d+)</);
+        if (todayMatch) {
+          const n = parseInt(todayMatch[1], 10);
+          if (Number.isFinite(n)) todayPoints = n;
+        }
+
         // 如果页面未取到有效余额，尝试通过移动端 DAPI 接口获取真实账户余额
         if (balance === 0) {
           try {
@@ -433,6 +444,7 @@ export class RewardsApi {
 
         return {
           balance,
+          todayPoints,
           pc: { progress: pcCur, max: pcMax },
           mobile: { progress: mobCur, max: mobMax },
           readProgress,
@@ -736,8 +748,45 @@ export class RewardsApi {
   }
 
   /**
-   * 扫描活动卡片
+   * 读取「日常任务」区（activityCards）的真实完成情况。
+   *
+   * 用于「今天一张可领卡片都没扫到」时区分到底是「今天没有活动」还是
+   * 「已经全部完成」，避免旧实现那样无脑把 promos 标成完成。
    */
+  async getActivityCardStatus() {
+    try {
+      const html = await networkClient.request({
+        url: 'https://rewards.bing.com/earn',
+        headers: { 'user-agent': USER_AGENTS.pc }
+      });
+      if (!html) return null;
+      const clean = String(html).replace(/\\"/g, '"');
+      const keyIdx = clean.indexOf('"activityCards":[');
+      if (keyIdx === -1) return null;
+      const start = clean.indexOf('[', keyIdx);
+      let depth = 0;
+      let end = -1;
+      for (let i = start; i < clean.length; i++) {
+        if (clean[i] === '[') depth++;
+        else if (clean[i] === ']') {
+          depth--;
+          if (depth === 0) { end = i + 1; break; }
+        }
+      }
+      if (end === -1) return null;
+      const raw = clean.slice(start, end)
+        .replace(/:\$undefined/g, ':null')
+        .replace(/:\$D[^,}\]]+/g, ':null');
+      let cards;
+      try { cards = JSON.parse(raw); } catch { return null; }
+      if (!Array.isArray(cards) || cards.length === 0) return null;
+      const completed = cards.filter(c => c && c.isCompleted === true).length;
+      return { total: cards.length, completed };
+    } catch {
+      return null;
+    }
+  }
+
   async discoverCards() {
     const cards = [];
     const seenCardKeys = new Set();
@@ -746,6 +795,10 @@ export class RewardsApi {
       if (!card || !card.offerId || !card.hash || card.points <= 0) return;
       const key = `${card.offerId}:${card.hash}`;
       if (seenCardKeys.has(key)) return;
+      // 分类标记：供「每日活动集」「桌面端打孔卡」两个独立开关做过滤
+      if (!card.category) {
+        card.category = /dailyset/i.test(card.offerId) ? 'dailyset' : 'promo';
+      }
       seenCardKeys.add(key);
       cards.push(card);
     };
@@ -844,6 +897,7 @@ export class RewardsApi {
                     offerId: qItem.offerId,
                     hash: qItem.hash,
                     kind: 'desktop_app',
+                    category: 'desktop',
                     destination: qItem.destination || qItem.href || '',
                     url: 'https://rewards.bing.com/earn'
                   });

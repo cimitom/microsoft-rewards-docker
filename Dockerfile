@@ -16,7 +16,8 @@ WORKDIR /app
 # 先复制 package 文件以利用 Docker 层缓存
 COPY package*.json ./
 
-RUN npm install --omit=dev
+# 有 package-lock.json 时用 npm ci，构建结果可复现（不会因为依赖漂移导致线上行为变化）
+RUN npm ci --omit=dev
 
 # 复制源码与资源
 COPY src/ ./src/

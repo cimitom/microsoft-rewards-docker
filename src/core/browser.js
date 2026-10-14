@@ -4,6 +4,7 @@ import { chromium } from 'playwright-core';
 import logger from '../logger.js';
 import rewardsApi from './api.js';
 import configManager from '../config.js';
+import { browserSlotLock } from './contextLock.js';
 
 class BrowserManager extends EventEmitter {
   constructor() {
@@ -12,6 +13,8 @@ class BrowserManager extends EventEmitter {
     this.context = null;
     this.page = null;
     this.shouldStop = false;
+    // 是否持有浏览器资源锁（由 launchBrowser/closeBrowser 维护）
+    this.slotHeld = false;
     this.state = {
       status: 'idle', // 'idle' | 'starting' | 'navigating' | 'typing' | 'dwelling' | 'waiting' | 'stopped'
       activeAccountId: null,
@@ -92,6 +95,13 @@ class BrowserManager extends EventEmitter {
       throw new Error('未检测到 Chromium 或 Edge 浏览器内核，请确保安装了 Chromium');
     }
 
+    // 抢浏览器资源锁：Epic 领取也走同一把锁，避免两个 Chromium 同时跑把 NAS 内存打满
+    const gotSlot = await browserSlotLock.acquire('rewards-browser', 180000);
+    if (!gotSlot) {
+      throw new Error('浏览器资源正被其它任务占用（Epic 领取或另一个搜索流程），请稍后重试');
+    }
+    this.slotHeld = true;
+
     this.updateState({
       status: 'starting',
       activeAccountId: acc?.id || 'acc_1',
@@ -100,42 +110,56 @@ class BrowserManager extends EventEmitter {
       lastAction: '正在初始化无头浏览器 Chromium 引擎...'
     });
 
-    const browser = await chromium.launch({
-      executablePath: execPath,
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled',
-        '--no-first-run',
-        '--no-default-browser-check'
-      ]
-    });
+    let browser = null;
+    try {
+      browser = await chromium.launch({
+        executablePath: execPath,
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-blink-features=AutomationControlled',
+          '--no-first-run',
+          '--no-default-browser-check'
+        ]
+      });
 
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-      viewport: { width: 1366, height: 768 },
-      locale: 'zh-CN',
-      timezoneId: 'Asia/Shanghai'
-    });
+      const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        viewport: { width: 1366, height: 768 },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai'
+      });
 
-    // 抹平 webdriver 特征
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
+      // 抹平 webdriver 特征
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      });
 
-    // 注入当前账号的完整 Cookie
-    if (acc?.cookie) {
-      const cookies = this.parseCookies(acc.cookie, '.bing.com');
-      const cnCookies = this.parseCookies(acc.cookie, 'cn.bing.com');
-      await context.addCookies([...cookies, ...cnCookies]);
+      // 注入当前账号的完整 Cookie
+      if (acc?.cookie) {
+        const cookies = this.parseCookies(acc.cookie, '.bing.com');
+        const cnCookies = this.parseCookies(acc.cookie, 'cn.bing.com');
+        await context.addCookies([...cookies, ...cnCookies]);
+      }
+
+      this.browser = browser;
+      this.context = context;
+      return { browser, context };
+    } catch (e) {
+      // 启动过程中失败也必须把锁还回去，否则后续所有浏览器任务都会被卡住
+      if (browser) await browser.close().catch(() => {});
+      this.releaseBrowserSlot();
+      throw e;
     }
+  }
 
-    this.browser = browser;
-    this.context = context;
-    return { browser, context };
+  releaseBrowserSlot() {
+    if (!this.slotHeld) return;
+    this.slotHeld = false;
+    browserSlotLock.release('rewards-browser');
   }
 
   async closeBrowser() {
@@ -146,6 +170,7 @@ class BrowserManager extends EventEmitter {
     this.browser = null;
     this.context = null;
     this.page = null;
+    this.releaseBrowserSlot();
     this.updateState({
       status: 'idle',
       activeAccountId: null,

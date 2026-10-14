@@ -6,6 +6,12 @@ const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 
 class HistoryManager {
   constructor() {
+    // 内存缓存 + 延迟落盘：旧实现每次 saveStats 都会把 history.json
+    // 全量读改写「账号数 + 1」次，一次账号执行有 30+ 次 saveStats，
+    // 在 NAS 上会造成明显的无谓磁盘写入。
+    this.cache = null;
+    this.dirty = false;
+    this.flushTimer = null;
     this.ensureFile();
   }
 
@@ -19,6 +25,7 @@ class HistoryManager {
   }
 
   load() {
+    if (this.cache) return this.cache;
     try {
       this.ensureFile();
       const raw = fs.readFileSync(HISTORY_FILE, 'utf-8');
@@ -29,9 +36,11 @@ class HistoryManager {
       if (!data.global || typeof data.global !== 'object') {
         data.global = {};
       }
-      return data;
+      this.cache = data;
+      return this.cache;
     } catch {
-      return { accounts: {}, global: {} };
+      this.cache = { accounts: {}, global: {} };
+      return this.cache;
     }
   }
 
@@ -39,9 +48,31 @@ class HistoryManager {
     try {
       this.ensureFile();
       writeFileAtomic(HISTORY_FILE, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      this.dirty = false;
     } catch (e) {
       console.error('[History] 保存历史记录失败:', e.message);
     }
+  }
+
+  /** 标记有改动，延迟合并落盘（默认 5 秒内的多次改动只写一次） */
+  scheduleFlush(delayMs = 5000) {
+    this.dirty = true;
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flush();
+    }, delayMs);
+    this.flushTimer.unref?.();
+  }
+
+  /** 立即落盘（进程退出前调用，避免丢掉最后几秒的记录） */
+  flush() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (!this.dirty || !this.cache) return;
+    this.save(this.cache);
   }
 
   formatDate(d) {
@@ -62,23 +93,23 @@ class HistoryManager {
     return days[d.getDay()];
   }
 
-  getDefaultBreakdown(earned = 140) {
-    if (earned <= 0) {
-      return [
-        { name: "每日双端签入", points: 0, icon: "📱" },
-        { name: "新闻资讯阅读", points: 0, icon: "📖" },
-        { name: "必应 PC 搜索", points: 0, icon: "🔍" },
-        { name: "每日活动集", points: 0, icon: "📅" },
-        { name: "活动卡片与Quiz", points: 0, icon: "🧩" }
-      ];
+  /**
+   * 从各账号的任务项汇总真实积分分解。
+   * 旧实现按固定模板把 earned 拆成「签到10/阅读30/搜索(earned-80)/活动集30/Quiz10」，
+   * 属于编造数据——历史图表悬停看到的明细与真实情况完全无关。
+   */
+  breakdownFromStats(statsAccounts = {}) {
+    const merged = new Map();
+    for (const accStat of Object.values(statsAccounts || {})) {
+      for (const t of Object.values(accStat?.tasks || {})) {
+        const points = Number(t?.points || 0);
+        if (!t?.name || points <= 0) continue;
+        const cur = merged.get(t.name) || { name: t.name, icon: t.icon || '📌', points: 0 };
+        cur.points += points;
+        merged.set(t.name, cur);
+      }
     }
-    return [
-      { name: "每日双端签入", points: 10, icon: "📱" },
-      { name: "新闻资讯阅读", points: 30, icon: "📖" },
-      { name: "必应 PC 搜索", points: Math.max(0, earned - 80), icon: "🔍" },
-      { name: "每日活动集", points: 30, icon: "📅" },
-      { name: "活动卡片与Quiz", points: 10, icon: "🧩" }
-    ];
+    return Array.from(merged.values()).sort((a, b) => b.points - a.points);
   }
 
   /**
@@ -94,9 +125,9 @@ class HistoryManager {
       timestamp: Date.now(),
       earned: data.earned || 0,
       balance: data.balance || 0,
-      breakdown: data.breakdown || this.getDefaultBreakdown(data.earned || 0)
+      breakdown: Array.isArray(data.breakdown) ? data.breakdown : []
     };
-    this.save(history);
+    this.scheduleFlush();
   }
 
   /**
@@ -109,9 +140,9 @@ class HistoryManager {
       timestamp: Date.now(),
       earned: data.earned || 0,
       balance: data.balance || 0,
-      breakdown: data.breakdown || this.getDefaultBreakdown(data.earned || 0)
+      breakdown: Array.isArray(data.breakdown) ? data.breakdown : []
     };
-    this.save(history);
+    this.scheduleFlush();
   }
 
   /**
@@ -190,9 +221,11 @@ class HistoryManager {
             earned: currentEarned,
             balance: currentBalance,
             accounts: liveBreakdown,
-            breakdown: this.getDefaultBreakdown(currentEarned)
+            // 今日分解用各账号任务项的真实积分汇总，不再套用固定模板
+            breakdown: this.breakdownFromStats(statsAccounts)
           });
         } else if (foundAny) {
+          const recordedGlobal = history.global?.[dateKey];
           result.push({
             date: dateKey,
             dayLabel,
@@ -200,7 +233,7 @@ class HistoryManager {
             earned: dayEarned,
             balance: dayBalance,
             accounts: accountsBreakdown,
-            breakdown: this.getDefaultBreakdown(dayEarned)
+            breakdown: Array.isArray(recordedGlobal?.breakdown) ? recordedGlobal.breakdown : []
           });
         } else {
           // 没有真实记录时返回 0，不编造「预估趋势」——伪造的历史数字会误导用户
@@ -210,19 +243,22 @@ class HistoryManager {
             weekday,
             earned: 0,
             balance: 0,
-            breakdown: this.getDefaultBreakdown(0)
+            breakdown: []
           });
         }
       } else {
         // 单账号独立模式：只返回该账号自己的账单
         if (i === 0) {
+          const recordedToday = accountHistoryMap[dateKey];
           result.push({
             date: dateKey,
             dayLabel,
             weekday,
             earned: currentEarned,
             balance: currentBalance,
-            breakdown: this.getDefaultBreakdown(currentEarned)
+            breakdown: (Array.isArray(recordedToday?.breakdown) && recordedToday.breakdown.length > 0)
+              ? recordedToday.breakdown
+              : this.breakdownFromStats({ [accountId]: statsAccounts[accountId] || taskManagerStats })
           });
         } else if (accountHistoryMap[dateKey]) {
           result.push({
@@ -238,7 +274,7 @@ class HistoryManager {
             weekday,
             earned: 0,
             balance: 0,
-            breakdown: this.getDefaultBreakdown(0)
+            breakdown: []
           });
         }
       }

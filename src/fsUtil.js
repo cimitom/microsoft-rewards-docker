@@ -5,7 +5,10 @@ import { fileURLToPath } from 'url';
 // 项目根目录：基于模块位置推导，不依赖 process.cwd()。
 // 这样即使从别的目录执行 `node /app/src/index.js`，数据目录也不会跑偏。
 export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DATA_DIR = path.join(PROJECT_ROOT, 'data');
+// MSR_DATA_DIR 允许把数据目录指到别处（单测隔离用；容器里仍走默认的 /app/data）
+export const DATA_DIR = process.env.MSR_DATA_DIR
+  ? path.resolve(process.env.MSR_DATA_DIR)
+  : path.join(PROJECT_ROOT, 'data');
 
 /**
  * 原子写入：先写同目录下的临时文件，再 rename 覆盖目标。

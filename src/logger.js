@@ -4,6 +4,10 @@ import path from 'path';
 import { DATA_DIR } from './fsUtil.js';
 
 const LOG_FILE = path.join(DATA_DIR, 'app.log');
+// 单文件上限 5MB，超过就轮转到 app.log.1（只保留 1 个备份）。
+// 旧实现无限追加，容器 stdout 有 docker 轮转但这个落盘文件没有，
+// 长期运行会把挂载卷撑大，而且「全部日志」弹窗要整文件读进内存。
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
 
 class Logger extends EventEmitter {
   constructor(maxLogs = 500, maxTimeline = 30) {
@@ -47,6 +51,43 @@ class Logger extends EventEmitter {
     } catch {}
   }
 
+  /** 超过上限就把当前日志轮转为 app.log.1 */
+  rotateIfNeeded() {
+    try {
+      const stat = fs.statSync(LOG_FILE);
+      if (stat.size < LOG_MAX_BYTES) return;
+      const backup = `${LOG_FILE}.1`;
+      try { if (fs.existsSync(backup)) fs.unlinkSync(backup); } catch {}
+      fs.renameSync(LOG_FILE, backup);
+    } catch {}
+  }
+
+  /**
+   * 只读日志文件尾部若干字节。
+   * 旧实现用 readFileSync 读整个文件，日志大了会阻塞事件循环。
+   */
+  readTail(maxBytes = 256 * 1024) {
+    let fd = null;
+    try {
+      fd = fs.openSync(LOG_FILE, 'r');
+      const size = fs.fstatSync(fd).size;
+      const start = Math.max(0, size - maxBytes);
+      const len = size - start;
+      if (len <= 0) return '';
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, start);
+      const text = buf.toString('utf-8');
+      // 从中间截断时丢掉第一行残片
+      return start > 0 ? text.slice(text.indexOf('\n') + 1) : text;
+    } catch {
+      return '';
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+    }
+  }
+
   getTimeStr() {
     const now = new Date();
     return now.toLocaleTimeString('zh-CN', { hour12: false });
@@ -77,6 +118,7 @@ class Logger extends EventEmitter {
     // 持久化追加写入 data/app.log
     try {
       this.ensureLogFile();
+      this.rotateIfNeeded();
       fs.appendFileSync(LOG_FILE, line, 'utf-8');
     } catch {}
 
@@ -118,7 +160,7 @@ class Logger extends EventEmitter {
    */
   getRecentFromFile(limit = 300) {
     try {
-      const raw = fs.readFileSync(LOG_FILE, 'utf-8');
+      const raw = this.readTail();
       const lines = raw.split('\n').filter(line => line.trim());
       return lines.slice(-limit).map(line => {
         const m = line.match(/^\[(.*?)\]\s+(\S+)\s+(.*)$/);

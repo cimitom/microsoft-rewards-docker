@@ -3,3 +3,5 @@ data/
 .DS_Store
 *.log
 npm-debug.log*
+# 本地抓包/排查用的 Cookie 笔记，属于个人凭据相关文件，不进入版本库
+cookie.txt
