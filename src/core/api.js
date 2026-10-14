@@ -107,6 +107,12 @@ export class RewardsApi {
     return crypto.randomUUID().replace(/-/g, '').toUpperCase();
   }
 
+  // DAPI 的 activity.id 官方客户端是 56 位十六进制（两段 UUID 拼接）。
+  // 只给 32 位时接口虽然返回 200，但部分任务（尤其连签类）不会真正入账。
+  getDapiId() {
+    return (this.getRandomUUID() + this.getRandomUUID()).slice(0, 56);
+  }
+
   isJSON(str) {
     if (!str || typeof str !== 'string') return false;
     try {
@@ -119,10 +125,34 @@ export class RewardsApi {
 
   setCurrentAccount(acc) {
     this.currentAccountId = acc?.id || 'acc_1';
-    // 用 ?? 而不是 ||：账号没有 Cookie 时要显式置空，避免回退到别的账号
-    networkClient.setActiveCookie(acc?.cookie ?? null);
+    // 指定了账号就一定显式设定 Cookie 上下文：
+    //   - 有 Cookie → 用该账号自己的；
+    //   - 该账号没有 Cookie（字段缺失或空串）→ 传空串，让请求「不带 Cookie」，
+    //     绝不能传 null，否则 networkClient 会回退到 accounts[0] 的 Cookie，
+    //     把副账号的操作算到主账号头上。
+    // 只有完全没指定账号（acc 为空）时才用 null，保留「走默认账号」的旧语义。
+    networkClient.setActiveCookie(acc ? (acc.cookie || '') : null);
     // 同步日志归属上下文：该账号下所有未显式传账号名的日志都会自动带上账号名
     logger.setAccountContext(acc?.name || this.currentAccountId);
+  }
+
+  /**
+   * 快照当前账号上下文（Cookie / 账号 ID / 日志前缀）。
+   * 任何会临时切换账号的函数都应在 finally 里 restore，避免污染正在执行的任务。
+   */
+  snapshotAccountContext() {
+    return {
+      accountId: this.currentAccountId,
+      cookie: networkClient.getActiveCookie(),
+      logContext: logger.getAccountContext()
+    };
+  }
+
+  restoreAccountContext(snapshot) {
+    if (!snapshot) return;
+    this.currentAccountId = snapshot.accountId;
+    networkClient.setActiveCookie(snapshot.cookie);
+    logger.setAccountContext(snapshot.logContext || '');
   }
 
   async withTokenRetry(requestFn) {
@@ -378,6 +408,29 @@ export class RewardsApi {
           stampsProgress = parseInt(stampMatch[2], 10) || 8;
         }
 
+        // 连续打卡任务（必应搜索 / 每日活动 / 必应应用）的真实状态。
+        // 这三项是「升级活动」的完成条件，必须如实展示，避免把没做的事标成已完成。
+        const streaks = {};
+        for (const partner of ['bing', 'dailyset', 'bingapp']) {
+          const key = `"partner":"${partner}"`;
+          let idx = -1;
+          // partner 会出现两次：一次在埋点 data 里，一次在真正的 streak 模型里。
+          // 只有模型那段才带 completedDays，所以逐个出现去匹配。
+          while ((idx = clean.indexOf(key, idx + 1)) !== -1) {
+            const win = clean.slice(Math.max(0, idx - 1600), idx + 300);
+            if (!/"completedDays":\d+/.test(win)) continue;
+            const pick = (re) => { const m = win.match(re); return m ? Number(m[1]) : null; };
+            streaks[partner] = {
+              completedDays: pick(/"completedDays":(\d+)/),
+              currentDay: pick(/"currentDay":(\d+)/),
+              activitiesCompleted: pick(/"activitiesCompleted":(\d+)/),
+              activitiesTotal: pick(/"activitiesTotal":(\d+)/),
+              isCurrentDayCompleted: /"isCurrentDayCompleted":true/.test(win)
+            };
+            break;
+          }
+        }
+
         return {
           balance,
           pc: { progress: pcCur, max: pcMax },
@@ -395,7 +448,8 @@ export class RewardsApi {
           stamps: {
             progress: stampsProgress,
             max: stampsMax
-          }
+          },
+          streaks
         };
       } catch (e) {
         if (attempt < maxRetries) {
@@ -431,26 +485,33 @@ export class RewardsApi {
         },
         data: JSON.stringify({
           amount: 1,
-          id: this.getRandomUUID().slice(0, 32),
+          id: this.getDapiId(),
           type: 103,
           country: region,
-          channel: APP_CONFIG.channel
+          channel: APP_CONFIG.channel,
+          // 关键修复：必须带上 offerid，微软才会把它计入「必应应用连续打卡」。
+          // 缺了 attributes.offerid 时接口同样返回 200，但连签任务不会推进，
+          // 这正是之前「必应应用连续打卡」一直显示 0/1 的原因。
+          attributes: { offerid: APP_CONFIG.offerIds.dailyCheckIn }
         })
       }));
 
       const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
       if (data?.response) {
         if (data.response.activity) {
-          return Number(data.response.activity.p || data.response.activity.points || 0);
+          const act = data.response.activity;
+          const points = Number(act.p || act.points || 0);
+          const appliedOffer = act.a?.offerid || act.attributes?.offerid || '';
+          return { points, offerId: appliedOffer, isDuplicate: !!data.response.isDuplicate };
         }
         if (data.response.isDuplicate || data.response.activity === null) {
-          return 0;
+          return { points: 0, offerId: APP_CONFIG.offerIds.dailyCheckIn, isDuplicate: true };
         }
       }
     } catch (e) {
       logger.log('🔴', `App 签入异常: ${e.message}`);
     }
-    return -1;
+    return null;
   }
 
   /**
@@ -590,6 +651,45 @@ export class RewardsApi {
       logger.log('🔴', `阅读上报失败: ${e.message}`);
       return false;
     }
+  }
+
+  /**
+   * 扫描「任务」区的打孔卡 (Quest Punch Card)
+   *
+   * 像「十月必看五大亮点」这类每月/每周任务：每天解锁一个小任务，
+   * 完成当天任务后要等满 24 小时才会解锁下一个，全部完成才给奖励分。
+   * 旧实现只认识桌面客户端的 WW_pcchild 打孔卡，这类网页打孔卡完全没被处理，
+   * 所以在官网会一直停在 0/5。
+   */
+  async getQuestPunchCards() {
+    const quests = [];
+    try {
+      const html = await networkClient.request({
+        url: 'https://rewards.bing.com/earn',
+        headers: { 'user-agent': USER_AGENTS.pc }
+      });
+      if (!html) return quests;
+
+      const clean = String(html).replace(/\\"/g, '"').replace(/\\u0026/g, '&');
+      const seen = new Set();
+      // 只负责把「任务区」的打孔卡链接找出来。
+      // 进度和当天可做的具体任务由浏览器打开任务页后读取 —— Next.js 的
+      // Flight 数据把卡片标题/进度放在懒加载 chunk 里，纯文本解析并不可靠。
+      const hrefRe = /"href":"\/earn\/quest\/([^"]+)"/g;
+      let m;
+      while ((m = hrefRe.exec(clean)) !== null) {
+        const questId = m[1];
+        if (seen.has(questId)) continue;
+        seen.add(questId);
+        quests.push({
+          questId,
+          url: `https://rewards.bing.com/earn/quest/${questId}`
+        });
+      }
+    } catch (e) {
+      logger.log('🔴', `扫描任务打孔卡失败: ${e.message}`);
+    }
+    return quests;
   }
 
   /**

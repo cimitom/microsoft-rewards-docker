@@ -13,11 +13,12 @@ import rewardsApi from '../core/api.js';
 import historyManager from '../core/history.js';
 import browserManager from '../core/browser.js';
 import epicManager from '../core/epic.js';
+import { accountContextLock } from '../core/contextLock.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.5.1';
+const CURRENT_VERSION = '1.5.2';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -431,16 +432,27 @@ export function createServer() {
   app.post('/api/status/sync', async (req, res) => {
     try {
       const accountId = req.body?.accountId || null;
+      // 有任务正在执行时不允许同步：同步会切换全局账号上下文，
+      // 把正在跑的任务算到别的账号头上。此时直接返回当前缓存状态。
+      const busy = accountContextLock.isBusy();
+      let skipped = false;
       if (accountId && accountId !== 'all') {
         const accCfg = configManager.resolveAccount(accountId);
         if (!accCfg) {
           return res.status(404).json({ success: false, message: '账号未找到' });
         }
-        await taskManager.syncAccountOfficialStatus(accCfg);
+        skipped = busy;
+        if (!busy) await taskManager.syncAccountOfficialStatus(accCfg);
       } else {
-        await taskManager.syncAllOfficialStatus();
+        skipped = busy;
+        if (!busy) await taskManager.syncAllOfficialStatus();
       }
-      res.json({ success: true, data: taskManager.getStatus(accountId || 'all') });
+      res.json({
+        success: true,
+        skipped,
+        message: skipped ? '任务正在执行中，已跳过同步以避免账号上下文串台' : '',
+        data: taskManager.getStatus(accountId || 'all')
+      });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }
@@ -679,6 +691,9 @@ export function createServer() {
   }
 
   app.post('/api/auth/test', async (req, res) => {
+    if (accountContextLock.isBusy()) {
+      return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再体检（避免账号上下文串台）' });
+    }
     try {
       const result = await runAccountDiagnosis(req.body?.accountId || null);
       res.json({ success: true, data: result });
@@ -689,6 +704,9 @@ export function createServer() {
 
   // 8.5 一键体检全部账号（逐个串行，避免并发触发微软风控）
   app.post('/api/auth/test-all', async (req, res) => {
+    if (accountContextLock.isBusy()) {
+      return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再体检（避免账号上下文串台）' });
+    }
     try {
       const accounts = configManager.getAccounts();
       const results = [];

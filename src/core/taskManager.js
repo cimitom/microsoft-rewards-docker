@@ -7,6 +7,7 @@ import authManager from './auth.js';
 import notifier from './notifier.js';
 import historyManager from './history.js';
 import browserManager from './browser.js';
+import { accountContextLock } from './contextLock.js';
 import { DATA_DIR, writeFileAtomic } from '../fsUtil.js';
 
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
@@ -195,16 +196,26 @@ export class TaskManager {
   /**
    * 核心自愈机制：直接从微软官方同步账号的真实完成状态 (搜索/阅读/桌面任务/连签/印章)
    */
-  async syncAccountOfficialStatus(accCfg) {
+  async syncAccountOfficialStatus(accCfg, options = {}) {
     if (!accCfg?.cookie && !accCfg?.refreshToken) return null;
+    // owned=true 表示调用方（任务执行）已经持有账号上下文锁，可以安全切换上下文。
+    // 否则如果此刻有任务在跑，直接跳过 —— 抢走全局 Cookie/Token 上下文会把
+    // 正在执行的任务算到别的账号头上。
+    const owned = options.owned === true;
+    // 非任务流程（WebUI 同步）也要自己持锁，否则两个并发的同步请求会互相
+    // 抢全局上下文，同样可能把 A 的请求算到 B 头上。
+    if (!owned && !accountContextLock.tryAcquire('web-sync')) return null;
     const accountId = accCfg.id;
-    const accStats = this.ensureAccountStats(accountId);
-
-    // 同步期间的日志统一归属到该账号（结束后还原，避免串台）
-    const prevCtx = logger.getAccountContext();
-    logger.setAccountContext(accCfg.name || accountId);
+    // 注意：加锁之后的所有逻辑都必须包在 try 里，否则中途抛异常会导致锁泄漏，
+    // 后续定时任务与同步会一直拿不到锁。
+    let accStats = null;
+    let prevContext = null;
 
     try {
+      accStats = this.ensureAccountStats(accountId);
+      // 同步期间的日志统一归属到该账号（结束后整体还原，避免串台）
+      prevContext = rewardsApi.snapshotAccountContext();
+      logger.setAccountContext(accCfg.name || accountId);
       rewardsApi.setCurrentAccount(accCfg);
       const [info, streakInfo] = await Promise.all([
         rewardsApi.getRewardsInfo(2),
@@ -274,6 +285,17 @@ export class TaskManager {
           accStats.stamps = info.stamps;
         }
 
+        // 同步连签任务（必应搜索 / 每日活动 / 必应应用）真实状态。
+        // 「必应应用连续打卡」是官网独立展示的一项，脚本 UI 之前完全没有体现，
+        // 导致明明没签成功也看不出来，这里如实记录并在未完成时给出提示。
+        if (info.streaks) {
+          accStats.streaks = info.streaks;
+          const appStreak = info.streaks.bingapp;
+          if (appStreak && appStreak.isCurrentDayCompleted === false) {
+            logger.log('📱', `必应应用连续打卡今日未完成 (已完成 ${appStreak.completedDays || 0}/7 天)，执行任务时会自动补签`);
+          }
+        }
+
         if (streakInfo?.streakDays) {
           accStats.streakDays = streakInfo.streakDays;
         }
@@ -309,17 +331,25 @@ export class TaskManager {
     } catch (e) {
       console.error(`[TaskManager] 同步账号 [${accCfg.name}] 官方状态失败:`, e.message);
     } finally {
-      logger.setAccountContext(prevCtx);
+      if (prevContext) rewardsApi.restoreAccountContext(prevContext);
+      if (!owned) accountContextLock.release('web-sync');
     }
     return null;
   }
 
   async syncAllOfficialStatus() {
-    const accounts = configManager.getAccounts().filter(a => a.enabled !== false && (a.cookie || a.refreshToken));
-    for (const acc of accounts) {
-      await this.syncAccountOfficialStatus(acc);
+    // 任务执行期间不做同步，避免与执行流程争抢账号上下文
+    if (!accountContextLock.tryAcquire('web-sync')) return this.computeSummary();
+    try {
+      const accounts = configManager.getAccounts().filter(a => a.enabled !== false && (a.cookie || a.refreshToken));
+      for (const acc of accounts) {
+        // 外层已持有 web-sync 锁，这里用 owned 明确告知，不再重复加/解锁
+        await this.syncAccountOfficialStatus(acc, { owned: true });
+      }
+      return this.computeSummary();
+    } finally {
+      accountContextLock.release('web-sync');
     }
-    return this.computeSummary();
   }
 
   computeSummary() {
@@ -438,16 +468,24 @@ export class TaskManager {
    * 单次安全测试搜索 (仅搜 1 次，检验按键输入流与积分变化)
    */
   async runSingleTestSearch(accountId = null) {
-    const acc = configManager.getAccount(accountId);
+    // 必须用 resolveAccount：getAccount() 在 id 不存在时会回退到第一个账号，
+    // 那样「测试副账号」可能实际跑在主账号上。
+    const acc = configManager.resolveAccount(accountId);
     if (!acc) throw new Error('未找到对应账号');
-    const accName = acc.name || acc.id;
-
-    rewardsApi.setCurrentAccount(acc);
-    const result = await browserManager.singleTestSearch(acc);
-
-    // 搜索完成后同步一次最新官网数据
-    await this.syncAccountOfficialStatus(acc);
-    return result;
+    // 注意持有者标识必须与任务执行（'task-run'）不同：
+    // 同一个标识会被当成「重入」而放行，那样任务跑着的时候照样能抢上下文。
+    if (!accountContextLock.tryAcquire('web-action')) {
+      throw new Error('已有任务正在执行，请稍后再试（避免账号上下文串台）');
+    }
+    try {
+      rewardsApi.setCurrentAccount(acc);
+      const result = await browserManager.singleTestSearch(acc);
+      // 搜索完成后同步一次最新官网数据（同一持有者，可重入）
+      await this.syncAccountOfficialStatus(acc, { owned: true });
+      return result;
+    } finally {
+      accountContextLock.release('web-action');
+    }
   }
 
   /**
@@ -467,7 +505,7 @@ export class TaskManager {
     logger.log('👤', `>>> 开始执行账号 [${accountName}] 的自动化打卡任务 <<<`, accountName);
 
     // 1. 运行前先从官方同步一次真实进度（确保增量起点100%准确）
-    await this.syncAccountOfficialStatus(accCfg);
+    await this.syncAccountOfficialStatus(accCfg, { owned: true });
 
     // 2. 检查是否所有任务今日均已达标完成
     const taskValues = Object.values(accStats.tasks || {});
@@ -500,11 +538,19 @@ export class TaskManager {
         let signSuccess = false;
 
         if (tokenOk) {
-          const appPts = await rewardsApi.signApp();
-          if (appPts >= 0) {
+          const appRes = await rewardsApi.signApp();
+          if (appRes) {
             signSuccess = true;
-            signPoints += appPts;
-            logger.log('📱', `App 端静默签到成功${appPts > 0 ? ` +${appPts} 积分` : ''}`, accountName);
+            signPoints += Number(appRes.points || 0);
+            if (appRes.points > 0) {
+              logger.log('📱', `App 端静默签到成功 +${appRes.points} 积分`, accountName);
+            } else if (appRes.isDuplicate) {
+              logger.log('📱', 'App 端今日已签到过，跳过', accountName);
+            } else {
+              logger.log('📱', `App 端签到已提交 (${appRes.offerId || 'Gamification_Sapphire_DailyCheckIn'})`, accountName);
+            }
+          } else {
+            logger.log('🟡', 'App 端签到未成功（Token 或接口异常），下次巡检会自动重试', accountName);
           }
         }
 
@@ -691,6 +737,35 @@ export class TaskManager {
 
     if (!this.running) return;
 
+    // 4.5 任务区打孔卡 (如「十月必看五大亮点」这类每天解锁一个的任务)
+    //     旧版本完全没处理这类任务，导致官网上长期停在 0/5。
+    if (globalCfg.tasks?.promos && this.running && browserManager.getExecutablePath()) {
+      // 打孔卡每天只解锁一个新任务，每个账号每天推进一次即可，
+      // 否则每次定时巡检都去开任务页既没意义也徒增风控暴露面。
+      const cur = this.ensureAccountStats(accountId);
+      const todayKey = this.getTodayNum();
+      if (cur.questPunchCardDate === todayKey) {
+        // 今日已推进过，静默跳过
+      } else {
+        try {
+          const quests = await rewardsApi.getQuestPunchCards();
+          const pendingQuests = quests.filter(q => !q.done);
+          if (pendingQuests.length > 0) {
+            const questRes = await browserManager.runQuestPunchCards(accCfg, pendingQuests);
+            if (questRes.completed > 0) {
+              logger.addTimeline(accountName, `任务打孔卡推进 ${questRes.completed} 项`);
+            }
+          }
+          cur.questPunchCardDate = todayKey;
+          this.saveStats();
+        } catch (e) {
+          logger.log('🟡', `任务打孔卡处理异常: ${e.message}`, '', accountName);
+        }
+      }
+    }
+
+    if (!this.running) return;
+
     // 5. 连签检测与额外积分检测
     //    视觉搜索补签只在任务执行期尝试（每账号每天一次），读取进度的同步流程不再触发
     const streakInfo = await rewardsApi.checkStreak({ allowVisualSearchCheckIn: true });
@@ -750,6 +825,14 @@ export class TaskManager {
       return false;
     }
 
+    // 抢占账号上下文锁：执行期间 WebUI 的同步 / 体检 / 测搜都会自动跳过，
+    // 避免它们把全局 Cookie/Token 上下文切到别的账号，导致任务算错账号。
+    const locked = await accountContextLock.acquire('task-run', 60000);
+    if (!locked) {
+      logger.log('🟡', '账号上下文正被其它操作占用，请稍后重试');
+      return false;
+    }
+
     this.running = true;
     const startTime = Date.now();
 
@@ -805,6 +888,7 @@ export class TaskManager {
       this.running = false;
       this.runningAccountId = null;
       logger.setAccountContext('');
+      accountContextLock.release('task-run');
     }
   }
 }

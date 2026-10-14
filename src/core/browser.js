@@ -371,6 +371,115 @@ class BrowserManager extends EventEmitter {
     this.shouldStop = true;
     this.updateState({ status: 'stopped', lastAction: '正在中止浏览器任务...' });
   }
+
+  /**
+   * 完成任务区打孔卡 (Quest Punch Card)
+   *
+   * 这类任务（如「十月必看五大亮点」）每天只解锁一个小任务，完成当天任务后
+   * 需要等满 24 小时才解锁下一个，所以每次只能推进一格，属于正常现象。
+   * 当前解锁的那一项在页面上是一个指向 bing.com 搜索的链接，用真实点击完成。
+   */
+  async runQuestPunchCards(acc, quests = []) {
+    const accName = acc?.name || '当前账号';
+    const pending = (quests || []).filter(q => q && !q.done);
+    if (pending.length === 0) return { attempted: 0, completed: 0 };
+
+    let attempted = 0;
+    let completed = 0;
+
+    try {
+      this.shouldStop = false;
+      const { context } = await this.launchBrowser(acc);
+      const page = await context.newPage();
+      this.page = page;
+
+      for (const quest of pending) {
+        if (this.shouldStop) break;
+
+        const questName = quest.title || quest.questId || '任务打孔卡';
+        this.updateState({
+          status: 'navigating',
+          lastAction: `正在检查任务打孔卡「${questName}」...`
+        });
+
+        try {
+          await page.goto(quest.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await this.delay(2500);
+          const pageTitle = (await page.title().catch(() => '')) || questName;
+          const displayName = pageTitle.replace(/\s*[–-]\s*Microsoft Rewards\s*$/i, '').trim() || questName;
+
+          // 给「当前解锁且未完成」的那一项打标记，方便后续精确点击
+          const cta = await page.evaluate(() => {
+            const links = [...document.querySelectorAll('a[href]')];
+            for (const a of links) {
+              const href = a.getAttribute('href') || '';
+              if (a.getAttribute('aria-disabled') === 'true') continue;
+              if (!/bing\.com\/search\?/i.test(href)) continue;
+              if (/\/account\/general|\/rewards\//i.test(href)) continue;
+              a.setAttribute('data-msr-quest-cta', '1');
+              return { href, text: (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) };
+            }
+            return null;
+          });
+
+          if (!cta) {
+            logger.log('💤', `打孔卡「${displayName}」今日任务未解锁或已完成，跳过`, '', accName);
+            continue;
+          }
+
+          attempted++;
+          logger.log('🧩', `执行打孔卡「${displayName}」今日任务: ${cta.text || cta.href}`, '', accName);
+          this.updateState({
+            status: 'dwelling',
+            lastAction: `正在完成打孔卡任务: ${cta.text || displayName}`
+          });
+
+          // 优先真实点击（会触发官网自己的上报逻辑）；点不动或没跳转就退化为直接导航。
+          // 注意必须校验「确实跳到了任务页」才计入完成，否则会出现「没做成也报成功」。
+          const beforeUrl = page.url();
+          const newPagePromise = context.waitForEvent('page', { timeout: 6000 }).catch(() => null);
+          try {
+            await page.click('a[data-msr-quest-cta="1"]', { timeout: 8000 });
+          } catch {
+            await page.goto(cta.href, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+          }
+          // 新开标签页的任务也要接住，但不要为了等它白等满 6 秒
+          const newPage = await Promise.race([newPagePromise, this.delay(2500).then(() => null)]);
+          const workPage = newPage || page;
+          await workPage.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
+
+          let landedUrl = '';
+          try { landedUrl = String(workPage.url() || ''); } catch {}
+          const navigated = !!newPage
+            || (landedUrl !== beforeUrl && /^https?:\/\/([a-z0-9-]+\.)*bing\.com\//i.test(landedUrl));
+
+          if (navigated) {
+            await this.delay(rewardsApi.randomRange(3500, 6000));
+            await workPage.mouse.wheel(0, rewardsApi.randomRange(300, 800)).catch(() => {});
+            await this.delay(rewardsApi.randomRange(2000, 4000));
+          }
+          if (newPage) await newPage.close().catch(() => {});
+
+          if (navigated) {
+            completed++;
+            logger.log('✅', `打孔卡「${displayName}」今日任务已完成`, '', accName);
+            await this.delay(rewardsApi.randomRange(2500, 5000));
+          } else {
+            logger.log('🟡', `打孔卡「${displayName}」点击后没有跳转到任务页，本次跳过`, '', accName);
+          }
+        } catch (e) {
+          logger.log('🟡', `打孔卡「${questName}」处理失败: ${e.message}`, '', accName);
+        }
+      }
+
+      await this.closeBrowser();
+    } catch (e) {
+      logger.log('🔴', `打孔卡任务流程异常: ${e.message}`, '', accName);
+      await this.closeBrowser();
+    }
+
+    return { attempted, completed };
+  }
 }
 
 export const browserManager = new BrowserManager();

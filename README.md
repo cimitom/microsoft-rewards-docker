@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.5.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.5.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -27,6 +27,10 @@
   - 提供一键「单次测搜」功能（15秒单次输入验证增分，完全避免触发频率惩罚）。
 - 👥 **多账号矩阵管理与一键切换**：
   - 各账号独立凭据、环境严格隔离，日志全量标记 `[账号名]` 规范前缀。
+  - **上下文串号修复 (v1.5.2)**：执行期间锁定账号上下文，WebUI 的同步/体检/测搜不会再把 Cookie 或 Token 抢到别的账号，Token 也不再跨账号回退。
+- 🧩 **任务区打孔卡自动推进 (v1.5.2 新增)**：
+  - 自动识别「任务」区的每月/每周打孔卡（如「十月必看五大亮点」），每天解锁一项后自动完成当日可做的任务；
+  - 每天只推进一次，避免重复打开任务页增加风控暴露面。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；
@@ -67,6 +71,7 @@
 | **必应 PC 搜索** | ✅ 已支持 | +60 积分/天 | 60/60 分 (100%) | 智能随机延时防风控检索 |
 | **日常活动集 (Daily Set)** | ✅ 已支持 | +30 ~ 50 积分/天 | 3/3 个 (100%) | 每日 3 个日常活动（Quiz / 投票 / 打卡） |
 | **桌面应用每周专属任务** | ✅ 独家支持 | +70 积分/周 | 8 天打孔卡进度 | 伪装桌面客户端专属解锁打卡 |
+| **任务区打孔卡 (每月/每周)** | ✅ 已支持 | +50 积分/张 | x/y 个任务 | 每天解锁一项，自动完成当日可做的搜索任务 |
 | **连签检测与视觉搜索打卡** | ✅ 已支持 | 维持连签纪录 | 连续打卡天数 | 自动打卡维持最高天数纪录 |
 
 ---

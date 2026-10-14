@@ -24,8 +24,15 @@ export class AuthManager {
   }
 
   getAccessToken(accountId = null) {
-    const acc = configManager.resolveAccount(accountId);
-    return acc?.accessToken || this.accessToken;
+    // 不传 accountId 时返回全局 token（单账号兼容路径）。
+    if (!accountId) return this.accessToken || null;
+    // 传了 accountId 就必须精确命中该账号，并且只能用它自己的 token。
+    // 旧写法 `acc?.accessToken || this.accessToken` 会在这个账号 token 为空时
+    // 回退到「上一个刷新成功的账号」的 token —— 结果副账号的 App 签到 / 阅读
+    // 会被算到主账号头上（典型的串号）。
+    const acc = configManager.findAccount(accountId);
+    if (!acc) return null;
+    return acc.accessToken || null;
   }
 
   /**

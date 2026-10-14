@@ -42,6 +42,11 @@ class NetworkClient {
     this.activeCookie = (cookieStr === undefined || cookieStr === null) ? null : String(cookieStr);
   }
 
+  /** 读取当前生效的账号 Cookie（null 表示「未指定账号，走默认账号回退」） */
+  getActiveCookie() {
+    return this.activeCookie;
+  }
+
   initDefaultCookies() {
     const cfg = configManager.get();
     if (cfg.account?.cookie) {
