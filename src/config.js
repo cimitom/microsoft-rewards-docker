@@ -76,7 +76,10 @@ const DEFAULT_CONFIG = {
   },
   epic: {
     enabled: true,
-    autoClaimHour: 10, // 每天几点后自动领取（0-23，容器本地时间）
+    checkIntervalMin: 30, // 检查间隔（分钟）：到点先查有没有新免费游戏，有才领取
+    retryCount: 2,        // 单个游戏领取失败后的重试次数
+    retryIntervalSec: 60, // 失败重试间隔（秒）
+    accountGapSec: 20,    // 不同账号之间的操作间隔（秒）
     accounts: [],
     claimRecords: []
   },
@@ -405,7 +408,8 @@ class ConfigManager {
         lastVerifyAt: data.lastVerifyAt || 0,
         lastVerifyMessage: data.lastVerifyMessage || '',
         lastClaimAt: data.lastClaimAt || 0,
-        lastClaimMessage: data.lastClaimMessage || ''
+        lastClaimMessage: data.lastClaimMessage || '',
+        handledGames: data.handledGames || {}
       });
     }
     this.save();

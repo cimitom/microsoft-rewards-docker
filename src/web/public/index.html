@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.5.0</span>
+            <span class="version-label" id="version-label">v1.5.1</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -46,17 +46,8 @@
 
           <!-- 功能按钮组 -->
           <div class="header-actions">
-            <button id="btn-sync-status" class="btn btn-secondary btn-sm" title="从微软官网同步今日真实任务完成度">
-              <span>🔄</span> 官网同步
-            </button>
-            <button id="btn-check-account" class="btn btn-secondary btn-sm" title="体检当前选中的账号">
-              <span>🔍</span> 账号体检
-            </button>
-            <button id="btn-guide" class="btn btn-secondary btn-sm" title="添加新账号配置向导">
-              <span>💡</span> 配置向导
-            </button>
-            <button id="btn-settings" class="btn btn-secondary btn-sm" title="全局参数设置">
-              <span>⚙️</span> 配置中心
+            <button id="btn-open-logs" class="btn btn-secondary btn-sm" title="查看全部历史日志（实时更新）">
+              <span>📜</span> 日志
             </button>
             <!-- 主题切换胶囊 -->
             <div class="theme-toggle-wrap" id="theme-toggle-wrap">
@@ -78,6 +69,25 @@
 
     <!-- ===== 选项卡面板：微软积分 ===== -->
     <div class="tab-panel active" id="tab-panel-ms">
+
+    <!-- 微软积分操作工具条（原顶部按钮挪到这里） -->
+    <section class="ms-toolbar">
+      <div class="ms-toolbar-title">🎁 微软积分</div>
+      <div class="ms-toolbar-actions">
+        <button id="btn-sync-status" class="btn btn-secondary btn-sm" title="从微软官网同步今日真实任务完成度">
+          <span>🔄</span> 官网同步
+        </button>
+        <button id="btn-check-account" class="btn btn-secondary btn-sm" title="体检当前选中的账号">
+          <span>🔍</span> 账号体检
+        </button>
+        <button id="btn-guide" class="btn btn-secondary btn-sm" title="添加新账号配置向导">
+          <span>💡</span> 配置向导
+        </button>
+        <button id="btn-settings" class="btn btn-secondary btn-sm" title="全局参数设置">
+          <span>⚙️</span> 配置中心
+        </button>
+      </div>
+    </section>
 
     <!-- 独立专属的多账号切换卡槽部分 (防止账号多了显示不全，全屏宽度自由横滑) -->
     <section class="account-selector-section" id="account-selector-section">
@@ -267,32 +277,142 @@
 
     <!-- ===== 选项卡面板：Epic 游戏领取 ===== -->
     <div class="tab-panel" id="tab-panel-epic">
-      <section class="section-card">
-        <div class="section-header">
-          <div class="section-title"><span>🎮</span> Epic 免费游戏领取</div>
-          <div class="accounts-header-actions">
-            <button class="btn btn-secondary btn-sm" id="btn-epic-add">➕ 添加账号</button>
-            <button class="btn btn-secondary btn-sm" id="btn-epic-refresh-games">🔄 刷新免费游戏</button>
-            <button class="btn btn-primary btn-sm" id="btn-epic-claim-all">▶️ 立即领取全部</button>
+      <div class="epic-demo-banner" id="epic-demo-banner" style="display: none;">
+        <span class="epic-demo-tag">DEMO</span>
+        <span><strong>演示模式已开启</strong>，当前账号与游戏均为示例数据，不会启动浏览器或访问真实 Epic 账号。</span>
+      </div>
+
+      <section class="epic-overview" aria-label="Epic 领取概览">
+        <div class="epic-stat-card">
+          <span class="epic-stat-icon games">🎁</span>
+          <div class="epic-stat-copy">
+            <strong class="epic-stat-value" id="epic-stat-games">--</strong>
+            <span class="epic-stat-label">当前免费游戏</span>
           </div>
         </div>
-        <div class="epic-accounts-grid" id="epic-accounts-grid"></div>
-        <div class="epic-empty" id="epic-empty">还没有 Epic 账号，点击右上角「添加账号」，导入浏览器会话后即可自动领取</div>
+        <div class="epic-stat-card">
+          <span class="epic-stat-icon pending">⏳</span>
+          <div class="epic-stat-copy">
+            <strong class="epic-stat-value" id="epic-stat-pending">--</strong>
+            <span class="epic-stat-label">待领取游戏</span>
+          </div>
+        </div>
+        <div class="epic-stat-card">
+          <span class="epic-stat-icon accounts">👤</span>
+          <div class="epic-stat-copy">
+            <strong class="epic-stat-value" id="epic-stat-accounts">--</strong>
+            <span class="epic-stat-label">启用账号</span>
+          </div>
+        </div>
+        <div class="epic-stat-card">
+          <span class="epic-stat-icon checked">🕒</span>
+          <div class="epic-stat-copy">
+            <strong class="epic-stat-value epic-stat-value-time" id="epic-stat-checked">--</strong>
+            <span class="epic-stat-label" id="epic-stat-checked-label">上次检查</span>
+          </div>
+        </div>
       </section>
+
+      <section class="section-card epic-games-section">
+        <div class="section-header">
+          <div>
+            <div class="section-title"><span>🎮</span> 当前免费游戏</div>
+            <div class="section-sub" id="epic-games-updated">等待获取免费游戏列表</div>
+          </div>
+          <div class="accounts-header-actions">
+            <button class="btn btn-secondary btn-sm" id="btn-epic-refresh-games" title="重新获取 Epic 当前免费游戏">🔄 刷新列表</button>
+            <button class="btn btn-primary btn-sm" id="btn-epic-claim-all" title="立即为全部启用账号领取待处理游戏">▶️ 立即领取全部</button>
+          </div>
+        </div>
+        <div class="epic-games-grid" id="epic-games-list">
+          <div class="epic-empty">正在准备免费游戏列表...</div>
+        </div>
+      </section>
+
+      <div class="epic-layout">
+        <section class="section-card epic-accounts-section">
+          <div class="section-header">
+            <div>
+              <div class="section-title"><span>👥</span> Epic 账号</div>
+              <div class="section-sub">每个账号独立保存浏览器会话，领取过程互不干扰</div>
+            </div>
+            <div class="accounts-header-actions">
+              <button class="btn btn-secondary btn-sm" id="btn-epic-add" title="添加新的 Epic 账号">➕ 添加账号</button>
+            </div>
+          </div>
+          <div class="epic-accounts-grid" id="epic-accounts-grid"></div>
+          <div class="epic-empty" id="epic-empty">还没有 Epic 账号。点击「添加账号」并导入浏览器会话后即可自动领取。</div>
+        </section>
+
+        <div class="epic-side">
+          <section class="section-card epic-side-card">
+            <div class="section-header">
+              <div>
+                <div class="section-title"><span>⚙️</span> 领取设置</div>
+                <div class="section-sub">全局生效，保存后自动重启调度器</div>
+              </div>
+              <button class="btn btn-primary btn-sm" id="btn-epic-save-settings">💾 保存</button>
+            </div>
+            <div class="epic-settings-list">
+              <label class="epic-setting-row epic-setting-switch">
+                <span>
+                  <strong>启用自动领取</strong>
+                  <small>关闭后只保留手动领取能力</small>
+                </span>
+                <input type="checkbox" id="epic-set-enabled">
+              </label>
+              <label class="epic-setting-row">
+                <span>
+                  <strong>检查间隔</strong>
+                  <small>发现未处理游戏才会启动浏览器</small>
+                </span>
+                <span class="epic-setting-input"><input type="number" id="epic-set-interval" min="5" max="1440" step="5" value="30"><em>分钟</em></span>
+              </label>
+              <label class="epic-setting-row">
+                <span>
+                  <strong>失败重试</strong>
+                  <small>单个游戏失败后的额外尝试次数</small>
+                </span>
+                <span class="epic-setting-input"><input type="number" id="epic-set-retry" min="0" max="5" step="1" value="2"><em>次</em></span>
+              </label>
+              <label class="epic-setting-row">
+                <span>
+                  <strong>重试间隔</strong>
+                  <small>两次失败尝试之间等待</small>
+                </span>
+                <span class="epic-setting-input"><input type="number" id="epic-set-retry-interval" min="10" max="600" step="10" value="60"><em>秒</em></span>
+              </label>
+              <label class="epic-setting-row">
+                <span>
+                  <strong>账号间隔</strong>
+                  <small>不同账号之间的操作缓冲</small>
+                </span>
+                <span class="epic-setting-input"><input type="number" id="epic-set-account-gap" min="0" max="600" step="5" value="20"><em>秒</em></span>
+              </label>
+            </div>
+            <small class="form-hint" id="epic-settings-hint">到达检查间隔后先查询免费游戏列表，只有存在未领取项时才会启动浏览器。</small>
+          </section>
+
+          <section class="section-card epic-side-card">
+            <div class="section-header">
+              <div class="section-title"><span>🖥️</span> 浏览器状态</div>
+              <div class="section-actions-inline" id="epic-browser-updated">--</div>
+            </div>
+            <div class="epic-browser-status" id="epic-browser-status">
+              <span class="epic-badge idle" id="epic-browser-badge">空闲</span>
+              <span class="epic-browser-action" id="epic-browser-action">当前没有正在执行的领取任务</span>
+            </div>
+            <div class="epic-browser-meta" id="epic-browser-meta">等待首次检查</div>
+          </section>
+        </div>
+      </div>
 
       <section class="section-card">
         <div class="section-header">
-          <div class="section-title"><span>🎁</span> 当前免费游戏</div>
-          <div class="section-actions-inline" id="epic-games-updated"></div>
-        </div>
-        <div class="epic-games-list" id="epic-games-list">
-          <div class="epic-empty">点击右上角「刷新免费游戏」获取当前可领取列表</div>
-        </div>
-      </section>
-
-      <section class="section-card">
-        <div class="section-header">
-          <div class="section-title"><span>🕒</span> 最近领取记录</div>
+          <div>
+            <div class="section-title"><span>🧾</span> 最近领取记录</div>
+            <div class="section-sub">最多保留最近 60 条处理结果</div>
+          </div>
         </div>
         <div class="epic-records" id="epic-records">
           <div class="epic-empty">暂无领取记录</div>
@@ -852,6 +972,29 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" id="btn-close-words-modal-btn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 全部历史日志弹窗 (Modal，实时更新) -->
+  <div class="modal-backdrop" id="logs-modal">
+    <div class="modal-box modal-logs">
+      <div class="modal-header">
+        <div class="modal-title"><span>📜</span> 运行日志（实时更新）</div>
+        <button class="btn-close" id="btn-close-logs">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="logs-toolbar">
+          <input type="text" id="logs-filter" class="form-input" placeholder="过滤关键字 / 账号名">
+          <label class="checkbox-label" style="white-space: nowrap;">
+            <input type="checkbox" id="logs-autoscroll" checked> 自动滚屏
+          </label>
+        </div>
+        <div class="logs-list" id="logs-modal-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-logs-clear">清空页面显示</button>
+        <button class="btn btn-primary" id="btn-close-logs-btn">关闭</button>
       </div>
     </div>
   </div>

@@ -236,45 +236,38 @@ class Scheduler {
     this.startEpicJob();
   }
 
-  /** Epic 免费游戏：每天过了配置整点后自动领取一次 */
+  /** Epic 免费游戏：按设置的检查间隔轮询，发现未领取的才真正触发领取 */
   startEpicJob() {
     if (this.epicJob) {
       this.epicJob.stop();
       this.epicJob = null;
     }
-    const cfg = configManager.get();
-    if (cfg.epic?.enabled === false) {
+    const settings = epicManager.getSettings();
+    if (!settings.enabled) {
       logger.log('⏸️', 'Epic 免费游戏自动领取已禁用');
       return;
     }
 
-    // 每小时第 5 分钟检查一次：过了设定整点且今天还没领过就执行
-    this.epicJob = cron.schedule('5 * * * *', async () => {
+    // 每分钟判断一次是否到达「检查间隔」
+    this.epicJob = cron.schedule('* * * * *', async () => {
       if (epicManager.running) return;
-      const c = configManager.get();
-      if (c.epic?.enabled === false) return;
-
-      const hour = Number(c.epic?.autoClaimHour ?? 10);
-      const now = new Date();
-      if (now.getHours() < hour) return;
-
-      const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-      if (c.epic?.lastAutoClaimDate === today) return;
+      const s = epicManager.getSettings();
+      if (!s.enabled) return;
 
       const accounts = configManager.getEpicAccounts().filter(a => a.enabled !== false && a.storageState?.cookies?.length);
       if (accounts.length === 0) return;
 
-      // 先记账再执行，避免异常导致每小时重复触发
-      configManager.update({ epic: { lastAutoClaimDate: today } });
-      logger.log('🎮', `Epic 每日自动领取开始（${accounts.length} 个账号）`);
+      const elapsedMin = (Date.now() - epicManager.lastCheckAt) / 60000;
+      if (epicManager.lastCheckAt && elapsedMin < s.checkIntervalMin) return;
+
       try {
-        await epicManager.claimAll();
+        await epicManager.checkAndClaimIfNeeded();
       } catch (e) {
-        logger.log('🔴', `Epic 自动领取异常: ${e.message}`);
+        logger.log('🔴', `Epic 定时检查异常: ${e.message}`);
       }
     });
 
-    logger.log('🎮', `Epic 免费游戏自动领取已就绪（每天 ${cfg.epic?.autoClaimHour ?? 10}:05 后检查）`);
+    logger.log('🎮', `Epic 免费游戏自动领取已就绪（每 ${settings.checkIntervalMin} 分钟检查一次，失败重试 ${settings.retryCount} 次）`);
   }
 
   stop() {

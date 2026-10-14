@@ -588,6 +588,7 @@ function initUIEvents() {
     btn.addEventListener('click', () => switchAppTab(btn.getAttribute('data-tab')));
   });
   initEpicUI();
+  initLogsModal();
   switchAppTab(localStorage.getItem('ms_rewards_app_tab') || 'ms', false);
 }
 
@@ -795,7 +796,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.5.0';
+  const current = updateInfo?.currentVersion || '1.5.1';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -835,7 +836,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.5.0'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.5.1'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -1413,6 +1414,7 @@ function initLogStream() {
       } else if (data.type === 'log') {
         allLogs.push(data.entry);
         if (allLogs.length > 800) allLogs.shift();
+        appendLogToModal(data.entry);
         if ((data.entry.timestamp || 0) >= logViewSince && logMatchesSelectedAccount(data.entry)) {
           const terminal = document.getElementById('terminal-logs');
           const chkAutoScroll = document.getElementById('chk-auto-scroll');
@@ -2276,6 +2278,88 @@ async function handleTestSearchApi() {
 
 // ===== Epic 免费游戏领取 =====
 let epicAccountCache = [];
+let epicGamesCache = [];
+let epicSettingsCache = {};
+let epicStatusCache = {};
+
+function getEpicInitial(name) {
+  return Array.from(String(name || 'E').trim())[0]?.toUpperCase() || 'E';
+}
+
+function getEpicCoverHue(title) {
+  let hash = 0;
+  for (const ch of String(title || '')) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
+  return hash;
+}
+
+function formatEpicShortTime(ts) {
+  if (!ts) return '--';
+  try {
+    return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch {
+    return '--';
+  }
+}
+
+function formatEpicDeadline(value) {
+  if (!value) return '结束时间待公布';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '结束时间待公布';
+  const text = date.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  const remainMs = date.getTime() - Date.now();
+  if (remainMs <= 0) return `${text} · 已结束`;
+  const days = Math.max(1, Math.ceil(remainMs / 86400000));
+  return `${text} · 剩 ${days} 天`;
+}
+
+function getEpicGameProgress(game) {
+  const enabledAccounts = epicAccountCache.filter(a => a.enabled !== false);
+  const handled = enabledAccounts.filter(a => (a.handledGameIds || []).includes(game.id)).length;
+  if (enabledAccounts.length > 0 && handled >= enabledAccounts.length) {
+    return { cls: 'complete', text: `已处理 ${handled}/${enabledAccounts.length}` };
+  }
+  if (handled > 0) return { cls: 'partial', text: `已处理 ${handled}/${enabledAccounts.length}` };
+  return { cls: 'pending', text: enabledAccounts.length > 0 ? '待领取' : '等待添加账号' };
+}
+
+function getEpicNextCheckText() {
+  if (!epicSettingsCache.enabled || !epicStatusCache.lastCheckAt || !epicSettingsCache.checkIntervalMin) return '';
+  const nextAt = epicStatusCache.lastCheckAt + Number(epicSettingsCache.checkIntervalMin) * 60000;
+  if (nextAt <= Date.now()) return '即将';
+  return formatEpicShortTime(nextAt);
+}
+
+function renderEpicStats() {
+  const enabledAccounts = epicAccountCache.filter(a => a.enabled !== false);
+  const pendingCount = epicGamesCache.filter(game => {
+    const handled = enabledAccounts.filter(a => (a.handledGameIds || []).includes(game.id)).length;
+    return enabledAccounts.length === 0 || handled < enabledAccounts.length;
+  }).length;
+
+  const gamesEl = document.getElementById('epic-stat-games');
+  const pendingEl = document.getElementById('epic-stat-pending');
+  const accountsEl = document.getElementById('epic-stat-accounts');
+  const checkedEl = document.getElementById('epic-stat-checked');
+  const checkedLabel = document.getElementById('epic-stat-checked-label');
+  const demoBanner = document.getElementById('epic-demo-banner');
+
+  if (gamesEl) gamesEl.innerText = epicGamesCache.length;
+  if (pendingEl) pendingEl.innerText = pendingCount;
+  if (accountsEl) {
+    accountsEl.innerText = enabledAccounts.length;
+    accountsEl.title = `共 ${epicAccountCache.length} 个账号，${enabledAccounts.length} 个已启用`;
+  }
+  if (checkedEl) checkedEl.innerText = epicStatusCache.lastCheckAt ? formatEpicShortTime(epicStatusCache.lastCheckAt) : '尚未检查';
+  const nextCheck = getEpicNextCheckText();
+  if (checkedLabel) checkedLabel.innerText = nextCheck ? `下次检查 ${nextCheck}` : '上次检查';
+  if (demoBanner) demoBanner.style.display = epicStatusCache.demo ? 'flex' : 'none';
+}
 
 function initEpicUI() {
   document.getElementById('btn-epic-add')?.addEventListener('click', () => openEpicModal(null));
@@ -2284,6 +2368,14 @@ function initEpicUI() {
   document.getElementById('btn-save-epic-modal')?.addEventListener('click', saveEpicAccount);
   document.getElementById('btn-epic-claim-all')?.addEventListener('click', () => claimEpic(null));
   document.getElementById('btn-epic-refresh-games')?.addEventListener('click', () => fetchEpicFreeGames(true));
+  document.getElementById('btn-epic-save-settings')?.addEventListener('click', saveEpicSettings);
+
+  // Epic 页激活时轮询浏览器状态，方便判断是否卡死
+  setInterval(() => {
+    if (document.getElementById('tab-panel-epic')?.classList.contains('active')) {
+      fetchEpicStatus();
+    }
+  }, 3000);
 }
 
 function formatEpicTime(ts) {
@@ -2312,6 +2404,7 @@ function renderEpicAccounts(accounts) {
   if (!accounts || accounts.length === 0) {
     grid.innerHTML = '';
     if (empty) empty.style.display = 'block';
+    renderEpicStats();
     return;
   }
   if (empty) empty.style.display = 'none';
@@ -2325,24 +2418,44 @@ function renderEpicAccounts(accounts) {
           ? '<span class="epic-badge err">会话失效</span>'
           : '<span class="epic-badge idle">未校验</span>';
     const enabledBadge = a.enabled ? '<span class="epic-badge ok">已启用</span>' : '<span class="epic-badge idle">已停用</span>';
-    const verifyMsg = a.lastVerifyMessage ? ` · ${escapeHtml(a.lastVerifyMessage)}` : '';
+    const handledCount = (a.handledGameIds || []).length;
+    const verifyTip = a.lastVerifyMessage ? ` title="${escapeHtml(a.lastVerifyMessage)}"` : '';
     return `
       <div class="epic-account-card">
         <div class="epic-account-top">
-          <span class="epic-account-name" title="${escapeHtml(a.name)}">🎮 ${escapeHtml(a.name)}</span>
-          <span style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">${enabledBadge}${sessionBadge}</span>
+          <div class="epic-account-identity">
+            <span class="epic-account-avatar">${escapeHtml(getEpicInitial(a.name))}</span>
+            <span class="epic-account-copy">
+              <span class="epic-account-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</span>
+              <span class="epic-account-order">Epic 账号 #${escapeHtml(String(a.order || '-'))}</span>
+            </span>
+          </div>
+          <span class="epic-account-badges">${enabledBadge}${sessionBadge}</span>
         </div>
         <div class="epic-account-meta">
-          Cookie 数量：${a.cookieCount || 0}${a.hasEpicSession ? '（含 Epic 登录凭据）' : ''}<br>
-          上次校验：${formatEpicTime(a.lastVerifyAt)}${verifyMsg}<br>
-          上次领取：${formatEpicTime(a.lastClaimAt)}
+          <div class="epic-account-meta-item">
+            <span>会话凭据</span>
+            <strong>${a.cookieCount || 0} 条${a.hasEpicSession ? ' · 含登录态' : ''}</strong>
+          </div>
+          <div class="epic-account-meta-item"${verifyTip}>
+            <span>上次校验</span>
+            <strong>${formatEpicTime(a.lastVerifyAt)}</strong>
+          </div>
+          <div class="epic-account-meta-item">
+            <span>已处理游戏</span>
+            <strong>${handledCount} 个</strong>
+          </div>
+          <div class="epic-account-meta-item">
+            <span>上次领取</span>
+            <strong>${formatEpicTime(a.lastClaimAt)}</strong>
+          </div>
         </div>
         <div class="epic-account-actions">
-          <button class="btn btn-primary btn-sm epic-claim" data-id="${a.id}">▶️ 领取</button>
-          <button class="btn btn-secondary btn-sm epic-verify" data-id="${a.id}">🔍 校验会话</button>
-          <button class="btn btn-secondary btn-sm epic-import" data-id="${a.id}">📋 更新会话</button>
-          <button class="btn btn-secondary btn-sm epic-toggle" data-id="${a.id}">${a.enabled ? '⏸️ 停用' : '▶️ 启用'}</button>
-          <button class="btn btn-danger btn-sm epic-delete" data-id="${a.id}">🗑️ 删除</button>
+          <button class="btn btn-primary btn-sm epic-claim" data-id="${a.id}" title="为这个账号领取">▶️ 领取</button>
+          <button class="btn btn-secondary btn-sm epic-verify" data-id="${a.id}" title="校验浏览器会话">🔍 校验</button>
+          <button class="btn btn-secondary btn-sm epic-import" data-id="${a.id}" title="更新浏览器会话">📋 更新</button>
+          <button class="btn btn-secondary btn-sm epic-toggle" data-id="${a.id}" title="${a.enabled ? '停用此账号' : '启用此账号'}">${a.enabled ? '⏸️ 停用' : '▶️ 启用'}</button>
+          <button class="btn btn-danger btn-sm epic-delete" data-id="${a.id}" title="删除此账号">🗑️ 删除</button>
         </div>
       </div>`;
   }).join('');
@@ -2352,33 +2465,47 @@ function renderEpicAccounts(accounts) {
   grid.querySelectorAll('.epic-import').forEach(b => b.addEventListener('click', () => openEpicModal(b.getAttribute('data-id'))));
   grid.querySelectorAll('.epic-toggle').forEach(b => b.addEventListener('click', () => toggleEpicAccount(b.getAttribute('data-id'))));
   grid.querySelectorAll('.epic-delete').forEach(b => b.addEventListener('click', () => deleteEpicAccount(b.getAttribute('data-id'))));
+
+  renderEpicStats();
+  if (epicStatusCache.records) renderEpicRecords(epicStatusCache.records);
 }
 
 function renderEpicGames(games) {
   const list = document.getElementById('epic-games-list');
   const updated = document.getElementById('epic-games-updated');
   if (!list) return;
-  if (updated) updated.innerText = `更新于 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+  epicGamesCache = Array.isArray(games) ? games : [];
+  if (updated) updated.innerText = `更新于 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} · 共 ${epicGamesCache.length} 个`;
   if (!games || games.length === 0) {
     list.innerHTML = '<div class="epic-empty">当前没有可领取的免费游戏</div>';
+    renderEpicStats();
     return;
   }
   list.innerHTML = games.map(g => {
-    const end = g.endDate ? new Date(g.endDate).toLocaleString('zh-CN', { hour12: false }) : '--';
-    const thumb = g.image
-      ? `<img class="epic-game-thumb" src="${escapeHtml(g.image)}" alt="">`
-      : '<div class="epic-game-thumb"></div>';
+    const progress = getEpicGameProgress(g);
+    const cover = g.image
+      ? `<img src="${escapeHtml(g.image)}" alt="${escapeHtml(g.title)}" loading="lazy">`
+      : `<div class="epic-game-cover-fallback"><span>${escapeHtml(getEpicInitial(g.title))}</span><small>FREE GAME</small></div>`;
     const link = g.url
-      ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(g.url)}" target="_blank" rel="noopener">打开页面</a>`
+      ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(g.url)}" target="_blank" rel="noopener">打开商店</a>`
       : '';
     return `
-      <div class="epic-game-row">
-        ${thumb}
-        <span class="epic-game-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</span>
-        <span class="epic-game-deadline">截止 ${escapeHtml(end)}</span>
-        ${link}
-      </div>`;
+      <article class="epic-game-card">
+        <div class="epic-game-cover" style="--cover-h: ${getEpicCoverHue(g.title)};">
+          ${cover}
+          <span class="epic-game-free-tag">免费领取</span>
+        </div>
+        <div class="epic-game-card-body">
+          <div class="epic-game-card-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</div>
+          <div class="epic-game-card-deadline"><span>⏳</span> ${escapeHtml(formatEpicDeadline(g.endDate))}</div>
+        </div>
+        <div class="epic-game-card-footer">
+          <span class="epic-game-status ${progress.cls}">● ${escapeHtml(progress.text)}</span>
+          ${link}
+        </div>
+      </article>`;
   }).join('');
+  renderEpicStats();
 }
 
 function renderEpicRecords(records) {
@@ -2388,19 +2515,33 @@ function renderEpicRecords(records) {
     box.innerHTML = '<div class="epic-empty">暂无领取记录</div>';
     return;
   }
-  box.innerHTML = records.map(r => `
-    <div class="epic-record-row">
-      <span class="epic-badge ${r.ok ? 'ok' : 'err'}">${r.ok ? '成功' : '失败'}</span>
-      <span class="epic-record-time">${formatEpicTime(r.at)}</span>
-      <span class="epic-record-title" title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</span>
-      <span class="epic-record-time">${escapeHtml(r.message || '')}</span>
-    </div>`).join('');
+  box.innerHTML = records.map(r => {
+    const accountName = epicAccountCache.find(a => a.id === r.accountId)?.name || '';
+    const statusMap = {
+      claimed: { cls: 'ok', text: '已领取' },
+      owned: { cls: 'warn', text: '已拥有' },
+      failed: { cls: 'err', text: '失败' }
+    };
+    const status = statusMap[r.status] || { cls: r.ok ? 'ok' : 'err', text: r.ok ? '成功' : '失败' };
+    const message = accountName ? `[${accountName}] ${r.message || ''}` : (r.message || '');
+    return `
+      <div class="epic-record-row">
+        <span class="epic-badge ${status.cls}">${status.text}</span>
+        <span class="epic-record-time">${formatEpicTime(r.at)}</span>
+        <span class="epic-record-title" title="${escapeHtml(r.title)}">${escapeHtml(r.title)}</span>
+        <span class="epic-record-message" title="${escapeHtml(message)}">${escapeHtml(message)}</span>
+      </div>`;
+  }).join('');
 }
 
 async function fetchEpicStatus() {
   try {
     const res = await fetch('/api/epic/status').then(r => r.json());
-    if (res.success) renderEpicRecords(res.data?.records || []);
+    if (res.success) {
+      epicStatusCache = { ...epicStatusCache, ...(res.data || {}) };
+      renderEpicRecords(epicStatusCache.records || []);
+      renderEpicBrowserStatus(epicStatusCache);
+    }
   } catch {}
 }
 
@@ -2524,11 +2665,175 @@ async function claimEpic(accountId) {
 }
 
 async function refreshEpicTab() {
-  await fetchEpicAccounts();
-  await fetchEpicStatus();
-  if (!document.getElementById('epic-games-list')?.dataset.loaded) {
-    await fetchEpicFreeGames(false);
-    const el = document.getElementById('epic-games-list');
-    if (el) el.dataset.loaded = '1';
+  const list = document.getElementById('epic-games-list');
+  const loadGames = !list?.dataset.loaded ? fetchEpicFreeGames(false) : Promise.resolve();
+  await Promise.all([
+    loadEpicSettings(),
+    fetchEpicAccounts(),
+    fetchEpicStatus(),
+    loadGames
+  ]);
+  if (list) list.dataset.loaded = '1';
+  renderEpicStats();
+}
+
+// ===== Epic 领取设置 =====
+async function loadEpicSettings() {
+  try {
+    const res = await fetch('/api/epic/settings').then(r => r.json());
+    if (!res.success) return;
+    const s = res.data || {};
+    const set = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.value = val;
+    };
+    const enabledEl = document.getElementById('epic-set-enabled');
+    if (enabledEl) enabledEl.checked = s.enabled !== false;
+    set('epic-set-interval', s.checkIntervalMin ?? 30);
+    set('epic-set-retry', s.retryCount ?? 2);
+    set('epic-set-retry-interval', s.retryIntervalSec ?? 60);
+    set('epic-set-account-gap', s.accountGapSec ?? 20);
+    epicSettingsCache = s;
+    renderEpicStats();
+  } catch {}
+}
+
+async function saveEpicSettings() {
+  const body = {
+    enabled: document.getElementById('epic-set-enabled')?.checked !== false,
+    checkIntervalMin: Number(document.getElementById('epic-set-interval')?.value),
+    retryCount: Number(document.getElementById('epic-set-retry')?.value),
+    retryIntervalSec: Number(document.getElementById('epic-set-retry-interval')?.value),
+    accountGapSec: Number(document.getElementById('epic-set-account-gap')?.value)
+  };
+  try {
+    const res = await fetch('/api/epic/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '保存失败');
+    epicSettingsCache = res.data || {};
+    await loadEpicSettings();
+    alert('Epic 领取设置已保存');
+  } catch (e) {
+    alert(`保存失败：${e.message}`);
   }
+}
+
+// ===== Epic 无头浏览器状态 =====
+const EPIC_STATUS_TEXT = {
+  idle: '空闲',
+  checking: '检查中',
+  navigating: '打开页面',
+  clicking: '点击获取',
+  ordering: '确认订单',
+  waiting: '等待中',
+  retrying: '重试中',
+  done: '已完成'
+};
+
+function renderEpicBrowserStatus(data) {
+  const badge = document.getElementById('epic-browser-badge');
+  const action = document.getElementById('epic-browser-action');
+  const meta = document.getElementById('epic-browser-meta');
+  const updated = document.getElementById('epic-browser-updated');
+  if (!badge || !action) return;
+
+  epicStatusCache = { ...epicStatusCache, ...(data || {}) };
+  const st = data.state || {};
+  const running = !!data.running;
+  const activeStatuses = ['checking', 'navigating', 'clicking', 'ordering', 'waiting', 'retrying'];
+  const active = running || activeStatuses.includes(st.status);
+  const label = EPIC_STATUS_TEXT[st.status] || '空闲';
+  badge.className = `epic-badge ${active || st.status === 'done' ? 'ok' : 'idle'}`;
+  badge.innerText = active ? `● ${label}` : label;
+  action.innerText = st.lastAction || (active ? '执行中...' : '当前没有正在执行的领取任务');
+
+  const parts = [];
+  if (st.accountName) parts.push(`账号：${st.accountName}`);
+  if (st.gameTitle) parts.push(`游戏：${st.gameTitle}`);
+  if (st.maxAttempts > 0) parts.push(`尝试：${st.attempt || 0}/${st.maxAttempts}`);
+  if (data.lastCheckAt) parts.push(`上次检查：${formatEpicTime(data.lastCheckAt)}`);
+  const nextCheck = getEpicNextCheckText();
+  if (nextCheck) parts.push(`下次检查：${nextCheck}`);
+  if (data.demo) parts.push('⚠️ 演示模式（不启动浏览器）');
+  if (meta) meta.innerText = parts.length > 0 ? parts.join('  ｜  ') : '等待首次检查';
+  if (updated) {
+    updated.innerText = st.lastUpdate
+      ? `更新于 ${new Date(st.lastUpdate).toLocaleTimeString('zh-CN', { hour12: false })}`
+      : '--';
+  }
+  renderEpicStats();
+}
+
+// ===== 全部历史日志弹窗 =====
+let logsModalEntries = [];
+let logsModalOpen = false;
+
+function initLogsModal() {
+  document.getElementById('btn-open-logs')?.addEventListener('click', openLogsModal);
+  document.getElementById('btn-close-logs')?.addEventListener('click', closeLogsModal);
+  document.getElementById('btn-close-logs-btn')?.addEventListener('click', closeLogsModal);
+  document.getElementById('logs-filter')?.addEventListener('input', () => renderLogsModal());
+  document.getElementById('btn-logs-clear')?.addEventListener('click', () => {
+    logsModalEntries = [];
+    renderLogsModal();
+  });
+}
+
+async function openLogsModal() {
+  logsModalOpen = true;
+  openModal('logs-modal');
+  const list = document.getElementById('logs-modal-list');
+  if (list) list.innerHTML = '<div class="logs-empty">正在加载历史日志...</div>';
+  try {
+    const res = await fetch('/api/logs/history?limit=500').then(r => r.json());
+    logsModalEntries = res.success ? (res.data || []) : [];
+  } catch {
+    logsModalEntries = [];
+  }
+  renderLogsModal(true);
+}
+
+function closeLogsModal() {
+  logsModalOpen = false;
+  closeModal('logs-modal');
+}
+
+function renderLogsModal(scrollToBottom = false) {
+  const list = document.getElementById('logs-modal-list');
+  if (!list) return;
+  const filter = (document.getElementById('logs-filter')?.value || '').trim().toLowerCase();
+  const rows = logsModalEntries.filter(e => {
+    if (!filter) return true;
+    return `${e.accountName || ''} ${e.message || ''} ${e.icon || ''}`.toLowerCase().includes(filter);
+  });
+  if (rows.length === 0) {
+    list.innerHTML = `<div class="logs-empty">${logsModalEntries.length === 0 ? '暂无日志' : '没有匹配的日志'}</div>`;
+    return;
+  }
+  list.innerHTML = rows.map(e => `
+    <div class="logs-line">
+      <span class="logs-time">[${escapeHtml(e.fullTime || e.time || '')}]</span>
+      <span>${escapeHtml(e.icon || 'ℹ️')}</span>
+      ${e.accountName ? `<span class="logs-acc">[${escapeHtml(e.accountName)}]</span>` : ''}
+      <span>${escapeHtml(e.message || '')}</span>
+    </div>`).join('');
+
+  const auto = document.getElementById('logs-autoscroll');
+  if (scrollToBottom || auto?.checked) list.scrollTop = list.scrollHeight;
+}
+
+function appendLogToModal(entry) {
+  if (!logsModalOpen || !entry) return;
+  logsModalEntries.push({
+    fullTime: entry.fullTime || '',
+    time: entry.time || '',
+    icon: entry.icon || 'ℹ️',
+    accountName: entry.accountName || '',
+    message: entry.message || ''
+  });
+  if (logsModalEntries.length > 800) logsModalEntries.shift();
+  renderLogsModal();
 }

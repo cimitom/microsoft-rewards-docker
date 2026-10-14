@@ -112,6 +112,41 @@ class Logger extends EventEmitter {
     return this.timeline;
   }
 
+  /**
+   * 读取 app.log 末尾若干行并解析为日志条目（供「全部历史日志」弹窗使用）。
+   * 行格式：[2026/10/14 17:29:36] ✅ [账号名] 消息
+   */
+  getRecentFromFile(limit = 300) {
+    try {
+      const raw = fs.readFileSync(LOG_FILE, 'utf-8');
+      const lines = raw.split('\n').filter(line => line.trim());
+      return lines.slice(-limit).map(line => {
+        const m = line.match(/^\[(.*?)\]\s+(\S+)\s+(.*)$/);
+        if (!m) {
+          return { fullTime: '', time: '', icon: 'ℹ️', accountName: '', tag: '', message: line };
+        }
+        const [, fullTime, icon, rest] = m;
+        let accountName = '';
+        let message = rest;
+        const accMatch = rest.match(/^\[([^\]]+)\]\s*(.*)$/);
+        if (accMatch) {
+          accountName = accMatch[1];
+          message = accMatch[2];
+        }
+        return {
+          fullTime,
+          time: fullTime.includes(' ') ? fullTime.split(' ').slice(-1)[0] : fullTime,
+          icon,
+          accountName,
+          tag: '',
+          message
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
   clearLogs() {
     this.logs = [];
     this.emit('clear');

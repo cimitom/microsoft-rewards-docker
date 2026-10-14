@@ -17,7 +17,7 @@ import epicManager from '../core/epic.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.5.0';
+const CURRENT_VERSION = '1.5.1';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -568,6 +568,12 @@ export function createServer() {
     res.json({ success: true, message: '已发出停止指令' });
   });
 
+  // 5.5 历史日志（读取 data/app.log 末尾，供「全部日志」弹窗）
+  app.get('/api/logs/history', (req, res) => {
+    const limit = Math.min(1000, Math.max(50, parseInt(req.query.limit, 10) || 300));
+    res.json({ success: true, data: logger.getRecentFromFile(limit) });
+  });
+
   // 6. 实时日志流 (SSE)
   app.get('/api/logs/stream', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -772,6 +778,7 @@ export function createServer() {
         cookieCount: summary.cookieCount,
         hasEpicSession: summary.hasEpicSession,
         sessionValid: a.sessionValid ?? null,
+        handledGameIds: Object.keys(a.handledGames || {}),
         lastVerifyAt: a.lastVerifyAt || 0,
         lastVerifyMessage: a.lastVerifyMessage || '',
         lastClaimAt: a.lastClaimAt || 0,
@@ -835,6 +842,9 @@ export function createServer() {
 
   app.post('/api/epic/claim', async (req, res) => {
     try {
+      if (epicManager.running || epicManager.checking) {
+        return res.json({ success: false, message: 'Epic 任务正在运行中，请稍后再试' });
+      }
       const accountId = req.body?.accountId || null;
       const data = accountId ? await epicManager.claimOne(accountId) : await epicManager.claimAll();
       res.json({ success: true, data });
@@ -844,16 +854,45 @@ export function createServer() {
   });
 
   app.get('/api/epic/status', (req, res) => {
-    const cfg = configManager.get();
     res.json({
       success: true,
       data: {
         ...epicManager.getState(),
-        enabled: cfg.epic?.enabled !== false,
-        autoClaimHour: cfg.epic?.autoClaimHour ?? 10,
+        settings: epicManager.getSettings(),
+        demo: process.env.EPIC_DEMO === '1',
         records: configManager.getEpicClaimRecords(20)
       }
     });
+  });
+
+  // Epic 全局领取设置
+  app.get('/api/epic/settings', (req, res) => {
+    res.json({ success: true, data: epicManager.getSettings() });
+  });
+
+  app.post('/api/epic/settings', (req, res) => {
+    try {
+      const b = req.body || {};
+      const num = (v, min, max, dft) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return dft;
+        return Math.max(min, Math.min(max, n));
+      };
+      configManager.update({
+        epic: {
+          enabled: b.enabled !== false,
+          checkIntervalMin: num(b.checkIntervalMin, 5, 1440, 30),
+          retryCount: num(b.retryCount, 0, 5, 2),
+          retryIntervalSec: num(b.retryIntervalSec, 10, 600, 60),
+          accountGapSec: num(b.accountGapSec, 0, 600, 20)
+        }
+      });
+      scheduler.restart(); // 让新的检查间隔立即生效
+      logger.log('🎮', 'Epic 领取设置已更新');
+      res.json({ success: true, data: epicManager.getSettings() });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
   });
 
   return app;
