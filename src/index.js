@@ -30,6 +30,9 @@ async function bootstrap() {
     server.close(() => {
       process.exit(0);
     });
+    // SSE 日志流会保持长连接，server.close() 单独调用可能永远等不到回调，
+    // 导致容器收到 SIGTERM 后迟迟无法退出。主动断开所有连接。
+    server.closeAllConnections?.();
   };
 
   process.on('SIGINT', shutdown);

@@ -39,7 +39,7 @@ class Scheduler {
       if (this.plannedDailyRuns[today][acc.id]) continue;
 
       const slot = acc.timeSlot || configManager.getDefaultTimeSlot(i);
-      const startHour = slot.startHour ?? 6;
+      const startHour = slot.startHour ?? 9;
       const endHour = slot.endHour ?? ((startHour + 4) % 24);
       const startMin = startHour * 60;
       const endMin = endHour * 60;
@@ -119,7 +119,7 @@ class Scheduler {
       }
     });
 
-    logger.log('🟢', `后台时段拟人调度引擎已就绪 (6-10 / 10-14 / 14-18 / 18-22 时段错峰 + 60分钟随机浮动)`);
+    logger.log('🟢', `后台时段拟人调度引擎已就绪 (9-13 / 13-17 / 17-21 / 21-次日01 时段错峰 + 60分钟随机浮动)`);
   }
 
   stop() {

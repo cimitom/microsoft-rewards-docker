@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.4.7</span>
+            <span class="version-label" id="version-label">v1.4.8</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -223,7 +223,7 @@
               <label class="terminal-auto-scroll">
                 <input type="checkbox" id="chk-auto-scroll" checked> 自动滚屏
               </label>
-              <button class="btn-text" id="btn-clear-logs">清空</button>
+              <button class="btn-text" id="btn-clear-logs" title="仅清空当前页面显示，后端日志与 data/app.log 仍保留">清空</button>
             </div>
           </div>
           <div class="terminal-box" id="terminal-logs">
@@ -355,10 +355,10 @@
           <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color);">
             <label class="form-label">🕒 拟人化错峰时段选择 (4小时作息窗口)</label>
             <div class="slot-presets-wrap" id="guide-slot-presets">
-              <button type="button" class="slot-pill-btn active" data-start="6">🌅 06:00 - 10:00 (早间)</button>
-              <button type="button" class="slot-pill-btn" data-start="10">☀️ 10:00 - 14:00 (午间)</button>
-              <button type="button" class="slot-pill-btn" data-start="14">☕ 14:00 - 18:00 (下午)</button>
-              <button type="button" class="slot-pill-btn" data-start="18">🌙 18:00 - 22:00 (晚间)</button>
+              <button type="button" class="slot-pill-btn active" data-start="9">🌅 09:00 - 13:00 (上午)</button>
+              <button type="button" class="slot-pill-btn" data-start="13">☀️ 13:00 - 17:00 (下午)</button>
+              <button type="button" class="slot-pill-btn" data-start="17">☕ 17:00 - 21:00 (傍晚)</button>
+              <button type="button" class="slot-pill-btn" data-start="21">🌙 21:00 - 次日 01:00 (夜间)</button>
               <button type="button" class="slot-pill-btn" data-start="custom">✏️ 自定义时间</button>
             </div>
             
@@ -366,11 +366,11 @@
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
                 <div>
                   <label style="font-size: 11.5px; color: var(--text-sub);">开始时间 (0-23点)</label>
-                  <input type="number" id="guide-account-starthour" class="form-input" min="0" max="23" value="6">
+                  <input type="number" id="guide-account-starthour" class="form-input" min="0" max="23" value="9">
                 </div>
                 <div>
                   <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动计算 +4h)</label>
-                  <input type="text" id="guide-account-endhour" class="form-input" readonly value="10:00" style="opacity: 0.85;">
+                  <input type="text" id="guide-account-endhour" class="form-input" readonly value="13:00" style="opacity: 0.85;">
                 </div>
               </div>
             </div>
@@ -445,14 +445,20 @@
 
           <div class="form-group">
             <label class="form-label">必应网页端 Cookie (针对当前选中的账号)</label>
-            <textarea id="cfg-cookie" class="form-textarea" rows="3" placeholder="粘贴浏览器 rewards.bing.com 的完整 Cookie"></textarea>
-            <small class="form-hint">PC 搜索、每日活动集与桌面任务必备</small>
+            <div class="secret-field">
+              <input type="password" id="cfg-cookie" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴浏览器 rewards.bing.com 的完整 Cookie">
+              <button type="button" class="secret-toggle" data-target="cfg-cookie" title="显示 / 隐藏 Cookie">👁</button>
+            </div>
+            <small class="form-hint" id="cfg-cookie-hint">PC 搜索、每日活动集与桌面任务必备；内容默认隐藏，不会明文展示</small>
           </div>
 
           <div class="form-group">
             <label class="form-label">移动端授权码链接 / Code (针对当前选中的账号)</label>
             <div class="input-with-btn">
-              <input type="text" id="cfg-authcode" class="form-input" placeholder="粘贴包含 code= 的完整跳转链接">
+              <div class="secret-field">
+                <input type="password" id="cfg-authcode" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴包含 code= 的完整跳转链接">
+                <button type="button" class="secret-toggle" data-target="cfg-authcode" title="显示 / 隐藏授权码">👁</button>
+              </div>
               <button id="btn-exchange-token" class="btn btn-secondary btn-sm">换取 Token</button>
             </div>
           </div>
@@ -465,10 +471,10 @@
           <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color); margin-top: 10px;">
             <label class="form-label">🕒 拟人化错峰时段设定 (4小时时间窗)</label>
             <div class="slot-presets-wrap" id="cfg-slot-presets">
-              <button type="button" class="slot-pill-btn active" data-start="6">🌅 06:00 - 10:00 (早间)</button>
-              <button type="button" class="slot-pill-btn" data-start="10">☀️ 10:00 - 14:00 (午间)</button>
-              <button type="button" class="slot-pill-btn" data-start="14">☕ 14:00 - 18:00 (下午)</button>
-              <button type="button" class="slot-pill-btn" data-start="18">🌙 18:00 - 22:00 (晚间)</button>
+              <button type="button" class="slot-pill-btn active" data-start="9">🌅 09:00 - 13:00 (上午)</button>
+              <button type="button" class="slot-pill-btn" data-start="13">☀️ 13:00 - 17:00 (下午)</button>
+              <button type="button" class="slot-pill-btn" data-start="17">☕ 17:00 - 21:00 (傍晚)</button>
+              <button type="button" class="slot-pill-btn" data-start="21">🌙 21:00 - 次日 01:00 (夜间)</button>
               <button type="button" class="slot-pill-btn" data-start="custom">✏️ 自定义时间</button>
             </div>
             
@@ -476,11 +482,11 @@
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
                 <div>
                   <label style="font-size: 11.5px; color: var(--text-sub);">自定义开始时间 (0-23点)</label>
-                  <input type="number" id="cfg-account-starthour" class="form-input" min="0" max="23" value="6">
+                  <input type="number" id="cfg-account-starthour" class="form-input" min="0" max="23" value="9">
                 </div>
                 <div>
                   <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动计算 +4h)</label>
-                  <input type="text" id="cfg-account-endhour" class="form-input" readonly value="10:00" style="opacity: 0.85;">
+                  <input type="text" id="cfg-account-endhour" class="form-input" readonly value="13:00" style="opacity: 0.85;">
                 </div>
               </div>
             </div>
@@ -643,11 +649,23 @@
         <button class="btn-close" id="btn-close-diag">&times;</button>
       </div>
       <div class="modal-body" id="diag-modal-body">
+        <div class="diag-scope">
+          <span class="diag-scope-label">体检范围</span>
+          <div class="diag-scope-group" id="diag-scope-group">
+            <button type="button" class="diag-scope-btn active" data-mode="single">单个账号</button>
+            <button type="button" class="diag-scope-btn" data-mode="all">全部账号</button>
+          </div>
+          <select id="diag-account-select" class="form-select diag-account-select"></select>
+        </div>
         <div class="diag-loading" id="diag-loading" style="text-align: center; padding: 30px 0;">
           <div class="diag-spinner"></div>
-          <p style="margin-top: 14px; color: var(--text-sub);">正在全面请求微软官方接口检测当前 Docker 中的登录态...</p>
+          <p id="diag-loading-text" style="margin-top: 14px; color: var(--text-sub);">正在全面请求微软官方接口检测当前 Docker 中的登录态...</p>
         </div>
         <div class="diag-content" id="diag-content" style="display: none;">
+          <!-- 全部账号体检结果列表 -->
+          <div class="diag-all-summary" id="diag-all-summary" style="display: none;"></div>
+          <div class="diag-all-list" id="diag-all-list" style="display: none;"></div>
+
           <!-- 诊断综合状态 Header -->
           <div class="diag-banner" id="diag-banner">
             <div class="diag-banner-icon" id="diag-banner-icon">🟢</div>
@@ -658,7 +676,7 @@
           </div>
 
           <!-- 3 个检测维度卡片 -->
-          <div class="diag-cards">
+          <div class="diag-cards" id="diag-cards">
             <!-- 1. 网页端 Cookie 状态 -->
             <div class="diag-item-card" id="diag-card-cookie">
               <div class="diag-item-header">

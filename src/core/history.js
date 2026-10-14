@@ -203,17 +203,14 @@ class HistoryManager {
             breakdown: this.getDefaultBreakdown(dayEarned)
           });
         } else {
-          // 预估历史趋势 (基于当前总余额回退)
-          const seed = (targetDate.getDate() * 19) % 25;
-          const estEarned = Math.max(0, 140 + seed);
-          const estBalance = Math.max(0, currentBalance - (i * 150));
+          // 没有真实记录时返回 0，不编造「预估趋势」——伪造的历史数字会误导用户
           result.push({
             date: dateKey,
             dayLabel,
             weekday,
-            earned: estEarned,
-            balance: estBalance,
-            breakdown: this.getDefaultBreakdown(estEarned)
+            earned: 0,
+            balance: 0,
+            breakdown: this.getDefaultBreakdown(0)
           });
         }
       } else {
@@ -234,27 +231,14 @@ class HistoryManager {
             weekday
           });
         } else {
-          // 如果该账号早前没有记录，根据该账号自己的真实余额生成合理区间
-          let estEarned = 0;
-          let estBalance = currentBalance;
-          if (currentBalance > 1000) {
-            // 大号平缓增长
-            const seed = (targetDate.getDate() * 17) % 20;
-            estEarned = 130 + seed;
-            estBalance = Math.max(0, currentBalance - (i * 140));
-          } else {
-            // 新号（如几十分~几百分），早前天数为 0 或微量
-            estEarned = i > 1 ? 0 : Math.min(currentBalance, 30);
-            estBalance = Math.max(0, currentBalance - (i * 30));
-          }
-
+          // 没有真实记录时返回 0，不编造历史数字
           result.push({
             date: dateKey,
             dayLabel,
             weekday,
-            earned: estEarned,
-            balance: estBalance,
-            breakdown: this.getDefaultBreakdown(estEarned)
+            earned: 0,
+            balance: 0,
+            breakdown: this.getDefaultBreakdown(0)
           });
         }
       }

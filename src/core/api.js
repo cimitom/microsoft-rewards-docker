@@ -230,8 +230,9 @@ export class RewardsApi {
         }
       }));
       const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
-      if (data?.response?.balance) {
-        return Number(data.response.balance);
+      const bal = data?.response?.balance;
+      if (bal !== undefined && bal !== null && bal !== '') {
+        return Number(bal);
       }
     } catch {}
 
@@ -245,9 +246,13 @@ export class RewardsApi {
         }
       });
       const data2 = typeof res2 === 'string' && this.isJSON(res2) ? JSON.parse(res2) : res2;
-      return Number(data2?.dashboard?.availablePoints || data2?.dashboard?.userStatus?.availablePoints || data2?.balance || 0);
+      const fallbackBal = data2?.dashboard?.availablePoints ?? data2?.dashboard?.userStatus?.availablePoints ?? data2?.balance;
+      if (fallbackBal !== undefined && fallbackBal !== null && fallbackBal !== '') {
+        return Number(fallbackBal);
+      }
     } catch {}
-    return 0;
+    // 取不到余额时返回 null，避免调用方把网络失败误当成「余额归零」写库
+    return null;
   }
 
   /**
@@ -910,7 +915,7 @@ export class RewardsApi {
           return sentence.slice(0, 30);
         }
       } catch (e) {
-        logger.log('🟡', `热搜词获取接口异常: ${e.message}，切换到离线词池`, '', this.currentAccountName || '');
+        logger.log('🟡', `热搜词获取接口异常: ${e.message}，切换到离线词池`, '', logger.getAccountContext());
       }
     }
     return sentence;
@@ -924,13 +929,22 @@ export class RewardsApi {
     const mkt = '&mkt=zh-CN';
     const searchUrl = `https://${this.host}/search?q=${encodeURIComponent(query)}&form=QBLH${mkt}`;
     const dateNowStr = `${new Date().getMonth() + 1}/${new Date().getDate()}/${new Date().getFullYear()}`;
+    // 关键：_Rwho 必须叠加在账号 Cookie 之上，直接设置 'cookie' 头会覆盖
+    // networkClient 自动注入的登录 Cookie（_U/_C_Auth 等），导致搜索不计分。
+    // 同时剔除旧版残留的 _EDGE_S 与重复的 _Rwho，避免 Cookie 头里出现同名项。
+    const accountCookie = networkClient.getCookieString(`https://${this.host}/`)
+      .split(';')
+      .map(p => p.trim())
+      .filter(p => p && !/^_EDGE_S=/i.test(p) && !/^_Rwho=/i.test(p))
+      .join('; ');
+    const searchCookie = [accountCookie, `_Rwho=u=d&ts=${dateNowStr}`].filter(Boolean).join('; ');
 
     // 1. 请求搜索页面
     await networkClient.request({
       url: searchUrl,
       headers: {
         'user-agent': USER_AGENTS.pc,
-        'cookie': `_Rwho=u=d&ts=${dateNowStr}`,
+        'cookie': searchCookie,
         'referer': `https://${this.host}/?form=QBLH`
       }
     });
@@ -944,7 +958,7 @@ export class RewardsApi {
           'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
           'user-agent': USER_AGENTS.pc,
           'referer': `https://${this.host}/?form=QBLH`,
-          'cookie': `_Rwho=u=d&ts=${dateNowStr}`
+          'cookie': searchCookie
         },
         data: 'wb=1%3bi%3d1%3bv%3d1'
       });
@@ -959,7 +973,7 @@ export class RewardsApi {
         'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
         'user-agent': USER_AGENTS.pc,
         'referer': `https://${this.host}/?form=QBLH`,
-        'cookie': `_Rwho=u=d&ts=${dateNowStr}`
+        'cookie': searchCookie
       },
       data: `url=${encodeURIComponent(`https://${this.host}/search?${params}`)}&V=web`
     });

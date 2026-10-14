@@ -15,7 +15,7 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.4.7';
+const CURRENT_VERSION = '1.4.8';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 function getCpuUsage() {
@@ -208,7 +208,9 @@ export function createServer() {
       enabled: a.enabled !== false,
       hasCookie: !!a.cookie,
       hasToken: !!a.refreshToken,
+      hasAuthCodeUrl: !!a.authCodeUrl,
       tokenTime: a.tokenTime || 0,
+      authDiagnosis: a.authDiagnosis || null,
       timeSlot: a.timeSlot
     }));
     res.json({ success: true, data: accounts });
@@ -282,10 +284,9 @@ export function createServer() {
 
   // 2. 获取配置
   app.get('/api/config', (req, res) => {
-    const cfg = configManager.get();
     res.json({
       success: true,
-      data: cfg
+      data: configManager.getPublicConfig()
     });
   });
 
@@ -295,7 +296,7 @@ export function createServer() {
       const updated = configManager.update(req.body);
       scheduler.restart();
       logger.log('⚙️', '配置已更新并已生效');
-      res.json({ success: true, data: updated });
+      res.json({ success: true, data: configManager.getPublicConfig() });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }
@@ -387,31 +388,80 @@ export function createServer() {
     }
   });
 
-  // 8. 全面测试账户状态并在 Docker 中完成体检
+  // 8. 全面测试账户状态并在 Docker 中完成体检（结果落盘，供账号卡片展示）
+  async function runAccountDiagnosis(accountId) {
+    const targetAccountId = accountId || null;
+    const result = await authManager.testAccount(targetAccountId);
+    // 获取当前网络出口信息
+    const [ipInfo, regionPass] = await Promise.all([
+      rewardsApi.getIPInfo(),
+      rewardsApi.checkRegion(0)
+    ]);
+
+    result.network = {
+      region: rewardsApi.region,
+      regionPass,
+      ipInfo: ipInfo || '未知'
+    };
+
+    const diagnosis = configManager.recordAuthDiagnosis(result.accountId, {
+      cookieValid: result.cookie?.valid,
+      tokenValid: result.token?.valid,
+      overallValid: result.overallValid,
+      balance: result.balance,
+      cookieMessage: result.cookie?.message,
+      tokenMessage: result.token?.message
+    });
+    result.diagnosis = diagnosis;
+
+    // 如果成功获取到积分，同步更新当前账户的总积分
+    if (result.balance > 0) {
+      const accStats = taskManager.ensureAccountStats(result.accountId || 'acc_1');
+      accStats.balance = result.balance;
+      taskManager.saveStats();
+    }
+    return result;
+  }
+
   app.post('/api/auth/test', async (req, res) => {
-    const targetAccountId = req.body?.accountId || null;
     try {
-      const result = await authManager.testAccount(targetAccountId);
-      // 获取当前网络出口信息
-      const [ipInfo, regionPass] = await Promise.all([
-        rewardsApi.getIPInfo(),
-        rewardsApi.checkRegion(0)
-      ]);
-
-      result.network = {
-        region: rewardsApi.region,
-        regionPass,
-        ipInfo: ipInfo || '未知'
-      };
-
-      // 如果成功获取到积分，同步更新当前账户的总积分
-      if (result.balance > 0) {
-        const accStats = taskManager.ensureAccountStats(targetAccountId || 'acc_1');
-        accStats.balance = result.balance;
-        taskManager.saveStats();
-      }
-
+      const result = await runAccountDiagnosis(req.body?.accountId || null);
       res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  // 8.5 一键体检全部账号（逐个串行，避免并发触发微软风控）
+  app.post('/api/auth/test-all', async (req, res) => {
+    try {
+      const accounts = configManager.getAccounts();
+      const results = [];
+      for (const acc of accounts) {
+        try {
+          results.push(await runAccountDiagnosis(acc.id));
+        } catch (e) {
+          results.push({
+            accountId: acc.id,
+            accountName: acc.name || acc.id,
+            cookie: { valid: false, message: e.message },
+            token: { valid: false, message: e.message },
+            overallValid: false,
+            allValid: false,
+            balance: 0,
+            error: e.message
+          });
+        }
+      }
+      const validCount = results.filter(r => r.allValid).length;
+      res.json({
+        success: true,
+        data: {
+          results,
+          total: results.length,
+          validCount
+        }
+      });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }

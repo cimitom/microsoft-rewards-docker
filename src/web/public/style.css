@@ -594,6 +594,24 @@ body {
   animation: pulse 1.5s infinite;
 }
 
+/* 账号凭据体检状态徽章：有效 / 失效 / 未检测 */
+.badge-mini.badge-auth-valid {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34D399;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.badge-mini.badge-auth-invalid {
+  background: rgba(239, 68, 68, 0.15);
+  color: #F87171;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.badge-mini.badge-auth-unknown {
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-sub);
+}
+
 /* 呼吸动效：此前多处引用 pulse 但关键帧从未定义，动效一直是失效的 */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -1283,6 +1301,43 @@ body {
 .input-with-btn {
   display: flex;
   gap: 8px;
+  align-items: flex-start;
+}
+
+/* 凭据输入：默认隐藏内容，右侧眼睛按钮切换明文 */
+.secret-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.secret-field .form-input {
+  padding-right: 38px;
+}
+
+.secret-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.secret-toggle:hover {
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-main);
 }
 
 .divider {
@@ -1392,6 +1447,93 @@ body {
   flex-direction: column;
   gap: 12px;
   margin-bottom: 20px;
+}
+
+/* 体检范围选择（单个账号 / 全部账号） */
+.diag-scope {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.diag-scope-label {
+  font-size: 12.5px;
+  color: var(--text-sub);
+  white-space: nowrap;
+}
+
+.diag-scope-group {
+  display: inline-flex;
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.diag-scope-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.diag-scope-btn.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.diag-account-select {
+  flex: 1;
+  min-width: 150px;
+  max-width: 240px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+/* 全部账号体检结果 */
+.diag-all-summary {
+  font-size: 13px;
+  color: var(--text-sub);
+  margin-bottom: 12px;
+}
+
+.diag-all-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diag-all-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.diag-all-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diag-all-detail {
+  font-size: 11.5px;
+  color: var(--text-muted);
 }
 
 .diag-item-card {

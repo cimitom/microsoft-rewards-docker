@@ -6,6 +6,13 @@ let currentHistoryDays = 7;
 let currentTheme = localStorage.getItem('ms_rewards_theme') || 'auto';
 let selectedAccountId = 'all'; // 'all' 或具体账号 id (如 'acc_1')
 let editingAccountIdInModal = null;
+// 前端日志视图的起始时间：点击「清空」后只显示此后的新日志（后端日志不受影响）
+let logViewSince = 0;
+let diagMode = 'single';
+let diagAccountId = null;
+
+// 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
+const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
 let guideDraftAccount = {
   id: '',
   name: '新账号',
@@ -95,12 +102,15 @@ function applyTheme(theme) {
   });
 }
 
-// 启动每日刷新剩余时间倒计时 (距离次日 00:00:00)
+// 启动每日刷新剩余时间倒计时 (距离下一次 09:00:00，中国区 Rewards 刷新点)
 function startCountdownTimer() {
   function updateTimer() {
     const now = new Date();
-    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0);
-    const diff = Math.max(0, midnight.getTime() - now.getTime());
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0);
+    if (target.getTime() <= now.getTime()) {
+      target.setDate(target.getDate() + 1);
+    }
+    const diff = Math.max(0, target.getTime() - now.getTime());
     const hours = String(Math.floor(diff / 3600000)).padStart(2, '0');
     const minutes = String(Math.floor((diff % 3600000) / 60000)).padStart(2, '0');
     const seconds = String(Math.floor((diff % 60000) / 1000)).padStart(2, '0');
@@ -191,6 +201,10 @@ function initUIEvents() {
 
   // 顶部快捷测试账号登录
   document.getElementById('btn-check-account').addEventListener('click', () => {
+    diagMode = 'single';
+    diagAccountId = selectedAccountId !== 'all'
+      ? selectedAccountId
+      : (currentConfig?.accounts?.[0]?.id || 'acc_1');
     openModal('diag-modal');
     runAccountDiagnosis();
   });
@@ -259,7 +273,7 @@ function initUIEvents() {
     const eElem = document.getElementById(endInputId);
     if (!sElem || !eElem) return;
     let sh = parseInt(sElem.value, 10);
-    if (isNaN(sh)) sh = 6;
+    if (isNaN(sh)) sh = 9;
     sh = Math.max(0, Math.min(23, sh));
     const eh = (sh + 4) % 24;
     eElem.value = `${String(eh).padStart(2, '0')}:00`;
@@ -459,9 +473,11 @@ function initUIEvents() {
     }
   });
 
-  // 清空日志
+  // 清空日志：只清空当前页面显示（设置本地时间戳过滤），
+  // 后端内存日志与 data/app.log 文件均保留，新日志照常继续显示。
   document.getElementById('btn-clear-logs').addEventListener('click', () => {
-    document.getElementById('terminal-logs').innerHTML = '';
+    logViewSince = Date.now();
+    renderLogs();
   });
 
   // 配置中心：一键换取/刷新 Token
@@ -548,6 +564,52 @@ function initUIEvents() {
       switchStep(step);
     });
   });
+
+  // 凭据输入框的显示 / 隐藏切换
+  initSecretToggles();
+  document.getElementById('cfg-cookie')?.addEventListener('input', updateCookieHint);
+
+  // 账号体检范围（单个 / 全部）
+  document.querySelectorAll('#diag-scope-group .diag-scope-btn').forEach(btn => {
+    btn.addEventListener('click', () => setDiagMode(btn.getAttribute('data-mode')));
+  });
+  document.getElementById('diag-account-select')?.addEventListener('change', (e) => {
+    diagAccountId = e.target.value;
+  });
+}
+
+function initSecretToggles() {
+  document.querySelectorAll('.secret-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const input = document.getElementById(btn.getAttribute('data-target'));
+      if (!input) return;
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.textContent = show ? '🙈' : '👁';
+      btn.title = show ? '隐藏内容' : '显示内容';
+    });
+  });
+}
+
+// Cookie 提示文案：只暴露「是否已配置」，不暴露内容与长度
+function updateCookieHint(hasStoredSecret = null) {
+  const hint = document.getElementById('cfg-cookie-hint');
+  const input = document.getElementById('cfg-cookie');
+  if (!hint || !input) return;
+  const hasValue = !!input.value.trim();
+  const stored = hasStoredSecret === null
+    ? !!currentConfig?.accounts?.find(a => a.id === editingAccountIdInModal)?.hasCookie
+    : hasStoredSecret;
+  if (hasValue) {
+    hint.textContent = '⚠️ Cookie 已修改但尚未保存，保存后生效';
+    hint.style.color = '#F59E0B';
+  } else if (stored) {
+    hint.textContent = '✅ 已配置 Cookie（内容已隐藏，点击右侧眼睛按钮可查看或重新粘贴）';
+    hint.style.color = '#34D399';
+  } else {
+    hint.textContent = 'PC 搜索、每日活动集与桌面任务必备；内容默认隐藏，不会明文展示';
+    hint.style.color = '';
+  }
 }
 
 function switchStep(stepNum) {
@@ -698,7 +760,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.7';
+  const current = updateInfo?.currentVersion || '1.4.8';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -738,7 +800,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.7'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.8'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -801,9 +863,10 @@ function renderAccountSelectorBar(summary) {
   // 2. 各独立账号胶囊
   accounts.forEach(acc => {
     const isActive = selectedAccountId === acc.id;
+    const auth = getAccountAuthStatus(acc);
     html += `
       <button class="account-chip ${isActive ? 'active' : ''}" data-acc-id="${acc.id}">
-        <span class="chip-icon">${acc.enabled ? '👤' : '⏸️'}</span>
+        <span class="chip-icon">${auth.cls === 'badge-auth-valid' ? '🟢' : auth.cls === 'badge-auth-invalid' ? '🔴' : (acc.enabled ? '👤' : '⏸️')}</span>
         <span class="chip-name">${escapeHtml(acc.name)}</span>
         <span class="chip-sub">${(acc.balance || 0).toLocaleString()} 分</span>
       </button>
@@ -1024,6 +1087,38 @@ function renderDashboard(data) {
 }
 
 // 渲染多账号概览矩阵卡片 (在“全部账号汇总”视图中展示)
+function formatDiagnosisTime(ts) {
+  if (!ts) return '未知时间';
+  try {
+    return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return '未知时间';
+  }
+}
+
+// 账号凭据体检状态：有效 / 失效 / 未检测（悬停展示上次检测时间与结果）
+function getAccountAuthStatus(acc) {
+  const d = acc?.authDiagnosis;
+  if (!d || !d.checkedAt) {
+    return {
+      text: '未检测',
+      cls: 'badge-auth-unknown',
+      tip: '尚未体检该账号\n点击右上角「账号体检」可检测 Cookie 与 Token 是否过期'
+    };
+  }
+  const cookieLine = d.cookieValid ? '✅ Cookie 有效' : '❌ Cookie 失效';
+  const tokenLine = d.tokenValid ? '✅ Token 有效' : '❌ Token 失效';
+  const tip = [
+    `上次检测：${formatDiagnosisTime(d.checkedAt)}`,
+    `检测结果：${d.overallValid ? '整体有效' : '存在失效项'}`,
+    cookieLine,
+    tokenLine
+  ].join('\n');
+  return d.overallValid
+    ? { text: '有效', cls: 'badge-auth-valid', tip }
+    : { text: '失效', cls: 'badge-auth-invalid', tip };
+}
+
 function renderAccountsOverviewGrid(accounts, runtime = {}) {
   const grid = document.getElementById('accounts-grid');
   if (!grid) return;
@@ -1033,6 +1128,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
 
   accounts.forEach(acc => {
     const isRunning = running && runningAccountId === acc.id;
+    const auth = getAccountAuthStatus(acc);
     const card = document.createElement('div');
     card.className = 'account-overview-card';
     card.innerHTML = `
@@ -1045,8 +1141,8 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
           ${isRunning
             ? '<span class="badge-mini badge-running">● 运行中</span>'
             : `<span class="badge-mini" style="background:${acc.enabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}; color:${acc.enabled ? '#34D399' : '#F87171'};">${acc.enabled ? '已启用' : '已停用'}</span>`}
-          <span class="badge-mini" style="background:rgba(56,189,248,0.15); color:#38BDF8;">
-            ${acc.hasCookie ? 'Cookie就绪' : '未配Cookie'}
+          <span class="badge-mini ${auth.cls}" data-tip="${escapeHtml(auth.tip)}">
+            ${auth.text}
           </span>
         </div>
       </div>
@@ -1157,6 +1253,8 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
     card.querySelector('.btn-test-single')?.addEventListener('click', (e) => {
       e.stopPropagation();
       selectedAccountId = acc.id;
+      diagMode = 'single';
+      diagAccountId = acc.id;
       openModal('diag-modal');
       runAccountDiagnosis();
     });
@@ -1207,10 +1305,10 @@ function renderLogs() {
   const terminal = document.getElementById('terminal-logs');
   if (!terminal) return;
   const chkAutoScroll = document.getElementById('chk-auto-scroll');
-  const visible = allLogs.filter(logMatchesSelectedAccount);
+  const visible = allLogs.filter(log => (log.timestamp || 0) >= logViewSince && logMatchesSelectedAccount(log));
   terminal.innerHTML = '';
   if (visible.length === 0) {
-    terminal.innerHTML = '<div class="log-empty">当前账号暂无日志记录</div>';
+    terminal.innerHTML = `<div class="log-empty">${logViewSince ? '暂无新日志（已清空当前页面显示，后端日志仍保留）' : '当前账号暂无日志记录'}</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
@@ -1232,7 +1330,7 @@ function initLogStream() {
       } else if (data.type === 'log') {
         allLogs.push(data.entry);
         if (allLogs.length > 800) allLogs.shift();
-        if (logMatchesSelectedAccount(data.entry)) {
+        if ((data.entry.timestamp || 0) >= logViewSince && logMatchesSelectedAccount(data.entry)) {
           const terminal = document.getElementById('terminal-logs');
           const chkAutoScroll = document.getElementById('chk-auto-scroll');
           if (terminal) {
@@ -1357,13 +1455,26 @@ function loadAccountIntoForm(accId) {
   const orderElem = document.getElementById('cfg-account-order');
   if (orderElem) orderElem.value = acc.order !== undefined ? acc.order : 1;
   document.getElementById('cfg-account-enabled').checked = acc.enabled !== false;
-  document.getElementById('cfg-cookie').value = acc.cookie || '';
-  document.getElementById('cfg-authcode').value = acc.authCodeUrl || '';
+
+  // 凭据字段：接口已脱敏，这里只回填占位符，避免把明文重新渲染到 DOM
+  const cookieElem = document.getElementById('cfg-cookie');
+  const authCodeElem = document.getElementById('cfg-authcode');
+  const hasCookie = acc.cookie === SECRET_PLACEHOLDER || !!acc.hasCookie;
+  const hasAuthCode = acc.authCodeUrl === SECRET_PLACEHOLDER || !!acc.hasAuthCodeUrl;
+  cookieElem.value = '';
+  authCodeElem.value = '';
+  cookieElem.placeholder = hasCookie ? '已配置 Cookie（内容已隐藏，可重新粘贴覆盖）' : '粘贴浏览器 rewards.bing.com 的完整 Cookie';
+  authCodeElem.placeholder = hasAuthCode ? '已配置授权码（内容已隐藏，可重新粘贴覆盖）' : '粘贴包含 code= 的完整跳转链接';
+  cookieElem.type = 'password';
+  authCodeElem.type = 'password';
+  document.querySelectorAll('.secret-toggle').forEach(btn => { btn.textContent = '👁'; });
+  updateCookieHint(hasCookie);
+
   document.getElementById('cfg-refresh-token').value = acc.refreshToken ? '********' : '';
 
   // 拟人化错峰时段
-  const slot = acc.timeSlot || { startHour: 6, endHour: 10, randomDelayMin: 60, durationHours: 2 };
-  const sh = slot.startHour ?? 6;
+  const slot = acc.timeSlot || { startHour: 9, endHour: 13, randomDelayMin: 60, durationHours: 2 };
+  const sh = slot.startHour ?? 9;
   const eh = slot.endHour ?? ((sh + 4) % 24);
   const shInput = document.getElementById('cfg-account-starthour');
   if (shInput) shInput.value = sh;
@@ -1371,7 +1482,7 @@ function loadAccountIntoForm(accId) {
   if (ehInput) ehInput.value = `${String(eh).padStart(2, '0')}:00`;
 
   // 联动高亮 4 个快捷按钮或自定义
-  const standardHours = [6, 10, 14, 18];
+  const standardHours = [9, 13, 17, 21];
   const customBox = document.getElementById('cfg-custom-slot-box');
   document.querySelectorAll('#cfg-slot-presets .slot-pill-btn').forEach(b => {
     const bStart = b.getAttribute('data-start');
@@ -1398,14 +1509,14 @@ async function saveSettingsFromModal() {
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
 
-  let sh = 6;
+  let sh = 9;
   const activePreset = document.querySelector('#cfg-slot-presets .slot-pill-btn.active');
-  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '6';
+  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '9';
   if (presetVal === 'custom') {
     sh = parseInt(document.getElementById('cfg-account-starthour')?.value, 10);
-    if (isNaN(sh)) sh = 6;
+    if (isNaN(sh)) sh = 9;
   } else {
-    sh = parseInt(presetVal, 10) || 6;
+    sh = parseInt(presetVal, 10) || 9;
   }
   sh = Math.max(0, Math.min(23, sh));
 
@@ -1496,14 +1607,14 @@ async function saveGuideSettings() {
   const proxyUrl = document.getElementById('guide-proxy-url').value.trim();
   const lockRegion = document.getElementById('guide-lock-region').checked;
 
-  let sh = 6;
+  let sh = 9;
   const activePreset = document.querySelector('#guide-slot-presets .slot-pill-btn.active');
-  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '6';
+  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '9';
   if (presetVal === 'custom') {
     sh = parseInt(document.getElementById('guide-account-starthour')?.value, 10);
-    if (isNaN(sh)) sh = 6;
+    if (isNaN(sh)) sh = 9;
   } else {
-    sh = parseInt(presetVal, 10) || 6;
+    sh = parseInt(presetVal, 10) || 9;
   }
   sh = Math.max(0, Math.min(23, sh));
   const eh = (sh + 4) % 24;
@@ -1586,15 +1697,67 @@ window.testNotifyChannel = async function(channel) {
   }
 };
 
-// 全面运行账号登录状态体检
+// 账号体检：根据范围选择分发到「单个账号」或「全部账号」
+function syncDiagScopeUI() {
+  document.querySelectorAll('#diag-scope-group .diag-scope-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-mode') === diagMode);
+  });
+  const selectWrap = document.getElementById('diag-account-select');
+  if (selectWrap) selectWrap.style.display = diagMode === 'single' ? '' : 'none';
+}
+
+function populateDiagAccountSelect() {
+  const select = document.getElementById('diag-account-select');
+  if (!select) return;
+  const accounts = currentConfig?.accounts || [];
+  if (!diagAccountId || !accounts.some(a => a.id === diagAccountId)) {
+    diagAccountId = accounts[0]?.id || 'acc_1';
+  }
+  select.innerHTML = accounts.map(a =>
+    `<option value="${a.id}" ${a.id === diagAccountId ? 'selected' : ''}>${escapeHtml(a.name || a.id)}</option>`
+  ).join('');
+}
+
+function setDiagMode(mode) {
+  diagMode = mode === 'all' ? 'all' : 'single';
+  syncDiagScopeUI();
+  if (diagMode === 'single') populateDiagAccountSelect();
+  runAccountDiagnosis();
+}
+
 async function runAccountDiagnosis() {
+  syncDiagScopeUI();
+  if (diagMode === 'single') {
+    populateDiagAccountSelect();
+    await runSingleAccountDiagnosis(diagAccountId);
+  } else {
+    await runAllAccountDiagnosis();
+  }
+}
+
+function setDiagLoading(show, text) {
   const loading = document.getElementById('diag-loading');
   const content = document.getElementById('diag-content');
-  loading.style.display = 'block';
-  content.style.display = 'none';
+  const loadingText = document.getElementById('diag-loading-text');
+  if (loadingText && text) loadingText.innerText = text;
+  if (loading) loading.style.display = show ? 'block' : 'none';
+  if (content) content.style.display = show ? 'none' : 'block';
+}
+
+// 单个账号：完整的三维检测详情
+async function runSingleAccountDiagnosis(accountId) {
+  setDiagLoading(true, '正在全面请求微软官方接口检测当前 Docker 中的登录态...');
+  document.getElementById('diag-all-summary').style.display = 'none';
+  document.getElementById('diag-all-list').style.display = 'none';
+  document.getElementById('diag-banner').style.display = '';
+  document.getElementById('diag-cards').style.display = '';
+  document.querySelector('.diag-summary-box').style.display = '';
+  document.getElementById('diag-tips').style.display = '';
+
+  const targetId = accountId
+    || (selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || 'acc_1'));
 
   try {
-    const targetId = selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || 'acc_1');
     const res = await fetch('/api/auth/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1701,17 +1864,89 @@ async function runAccountDiagnosis() {
       tipsBox.innerHTML = '💡 <strong>下一步建议：</strong>请点击右上角「💡 新手配置向导」，根据缺失的项（Cookie 或 Token）补充配置即可。';
     }
 
-    loading.style.display = 'none';
-    content.style.display = 'block';
+    setDiagLoading(false);
 
     // 同步刷新大屏
     fetchStatus();
   } catch (e) {
-    loading.style.display = 'none';
-    content.style.display = 'block';
+    setDiagLoading(false);
     document.getElementById('diag-banner-title').innerText = '诊断请求失败';
     document.getElementById('diag-banner-sub').innerText = e.message;
   }
+}
+
+// 全部账号：逐个串行体检，避免并发触发微软风控
+async function runAllAccountDiagnosis() {
+  const accounts = currentConfig?.accounts || [];
+  document.getElementById('diag-banner').style.display = 'none';
+  document.getElementById('diag-cards').style.display = 'none';
+  document.querySelector('.diag-summary-box').style.display = 'none';
+  document.getElementById('diag-tips').style.display = 'none';
+  document.getElementById('diag-all-summary').style.display = 'none';
+  document.getElementById('diag-all-list').style.display = 'none';
+
+  if (accounts.length === 0) {
+    setDiagLoading(false);
+    document.getElementById('diag-all-summary').style.display = 'block';
+    document.getElementById('diag-all-summary').innerText = '当前没有可体检的账号。';
+    return;
+  }
+
+  const results = [];
+  for (let i = 0; i < accounts.length; i++) {
+    const acc = accounts[i];
+    setDiagLoading(true, `正在体检账号 [${acc.name || acc.id}] (${i + 1}/${accounts.length})，请稍候...`);
+    try {
+      const res = await fetch('/api/auth/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: acc.id })
+      }).then(r => r.json());
+      if (res.success && res.data) {
+        results.push(res.data);
+      } else {
+        results.push({ accountId: acc.id, accountName: acc.name, error: res.message || '诊断接口异常' });
+      }
+    } catch (e) {
+      results.push({ accountId: acc.id, accountName: acc.name, error: e.message });
+    }
+  }
+
+  renderAllAccountDiagnosisResults(results);
+  setDiagLoading(false);
+  fetchStatus();
+}
+
+function renderAllAccountDiagnosisResults(results) {
+  const summaryBox = document.getElementById('diag-all-summary');
+  const listBox = document.getElementById('diag-all-list');
+  const validCount = results.filter(r => r.allValid).length;
+  const partialCount = results.filter(r => r.overallValid && !r.allValid).length;
+  const failedCount = results.length - validCount - partialCount;
+  summaryBox.style.display = 'block';
+  summaryBox.innerHTML = `共体检 <strong>${results.length}</strong> 个账号：`
+    + `<span style="color:#34D399; font-weight:700;">完全有效 ${validCount}</span> / `
+    + `<span style="color:#F59E0B; font-weight:700;">部分有效 ${partialCount}</span> / `
+    + `<span style="color:#F87171; font-weight:700;">失效 ${failedCount}</span>`;
+  listBox.style.display = 'flex';
+  listBox.innerHTML = results.map(r => {
+    const name = escapeHtml(r.accountName || r.accountId || '未知账号');
+    const cookieOk = !!r.cookie?.valid;
+    const tokenOk = !!r.token?.valid;
+    const overallOk = !!r.overallValid;
+    const err = r.error ? ` · ${escapeHtml(r.error)}` : '';
+    const cls = overallOk ? 'pill-ok' : 'pill-err';
+    const statusText = overallOk ? (r.allValid ? '整体有效' : '部分有效') : '失效';
+    return `
+      <div class="diag-all-row">
+        <span class="diag-all-name">${name}</span>
+        <span class="diag-status-pill ${cookieOk ? 'pill-ok' : 'pill-err'}">Cookie ${cookieOk ? '有效' : '失效'}</span>
+        <span class="diag-status-pill ${tokenOk ? 'pill-ok' : 'pill-err'}">Token ${tokenOk ? '有效' : '失效'}</span>
+        <span class="diag-status-pill ${cls}">${statusText}</span>
+        <span class="diag-all-detail">${r.balance ? r.balance.toLocaleString() + ' 分' : '--'}${err}</span>
+      </div>
+    `;
+  }).join('');
 }
 
 // 切换历史记录天数 (7 日 / 30 日)

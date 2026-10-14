@@ -354,6 +354,7 @@ export class TaskManager {
         enabled: cfgAcc.enabled !== false,
         hasCookie: !!cfgAcc.cookie,
         hasToken: !!cfgAcc.refreshToken,
+        authDiagnosis: cfgAcc.authDiagnosis || null,
         balance: st.balance || 0,
         earned: st.earned || 0,
         streakDays: st.streakDays || 0,
@@ -477,10 +478,10 @@ export class TaskManager {
     }
 
     const startBalance = await rewardsApi.getBalance();
-    if (accStats.startBalance === 0 || accStats.date !== this.getTodayNum()) {
+    if (startBalance !== null && (accStats.startBalance === 0 || accStats.date !== this.getTodayNum())) {
       accStats.startBalance = startBalance;
     }
-    accStats.balance = startBalance || accStats.balance;
+    if (startBalance !== null) accStats.balance = startBalance;
     this.saveStats();
     logger.log('📊', `当前积分: ${accStats.balance}`, accountName);
 
@@ -703,7 +704,7 @@ export class TaskManager {
 
     // 6. 结算单账号总积分
     const endBalance = await rewardsApi.getBalance();
-    accStats.balance = endBalance || accStats.balance;
+    if (endBalance !== null) accStats.balance = endBalance;
     accStats.lastUpdate = Date.now();
     this.saveStats();
 
@@ -712,7 +713,9 @@ export class TaskManager {
 
   async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, onProgress = null) {
     const accountName = accCfg.name || accCfg.id;
-    const searchCount = Math.min(Math.ceil(neededPoints / 3), 7);
+    // 每次搜索最多 +3 分，上限 20 次可覆盖单账号 60 分上限；
+    // 旧实现写死最多 7 次（21 分），轻量模式下永远打不满搜索任务。
+    const searchCount = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
     logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求`, '', accountName);
 
     for (let i = 0; i < searchCount && this.running; i++) {

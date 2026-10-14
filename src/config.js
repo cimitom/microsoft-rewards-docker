@@ -4,6 +4,10 @@ import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
+// GET /api/config 不再向前端下发凭据明文；前端保存时回传该占位符表示「保持不变」
+export const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
+const SECRET_ACCOUNT_FIELDS = ['cookie', 'authCodeUrl', 'refreshToken', 'accessToken'];
+
 const DEFAULT_CONFIG = {
   accounts: [
     {
@@ -17,11 +21,12 @@ const DEFAULT_CONFIG = {
       accessToken: '',
       tokenTime: 0,
       timeSlot: {
-        startHour: 6,
-        endHour: 10,
+        startHour: 9,
+        endHour: 13,
         randomDelayMin: 60,
         durationHours: 2
-      }
+      },
+      authDiagnosis: null
     }
   ],
   account: {
@@ -106,6 +111,8 @@ class ConfigManager {
         this.config = this.mergeDeep(structuredClone(DEFAULT_CONFIG), parsed);
         // 平滑迁移旧版单账号数据到 accounts 列表
         this.migrateLegacyAccount(parsed);
+        // 旧版默认时段（6-10 / 10-14 / 14-18 / 18-22）迁移到新默认时段
+        this.migrateTimeSlots();
       } else {
         this.config = structuredClone(DEFAULT_CONFIG);
         this.save();
@@ -119,10 +126,10 @@ class ConfigManager {
 
   getDefaultTimeSlot(index = 0) {
     const slots = [
-      { startHour: 6, endHour: 10 },
-      { startHour: 10, endHour: 14 },
-      { startHour: 14, endHour: 18 },
-      { startHour: 18, endHour: 22 }
+      { startHour: 9, endHour: 13 },
+      { startHour: 13, endHour: 17 },
+      { startHour: 17, endHour: 21 },
+      { startHour: 21, endHour: 1 }
     ];
     const s = slots[index % slots.length];
     return {
@@ -169,6 +176,36 @@ class ConfigManager {
         tokenTime: first.tokenTime || 0
       };
     }
+  }
+
+  /**
+   * 把旧版默认时段迁移到新版默认时段（9-13 / 13-17 / 17-21 / 21-次日01）。
+   * 只迁移「仍是旧默认值」的账号；用户手动设置过的自定义时段保持原样，
+   * 避免升级后把用户有意配置的作息覆盖掉。
+   */
+  migrateTimeSlots() {
+    const LEGACY_DEFAULTS = new Map([
+      ['6-10', { startHour: 9, endHour: 13 }],
+      ['10-14', { startHour: 13, endHour: 17 }],
+      ['14-18', { startHour: 17, endHour: 21 }],
+      ['18-22', { startHour: 21, endHour: 1 }]
+    ]);
+    if (!Array.isArray(this.config.accounts)) return;
+
+    let changed = false;
+    for (const acc of this.config.accounts) {
+      const slot = acc?.timeSlot;
+      if (!slot || slot.startHour === undefined) continue;
+      const next = LEGACY_DEFAULTS.get(`${Number(slot.startHour)}-${Number(slot.endHour)}`);
+      if (!next) continue;
+      acc.timeSlot = {
+        ...slot,
+        startHour: next.startHour,
+        endHour: next.endHour
+      };
+      changed = true;
+    }
+    if (changed) this.save();
   }
 
   save() {
@@ -267,9 +304,16 @@ class ConfigManager {
         };
       }
       const order = accountData.order !== undefined ? Number(accountData.order) : (existing.order || idx + 1);
+      const mergedSecrets = { ...accountData };
+      for (const field of SECRET_ACCOUNT_FIELDS) {
+        if (mergedSecrets[field] === SECRET_PLACEHOLDER || mergedSecrets[field] === '') {
+          mergedSecrets[field] = existing[field] || '';
+        }
+        delete mergedSecrets[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`];
+      }
       cfg.accounts[idx] = {
         ...existing,
-        ...accountData,
+        ...mergedSecrets,
         name: name || existing.name,
         order,
         timeSlot
@@ -297,7 +341,8 @@ class ConfigManager {
         refreshToken: accountData.refreshToken || '',
         accessToken: accountData.accessToken || '',
         tokenTime: accountData.tokenTime || 0,
-        timeSlot
+        timeSlot,
+        authDiagnosis: accountData.authDiagnosis || null
       });
     }
 
@@ -339,7 +384,20 @@ class ConfigManager {
         // 直接覆盖会把所有账号连同 Cookie/Token 一起清空。
         console.error('[Config] 拒绝空的 accounts 更新，已保留原有账号');
       } else {
-        this.config.accounts = patch.accounts;
+        // 前端拿到的是脱敏后的账号列表，回传占位符时保留服务端原值
+        this.config.accounts = patch.accounts.map((acc, idx) => {
+          const existing = this.config.accounts.find(a => a.id === acc.id) || this.config.accounts[idx] || {};
+          const merged = { ...acc };
+          for (const field of SECRET_ACCOUNT_FIELDS) {
+            // 占位符或空值都视为「未改动」：前端不会拿到明文，也就不可能回传明文
+            if (merged[field] === SECRET_PLACEHOLDER || merged[field] === '') {
+              merged[field] = existing[field] || '';
+            }
+            // 去掉 getPublicConfig() 附加的 hasXxx 派生标记，避免污染落盘配置
+            delete merged[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`];
+          }
+          return merged;
+        });
       }
       delete patch.accounts;
     }
@@ -347,6 +405,47 @@ class ConfigManager {
     this.config = this.mergeDeep(this.config, patch);
     this.save();
     return this.config;
+  }
+
+  /**
+   * 保存一次账号体检结果（供账号卡片展示有效/失效与上次检测时间）
+   */
+  recordAuthDiagnosis(accountId, diagnosis) {
+    const acc = this.findAccount(accountId);
+    if (!acc) return null;
+    acc.authDiagnosis = {
+      checkedAt: Date.now(),
+      cookieValid: !!diagnosis.cookieValid,
+      tokenValid: !!diagnosis.tokenValid,
+      overallValid: !!diagnosis.overallValid,
+      balance: Number(diagnosis.balance || 0),
+      cookieMessage: diagnosis.cookieMessage || '',
+      tokenMessage: diagnosis.tokenMessage || ''
+    };
+    this.save();
+    return acc.authDiagnosis;
+  }
+
+  /**
+   * 生成用于下发到前端的脱敏配置（凭据替换为占位符，但保留是否有值的标记）
+   */
+  getPublicConfig() {
+    const cfg = structuredClone(this.get());
+    if (Array.isArray(cfg.accounts)) {
+      cfg.accounts = cfg.accounts.map(acc => {
+        for (const field of SECRET_ACCOUNT_FIELDS) {
+          acc[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`] = !!acc[field];
+          acc[field] = acc[field] ? SECRET_PLACEHOLDER : '';
+        }
+        return acc;
+      });
+    }
+    if (cfg.account && typeof cfg.account === 'object') {
+      for (const field of SECRET_ACCOUNT_FIELDS) {
+        cfg.account[field] = cfg.account[field] ? SECRET_PLACEHOLDER : '';
+      }
+    }
+    return cfg;
   }
 
   mergeDeep(target, source) {
