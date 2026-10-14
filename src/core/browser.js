@@ -5,6 +5,13 @@ import logger from '../logger.js';
 import rewardsApi from './api.js';
 import configManager from '../config.js';
 import { browserSlotLock } from './contextLock.js';
+import {
+  PC_USER_AGENT,
+  SEC_CH_UA,
+  PLATFORM,
+  CHROME_MAJOR,
+  buildUserAgentMetadata
+} from './fingerprint.js';
 
 class BrowserManager extends EventEmitter {
   constructor() {
@@ -126,16 +133,52 @@ class BrowserManager extends EventEmitter {
         ]
       });
 
+      // 镜像里的 Chromium 主版本如果和指纹常量脱节，这里提醒维护者同步，
+      // 否则会重新出现「UA 版本 ≠ 真实引擎版本」的矛盾。
+      const realMajor = String(browser.version() || '').split('.')[0];
+      if (realMajor && realMajor !== CHROME_MAJOR) {
+        logger.log('🟡', `镜像内 Chromium 主版本为 ${realMajor}，但指纹常量 CHROME_MAJOR=${CHROME_MAJOR}，建议同步更新 src/core/fingerprint.js`);
+      }
+
       const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        userAgent: PC_USER_AGENT,
         viewport: { width: 1366, height: 768 },
         locale: 'zh-CN',
-        timezoneId: 'Asia/Shanghai'
+        timezoneId: 'Asia/Shanghai',
+        // 浏览器一定会带的客户端提示；Playwright 的 userAgent 选项不会设置它们，
+        // 不补的话 UA 说 Chrome/150 而 Sec-CH-UA 说真实版本，等于自相矛盾。
+        extraHTTPHeaders: {
+          'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          'sec-ch-ua': SEC_CH_UA,
+          'sec-ch-ua-mobile': '?0',
+          'sec-ch-ua-platform': PLATFORM.clientHint
+        }
       });
 
-      // 抹平 webdriver 特征
+      // 说明：这里刻意不再用 Object.defineProperty(navigator, 'webdriver', ...) 去「抹平」webdriver。
+      // 配合 --disable-blink-features=AutomationControlled，Chromium 原生就返回 false，
+      // 而那段 init script 会在 navigator 实例上凭空造出一个自有属性 getter ——
+      // 真实浏览器上没有这个自有属性，反而成了更明显的自动化特征。
+
+      // 无 GPU 的无头环境里 WebGL 会暴露 SwiftShader（软件渲染），
+      // 与「Windows 桌面 Chrome」的身份矛盾，这里改成常见的核显标识。
       await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        const VENDOR = 'Google Inc. (Intel)';
+        const RENDERER = 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+        const patch = (proto) => {
+          if (!proto || !proto.getParameter) return;
+          const orig = proto.getParameter;
+          proto.getParameter = function (p) {
+            if (p === 37445) return VENDOR;  // UNMASKED_VENDOR_WEBGL
+            if (p === 37446) return RENDERER; // UNMASKED_RENDERER_WEBGL
+            return orig.call(this, p);
+          };
+          proto.getParameter.toString = () => orig.toString();
+        };
+        try {
+          patch(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+          patch(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+        } catch {}
       });
 
       // 注入当前账号的完整 Cookie
@@ -162,6 +205,36 @@ class BrowserManager extends EventEmitter {
     browserSlotLock.release('rewards-browser');
   }
 
+  /**
+   * 新建页面并立即对齐指纹。
+   *
+   * Playwright 的 `newContext({ userAgent })` 只改 UA 头，不会改 Sec-CH-UA
+   * 与 navigator.platform。这里用 CDP 的 setUserAgentOverride 把
+   * UA / 客户端提示 / 平台一次性设成同一套身份（比在 JS 里覆写原型链更不易被识别，
+   * 因为它保持原生实现，不留下 JS getter 特征）。
+   */
+  async createPage(context) {
+    const page = await context.newPage();
+    try {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Emulation.setUserAgentOverride', {
+        userAgent: PC_USER_AGENT,
+        // 注意：CDP 的 acceptLanguage 是「语言列表」，不能带 q 权重，
+        // 否则 navigator.languages 会变成 ["zh-CN","zh;q=0.9"] 这种畸形值。
+        acceptLanguage: 'zh-CN,zh',
+        platform: PLATFORM.navigator,
+        userAgentMetadata: buildUserAgentMetadata()
+      });
+      // 保持会话引用，避免被回收后覆盖失效
+      if (!this.cdpSessions) this.cdpSessions = [];
+      this.cdpSessions.push(cdp);
+    } catch (e) {
+      // 指纹对齐失败不应该让整个任务挂掉，降级继续（只是可能留下版本不一致）
+      logger.log('🟡', `浏览器指纹对齐失败，本次以默认指纹继续: ${e.message}`);
+    }
+    return page;
+  }
+
   async closeBrowser() {
     try {
       if (this.context) await this.context.close().catch(() => {});
@@ -170,6 +243,7 @@ class BrowserManager extends EventEmitter {
     this.browser = null;
     this.context = null;
     this.page = null;
+    this.cdpSessions = [];
     this.releaseBrowserSlot();
     this.updateState({
       status: 'idle',
@@ -200,7 +274,7 @@ class BrowserManager extends EventEmitter {
     try {
       this.shouldStop = false;
       const { browser, context } = await this.launchBrowser(acc);
-      const page = await context.newPage();
+      const page = await this.createPage(context);
       this.page = page;
 
       this.updateState({
@@ -302,7 +376,7 @@ class BrowserManager extends EventEmitter {
 
     try {
       const { browser, context } = await this.launchBrowser(acc);
-      const page = await context.newPage();
+      const page = await this.createPage(context);
       this.page = page;
 
       for (let i = 0; i < totalSearches; i++) {
@@ -415,7 +489,7 @@ class BrowserManager extends EventEmitter {
     try {
       this.shouldStop = false;
       const { context } = await this.launchBrowser(acc);
-      const page = await context.newPage();
+      const page = await this.createPage(context);
       this.page = page;
 
       for (const quest of pending) {

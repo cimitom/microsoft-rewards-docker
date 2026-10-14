@@ -1,6 +1,7 @@
 import configManager from '../config.js';
 import networkClient from '../network.js';
 import logger from '../logger.js';
+import { APP_USER_AGENT, pcPageHeaders } from './fingerprint.js';
 
 export const AUTH_CONFIG = {
   clientId: '0000000040170455',
@@ -212,11 +213,10 @@ export class AuthManager {
     try {
       const earnHtml = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
-        headers: {
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        headers: pcPageHeaders({
           'referer': 'https://rewards.bing.com/',
           'cookie': cookie
-        }
+        })
       });
 
       const clean = String(earnHtml).replace(/\\"/g, '"');
@@ -329,7 +329,7 @@ export class AuthManager {
         url: 'https://prod.rewardsplatform.microsoft.com/dapi/me?channel=SAAndroid&options=613',
         headers: {
           'content-type': 'application/json; charset=UTF-8',
-          'user-agent': 'Mozilla/5.0 (Linux; Android 16; Redmi K20 Pro Build/BP4A.251205.006; ) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/144.0.7559.132 Mobile Safari/537.36 BingSapphire/32.6.2110003560',
+          'user-agent': APP_USER_AGENT,
           'authorization': `Bearer ${token}`,
           'x-rewards-appid': 'SAAndroid/32.6.2110003560',
           'x-rewards-ismobile': 'true',

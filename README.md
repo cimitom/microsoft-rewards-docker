@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.6.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -46,6 +46,14 @@
   - **`data/app.log` 增加 5MB 轮转**，「全部日志」改为只读文件尾部，不再整文件读入内存；
   - **history.json 改为内存缓存 + 延迟合并落盘**，消除每次任务进度更新都全量读改写「账号数+1」次的写放大；
   - **新增单元测试**（`npm test`，23 个用例覆盖账号上下文隔离、解析回归、历史分解、调度计划）。
+- 🧬 **浏览器指纹一致性 (v1.6.1)**：
+  - 指纹常量收敛到 `src/core/fingerprint.js` 单一来源，UA / 客户端提示 / 平台三者不再各写各的；
+  - Playwright 路径用 CDP `Emulation.setUserAgentOverride` 把 **UA、`Sec-CH-UA`、`navigator.platform`** 一次性对齐，消除「UA 说 Chrome 131、客户端提示说真实版本、platform 说真实系统」这种三处互相矛盾的情况；
+  - 纯 HTTP 路径补齐真实浏览器一定会带的请求头（`Accept`、`Accept-Language`、`Sec-CH-UA*`、`Sec-Fetch-*`、`Upgrade-Insecure-Requests`、`Priority`），不再只发一个孤零零的 UA；
+  - 去掉会在 `navigator` 上凭空造出自有属性的 `webdriver` 覆写（真实浏览器没有这个自有属性，反而更显眼）；
+  - WebGL 由 SwiftShader 软件渲染改为常见核显标识，避免无头环境的软件渲染特征；
+  - 启动时若镜像内 Chromium 主版本与指纹常量脱节会打印提醒，不会静默产生版本矛盾；
+  - 新增 `test/fingerprint.test.js` 专门防「前后不对称」回归。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；

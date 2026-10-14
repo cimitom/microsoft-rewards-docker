@@ -3,15 +3,24 @@ import configManager from '../config.js';
 import networkClient from '../network.js';
 import logger from '../logger.js';
 import authManager from './auth.js';
+import {
+  PC_USER_AGENT,
+  MOBILE_USER_AGENT,
+  APP_USER_AGENT,
+  DESKTOP_APP_USER_AGENT,
+  pcPageHeaders,
+  pcXhrHeaders
+} from './fingerprint.js';
 
 export const USER_AGENTS = {
-  pc: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-  mobile: 'Mozilla/5.0 (Linux; Android 16; Redmi K20 Pro Build/BP4A.251205.006; ) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/144.0.7559.132 Mobile Safari/537.36 EdgA/131.0.0.0',
-  app: 'Mozilla/5.0 (Linux; Android 16; Redmi K20 Pro Build/BP4A.251205.006; ) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/144.0.7559.132 Mobile Safari/537.36 BingSapphire/32.6.2110003560'
+  // 统一来自 fingerprint.js，避免各处硬编码版本号漂移（历史上就出现过前后不一致）
+  pc: PC_USER_AGENT,
+  mobile: MOBILE_USER_AGENT,
+  app: APP_USER_AGENT
 };
 
 export const DESKTOP_APP_HEADERS = {
-  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MSRewards/Desktop/1.4.56',
+  'user-agent': DESKTOP_APP_USER_AGENT,
   'X-MSRewards-App': '1',
   'X-Rewards-Source': 'msrewards-desktop'
 };
@@ -187,7 +196,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: `https://${this.host}/`,
-        headers: { 'user-agent': USER_AGENTS.pc }
+        headers: pcPageHeaders()
       });
 
       if (!html) {
@@ -270,7 +279,7 @@ export class RewardsApi {
       const res2 = await networkClient.request({
         url: `https://rewards.bing.com/api/getuserinfo?type=1&X-Requested-With=XMLHttpRequest&_=${Date.now()}`,
         headers: {
-          'user-agent': USER_AGENTS.pc,
+          ...pcXhrHeaders(),
           'referer': 'https://rewards.bing.com/',
           'x-requested-with': 'XMLHttpRequest'
         }
@@ -293,7 +302,7 @@ export class RewardsApi {
       try {
         const html = await networkClient.request({
           url: 'https://rewards.bing.com/earn',
-          headers: { 'user-agent': USER_AGENTS.pc }
+          headers: pcPageHeaders()
         });
         const clean = String(html).replace(/\\"/g, '"');
         let balance = 0;
@@ -485,7 +494,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
-        headers: { 'user-agent': USER_AGENTS.pc }
+        headers: pcPageHeaders()
       });
       if (!html) return null;
       const clean = String(html).replace(/\\"/g, '"');
@@ -594,7 +603,7 @@ export class RewardsApi {
 
       const headers = {
         'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'user-agent': USER_AGENTS.pc,
+        ...pcXhrHeaders(),
         'referer': 'https://rewards.bing.com/',
         'origin': 'https://rewards.bing.com',
         'x-requested-with': 'XMLHttpRequest'
@@ -622,7 +631,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: pageUrl,
-        headers: { 'user-agent': USER_AGENTS.pc, 'referer': 'https://rewards.bing.com/' }
+        headers: pcPageHeaders({ referer: 'https://rewards.bing.com/' })
       });
       const tokenMatch = String(html).match(/name=["']__RequestVerificationToken["'][^>]*value=["']([^"']+)["']/i)
         || String(html).match(/RequestVerificationToken.*?value=["']([^"']+)["']/i)
@@ -721,7 +730,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
-        headers: { 'user-agent': USER_AGENTS.pc }
+        headers: pcPageHeaders()
       });
       if (!html) return quests;
 
@@ -757,7 +766,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
-        headers: { 'user-agent': USER_AGENTS.pc }
+        headers: pcPageHeaders()
       });
       if (!html) return null;
       const clean = String(html).replace(/\\"/g, '"');
@@ -817,7 +826,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
-        headers: { 'user-agent': USER_AGENTS.pc }
+        headers: pcPageHeaders()
       });
       if (!html) return cards;
 
@@ -998,7 +1007,7 @@ export class RewardsApi {
           url: 'https://rewards.bing.com/api/reportactivity?X-Requested-With=XMLHttpRequest',
           headers: {
             'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'user-agent': USER_AGENTS.pc,
+            ...pcXhrHeaders(),
             'referer': referer,
             'origin': 'https://rewards.bing.com',
             'x-requested-with': 'XMLHttpRequest'
@@ -1039,7 +1048,7 @@ export class RewardsApi {
         method: 'GET',
         url: cnUrl,
         headers: {
-          'user-agent': USER_AGENTS.pc,
+          ...pcPageHeaders(),
           'referer': 'https://rewards.bing.com/'
         }
       });
@@ -1049,7 +1058,7 @@ export class RewardsApi {
         url: `https://cn.bing.com/rewardsapp/reportActivity?${reportParams.toString()}`,
         headers: {
           'content-type': 'application/x-www-form-urlencoded',
-          'user-agent': USER_AGENTS.pc,
+          ...pcXhrHeaders(),
           'referer': cnUrl,
           'origin': 'https://cn.bing.com'
         },
@@ -1152,7 +1161,7 @@ export class RewardsApi {
     await networkClient.request({
       url: searchUrl,
       headers: {
-        'user-agent': USER_AGENTS.pc,
+        ...pcPageHeaders(),
         'cookie': searchCookie,
         'referer': `https://${this.host}/?form=QBLH`
       }
@@ -1165,7 +1174,7 @@ export class RewardsApi {
         url: `https://${this.host}/rewardsapp/ncheader?ver=88888888&IID=SERP.5047&IG=${ig}&ajaxreq=1`,
         headers: {
           'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'user-agent': USER_AGENTS.pc,
+          ...pcXhrHeaders(),
           'referer': `https://${this.host}/?form=QBLH`,
           'cookie': searchCookie
         },
@@ -1180,7 +1189,7 @@ export class RewardsApi {
       url: `https://${this.host}/rewardsapp/reportActivity?IG=${ig}&IID=SERP.5047&${params}&ajaxreq=1`,
       headers: {
         'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'user-agent': USER_AGENTS.pc,
+        ...pcXhrHeaders(),
         'referer': `https://${this.host}/?form=QBLH`,
         'cookie': searchCookie
       },
@@ -1205,7 +1214,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
-        headers: { 'user-agent': USER_AGENTS.pc }
+        headers: pcPageHeaders()
       });
       if (!html) return null;
 
@@ -1231,7 +1240,7 @@ export class RewardsApi {
             logger.log('📅', `视觉搜索未完成 (${cur}/${max})，尝试后台补签（每账号每天一次）...`);
             await networkClient.request({
               url: 'https://www.bing.com/?features=vsstreak,vstooltip&form=ML2XES',
-              headers: { 'user-agent': USER_AGENTS.pc, 'referer': 'https://www.bing.com/' }
+              headers: pcPageHeaders({ referer: 'https://www.bing.com/' })
             });
             await this.randomDelay(2000, 4000);
           }
@@ -1252,7 +1261,7 @@ export class RewardsApi {
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/dashboard',
-        headers: { 'user-agent': USER_AGENTS.pc }
+        headers: pcPageHeaders()
       });
       const claimableMatch = String(html).match(/alt="可领取"[^>]*>[\s\S]*?(\d[\d,]*)/i);
       if (claimableMatch) {

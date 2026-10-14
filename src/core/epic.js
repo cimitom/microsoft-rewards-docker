@@ -4,13 +4,21 @@ import logger from '../logger.js';
 import networkClient from '../network.js';
 import browserManager from './browser.js';
 import { browserSlotLock } from './contextLock.js';
+import { PC_USER_AGENT, SEC_CH_UA, PLATFORM } from './fingerprint.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
 const STORE_BASE = 'https://store.epicgames.com/zh-CN';
 const STORE_HOME = `${STORE_BASE}/`;
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0';
+// 与积分任务共用同一套浏览器身份，避免同一个出口 IP 上出现两套互相矛盾的指纹
+const UA = PC_USER_AGENT;
+const BROWSER_CLIENT_HINTS = {
+  'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+  'sec-ch-ua': SEC_CH_UA,
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': PLATFORM.clientHint
+};
 
 /**
  * Epic 免费游戏自动领取。
@@ -456,7 +464,8 @@ export class EpicManager {
         storageState: { cookies: acc.storageState.cookies, origins: acc.storageState.origins || [] },
         locale: 'zh-CN',
         timezoneId: 'Asia/Shanghai',
-        userAgent: UA
+        userAgent: UA,
+        extraHTTPHeaders: BROWSER_CLIENT_HINTS
       });
       const page = await context.newPage();
       await page.goto(STORE_HOME, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -526,6 +535,7 @@ export class EpicManager {
           locale: 'zh-CN',
           timezoneId: 'Asia/Shanghai',
           userAgent: UA,
+          extraHTTPHeaders: BROWSER_CLIENT_HINTS,
           viewport: { width: 1366, height: 768 }
         });
         await context.addInitScript(() => {
