@@ -85,7 +85,9 @@ jobs:
           context: .
           platforms: ${{ steps.mode.outputs.publish == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ steps.mode.outputs.publish == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          # 仅构建校验时 meta 步骤被跳过、outputs.tags 为空，必须给一个本地占位 tag，
+          # 否则 docker/build-push-action 会因缺少 tag 直接报错。
+          tags: ${{ steps.mode.outputs.publish == 'true' && steps.meta.outputs.tags || 'microsoft-rewards-docker:build-check' }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
