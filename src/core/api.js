@@ -336,7 +336,8 @@ export class RewardsApi {
         // 桌面专属任务状态与到期天数动态解析
         // 注意：不要给默认值 3，否则没有该任务的账号也会显示假的 3/8
         let desktopProgress = 0, desktopMax = 8;
-        let desktopExpiresText = '到期日期 5 天后';
+        // 解析不到到期时间时留空，不要编造「5 天后」
+        let desktopExpiresText = '';
         const desktopIdx = clean.indexOf('桌面奖励应用每周专属任务');
         const desktopAvailable = desktopIdx !== -1;
         if (desktopIdx !== -1) {
@@ -346,11 +347,20 @@ export class RewardsApi {
             desktopProgress = parseInt(mProg[1], 10);
             desktopMax = parseInt(mProg[2], 10);
           }
-          const mExp = chunk.match(/expiresAt[^\"]*\"[^\"]*?(\d{4}-\d{2}-\d{2}T[^\"]+)\"/);
+          // 页面里的真实写法是 "expiresAt":"$D2026-10-18T08:00:00.000Z"，
+          // 冒号、引号和 Next.js 的 $D 前缀夹在中间，旧正则假定日期紧跟引号，因此从未匹配成功
+          const mExp = chunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
           if (mExp) {
             const expDate = new Date(mExp[1]);
-            const diff = Math.max(0, Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
-            desktopExpiresText = `到期日期 ${diff} 天后`;
+            if (!isNaN(expDate.getTime())) {
+              // 按自然日计算，避免「4 天 10 分钟」被 Math.ceil 显示成「5 天后」
+              const todayStart = new Date();
+              todayStart.setHours(0, 0, 0, 0);
+              const expDayStart = new Date(expDate);
+              expDayStart.setHours(0, 0, 0, 0);
+              const diff = Math.max(0, Math.round((expDayStart.getTime() - todayStart.getTime()) / 86400000));
+              desktopExpiresText = `到期日期 ${diff} 天后`;
+            }
           }
         }
 

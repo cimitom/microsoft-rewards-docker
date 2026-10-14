@@ -698,7 +698,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.6';
+  const current = updateInfo?.currentVersion || '1.4.7';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -738,7 +738,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.6'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.7'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -836,7 +836,7 @@ function renderAccountSelectorBar(summary) {
 
 // 渲染大屏
 function renderDashboard(data) {
-  const { running, summary, stats, timeline } = data;
+  const { running, runningAccountId, summary, stats, timeline } = data;
 
   // 1. 渲染顶部多账号切换胶囊
   if (summary) {
@@ -931,7 +931,7 @@ function renderDashboard(data) {
     // 显示各账号概览卡片矩阵
     if (overviewCard) {
       overviewCard.style.display = 'flex';
-      renderAccountsOverviewGrid(summary?.accountsList || []);
+      renderAccountsOverviewGrid(summary?.accountsList || [], { running, runningAccountId });
     }
     if (taskListTitle) {
       taskListTitle.innerText = `今日全账号综合任务明细`;
@@ -971,7 +971,8 @@ function renderDashboard(data) {
         progressLabel = `进度: 0 / ${m} 个任务`;
         pointsBadge = '+0 积分';
       } else {
-        subtext = `${t.expiresText || '到期日期 5 天后'} · 每周打孔卡`;
+        // 有到期时间才显示，没有就只显示任务类型，不编造「5 天后」
+        subtext = t.expiresText ? `${t.expiresText} · 每周打孔卡` : '每周打孔卡';
         progressLabel = `进度: ${p} / ${m} 个任务`;
         pointsBadge = `+${t.points || 20} 积分`;
       }
@@ -1023,24 +1024,27 @@ function renderDashboard(data) {
 }
 
 // 渲染多账号概览矩阵卡片 (在“全部账号汇总”视图中展示)
-function renderAccountsOverviewGrid(accounts) {
+function renderAccountsOverviewGrid(accounts, runtime = {}) {
   const grid = document.getElementById('accounts-grid');
   if (!grid) return;
   grid.innerHTML = '';
 
+  const { running = false, runningAccountId = null } = runtime;
+
   accounts.forEach(acc => {
+    const isRunning = running && runningAccountId === acc.id;
     const card = document.createElement('div');
     card.className = 'account-overview-card';
     card.innerHTML = `
       <div class="acc-card-top">
         <div class="acc-card-title">
           <span>👤</span>
-          <span>${escapeHtml(acc.name)}</span>
+          <span class="acc-card-name" title="${escapeHtml(acc.name)}">${escapeHtml(acc.name)}</span>
         </div>
         <div class="acc-card-badges">
-          <span class="badge-mini" style="background:${acc.enabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}; color:${acc.enabled ? '#34D399' : '#F87171'};">
-            ${acc.enabled ? '已启用' : '已停用'}
-          </span>
+          ${isRunning
+            ? '<span class="badge-mini badge-running">● 运行中</span>'
+            : `<span class="badge-mini" style="background:${acc.enabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}; color:${acc.enabled ? '#34D399' : '#F87171'};">${acc.enabled ? '已启用' : '已停用'}</span>`}
           <span class="badge-mini" style="background:rgba(56,189,248,0.15); color:#38BDF8;">
             ${acc.hasCookie ? 'Cookie就绪' : '未配Cookie'}
           </span>

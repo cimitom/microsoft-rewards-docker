@@ -40,7 +40,7 @@ export class TaskManager {
         search: { name: "必应 PC 搜索任务", progress: 0, max: 60, points: 0, unit: "分", icon: "🔍", done: false },
         dailySet: { name: "每日活动集 (Daily Set)", progress: 0, max: 3, points: 0, unit: "个", icon: "📅", done: false },
         promos: { name: "活动卡片与 Quiz 问答", progress: 0, max: 1, points: 0, unit: "项", icon: "🧩", done: false },
-        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "到期日期 5 天后", available: false, done: false }
+        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "", available: false, done: false }
       }
     };
   }
@@ -110,7 +110,7 @@ export class TaskManager {
       // 修正桌面任务展示字段
       const dApp = this.stats.accounts[id].tasks?.desktopApp;
       if (dApp) {
-        if (!dApp.expiresText) dApp.expiresText = "到期日期 5 天后";
+        if (dApp.expiresText === undefined) dApp.expiresText = "";
         // 注意：这里以前会把 progress 0 改写成 3，导致所有账号都显示假的 3/8
         if (dApp.progress === undefined || dApp.progress === null) dApp.progress = 0;
         if (dApp.points === undefined || dApp.points === null) dApp.points = 20;
@@ -263,7 +263,7 @@ export class TaskManager {
             points: dProgress >= dMax ? 20 : 0,
             unit: "个任务",
             icon: "🖥️",
-            expiresText: info.desktopApp.expiresText || "到期日期 5 天后",
+            expiresText: info.desktopApp.expiresText || "",
             available: info.desktopApp.available !== false,
             done: dProgress >= dMax
           };
@@ -625,7 +625,7 @@ export class TaskManager {
         this.updateTask('desktopApp', {
           progress: dProgress,
           max: dMax,
-          expiresText: info.desktopApp.expiresText || '到期日期 5 天后',
+          expiresText: info.desktopApp.expiresText || '',
           points: dProgress >= dMax ? 20 : 0,
           available: info.desktopApp.available !== false,
           done: dProgress >= dMax

@@ -558,6 +558,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
 }
 
 .acc-card-title {
@@ -567,6 +568,36 @@ body {
   font-size: 15px;
   font-weight: 700;
   color: var(--text-main);
+  flex: 1 1 auto;
+  min-width: 0; /* 让内部名称可以收缩并显示省略号 */
+}
+
+/* 账号名过长时截断为省略号，悬停用即时提示显示完整名称 */
+.acc-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acc-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* 该账号正在执行任务时的高亮徽章 */
+.badge-mini.badge-running {
+  background: rgba(56, 189, 248, 0.18);
+  color: #38BDF8;
+  animation: pulse 1.5s infinite;
+}
+
+/* 呼吸动效：此前多处引用 pulse 但关键帧从未定义，动效一直是失效的 */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .acc-card-stats {
