@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
+import { removeBrowserSession } from './core/browserSession.js';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
@@ -50,6 +51,7 @@ const DEFAULT_CONFIG = {
     dailySet: true,
     searchIntervalSec: 180, // 全局搜索节奏：每次搜索基础间隔（秒）
     searchJitterSec: 30,    // 全局搜索节奏：每次随机浮动（±秒）
+    searchStagnantLimit: 10, // 停滞保护：连续多少次搜索官网进度不涨就主动停手
     searchApi: 'baidu.official', // 'offline' | 'baidu.official' | 'hot.nntool.cc' | 'hot.cnxiaobai.com'
     searchEngineMode: 'browser', // 'browser' (Playwright 真机拟人) | 'http' (轻量HTTP)
     keepRunning: true // 全部完成后，手动再次执行时是否仍完整跑一遍（定时任务每账号每天只排一次）
@@ -366,6 +368,8 @@ class ConfigManager {
       throw new Error('至少需要保留一个账号');
     }
     cfg.accounts = cfg.accounts.filter(a => a.id !== accountId);
+    // 账号被删掉后，它的浏览器会话（含登录 Cookie）不应该继续留在磁盘上
+    removeBrowserSession(accountId);
     this.save();
     return true;
   }

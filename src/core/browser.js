@@ -1,10 +1,17 @@
 import fs from 'fs';
 import { EventEmitter } from 'events';
-import { chromium } from 'playwright-core';
+// patchright-core 是 playwright-core 的补丁分支（API 完全一致），
+// 它从协议层修掉了 Playwright 最容易被识别的自动化特征：
+// CDP 的 Runtime.enable / Console.enable 泄漏、--enable-automation 启动参数、
+// navigator.webdriver 等。--disable-blink-features=AutomationControlled 由它自动加上，
+// 所以下面不再重复传这个参数。
+import { chromium } from 'patchright-core';
 import logger from '../logger.js';
 import rewardsApi from './api.js';
 import configManager from '../config.js';
 import { browserSlotLock } from './contextLock.js';
+import { readBrowserSession, writeBrowserSession } from './browserSession.js';
+import { SearchStagnationGuard } from './searchStagnation.js';
 import {
   PC_USER_AGENT,
   SEC_CH_UA,
@@ -22,6 +29,8 @@ class BrowserManager extends EventEmitter {
     this.shouldStop = false;
     // 是否持有浏览器资源锁（由 launchBrowser/closeBrowser 维护）
     this.slotHeld = false;
+    // 当前绑定的账号（会话持久化需要它来定位文件与校验凭据指纹）
+    this.sessionAccount = null;
     this.state = {
       status: 'idle', // 'idle' | 'starting' | 'navigating' | 'typing' | 'dwelling' | 'waiting' | 'stopped'
       activeAccountId: null,
@@ -127,7 +136,6 @@ class BrowserManager extends EventEmitter {
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
-          '--disable-blink-features=AutomationControlled',
           '--no-first-run',
           '--no-default-browser-check'
         ]
@@ -138,6 +146,19 @@ class BrowserManager extends EventEmitter {
       const realMajor = String(browser.version() || '').split('.')[0];
       if (realMajor && realMajor !== CHROME_MAJOR) {
         logger.log('🟡', `镜像内 Chromium 主版本为 ${realMajor}，但指纹常量 CHROME_MAJOR=${CHROME_MAJOR}，建议同步更新 src/core/fingerprint.js`);
+      }
+
+      // 复用该账号上一轮的浏览器会话（Cookie + localStorage）。
+      // 凭据换过账号时 readBrowserSession 会判定为过期并返回 null，自动回退到全新会话。
+      const stored = readBrowserSession(acc);
+      const storageState = stored?.storageState || null;
+      if (stored?.stale) {
+        logger.log('🟡', `已丢弃该账号的旧浏览器会话（${stored.reason}），本次使用全新会话`, '', acc?.name);
+      } else if (storageState) {
+        const savedDays = stored.savedAt
+          ? ((Date.now() - stored.savedAt) / 86400000).toFixed(1)
+          : '?';
+        logger.log('🔐', `已复用该账号的浏览器会话（${storageState.cookies.length} 个 Cookie，保存于 ${savedDays} 天前）`, '', acc?.name);
       }
 
       const context = await browser.newContext({
@@ -152,7 +173,8 @@ class BrowserManager extends EventEmitter {
           'sec-ch-ua': SEC_CH_UA,
           'sec-ch-ua-mobile': '?0',
           'sec-ch-ua-platform': PLATFORM.clientHint
-        }
+        },
+        ...(storageState ? { storageState } : {})
       });
 
       // 说明：这里刻意不再用 Object.defineProperty(navigator, 'webdriver', ...) 去「抹平」webdriver。
@@ -190,6 +212,7 @@ class BrowserManager extends EventEmitter {
 
       this.browser = browser;
       this.context = context;
+      this.sessionAccount = acc || null;
       return { browser, context };
     } catch (e) {
       // 启动过程中失败也必须把锁还回去，否则后续所有浏览器任务都会被卡住
@@ -235,6 +258,28 @@ class BrowserManager extends EventEmitter {
     return page;
   }
 
+  /**
+   * 把当前浏览器状态（Cookie + localStorage）写回磁盘，供下次执行复用。
+   *
+   * 只在任务确实跑成功的路径上调用：失败路径写回会把半残的会话固化下来，
+   * 反而让下一轮从一开始就处于坏状态。
+   */
+  async commitBrowserSession() {
+    if (!this.context || !this.sessionAccount) return false;
+    try {
+      const state = await this.context.storageState();
+      const cookieCount = Array.isArray(state?.cookies) ? state.cookies.length : 0;
+      const ok = writeBrowserSession(this.sessionAccount, state);
+      if (ok) {
+        logger.log('💾', `浏览器会话已保存（${cookieCount} 个 Cookie），下次执行将复用`, '', this.sessionAccount.name);
+      }
+      return ok;
+    } catch (e) {
+      logger.log('🟡', `浏览器会话保存失败: ${e.message}`, '', this.sessionAccount?.name);
+      return false;
+    }
+  }
+
   async closeBrowser() {
     try {
       if (this.context) await this.context.close().catch(() => {});
@@ -244,6 +289,7 @@ class BrowserManager extends EventEmitter {
     this.context = null;
     this.page = null;
     this.cdpSessions = [];
+    this.sessionAccount = null;
     this.releaseBrowserSlot();
     this.updateState({
       status: 'idle',
@@ -325,6 +371,7 @@ class BrowserManager extends EventEmitter {
       await this.delay(3000);
 
       logger.log('✅', `单次搜索完成，正在验证积分与配额...`, '', accName);
+      await this.commitBrowserSession();
       await this.closeBrowser();
 
       return {
@@ -345,8 +392,12 @@ class BrowserManager extends EventEmitter {
    */
   async runPacedSearch(acc, neededPoints, options = {}) {
     const accName = acc?.name || '当前账号';
-    const { onProgress = null } = options;
+    const { onProgress = null, probeProgress = null, stagnantLimit = 10 } = options;
     const totalSearches = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
+
+    // 停滞保护：连续 N 次搜索官网进度都不涨，说明搜索额度已到顶或账号正在被限流，
+    // 继续搜只会白白增加风控暴露面。达到阈值就主动停手，把本轮当部分完成收尾。
+    const stagnation = new SearchStagnationGuard(stagnantLimit);
 
     // 全局搜索节奏（配置中心「任务与防风控」→ 搜索节奏设置）
     const cfg = configManager.get();
@@ -373,6 +424,7 @@ class BrowserManager extends EventEmitter {
 
     this.shouldStop = false;
     let completed = 0;
+    let stoppedByStagnation = false;
 
     try {
       const { browser, context } = await this.launchBrowser(acc);
@@ -437,6 +489,25 @@ class BrowserManager extends EventEmitter {
           } catch {}
         }
 
+        // 停滞保护：探测官网真实进度，连续 N 次不涨就停手
+        if (typeof probeProgress === 'function' && i < totalSearches - 1) {
+          let official = null;
+          try {
+            official = await probeProgress();
+          } catch {}
+          const result = stagnation.observe(official);
+          if (result.stagnant) {
+            stoppedByStagnation = true;
+            logger.log(
+              '🛑',
+              `连续 ${result.stagnantCount} 次搜索官网进度没有增加（停留在 ${result.bestProgress} 分），判定搜索额度已到顶，主动停止本轮搜索以免触发风控`,
+              '',
+              accName
+            );
+            break;
+          }
+        }
+
         // 如果已经是最后一次，不等待
         if (i === totalSearches - 1) break;
 
@@ -456,8 +527,13 @@ class BrowserManager extends EventEmitter {
         }
       }
 
+      await this.commitBrowserSession();
       await this.closeBrowser();
-      logger.log('🎉', `账号 [${accName}] 拟人平缓搜索完成！共执行 ${completed} 次检索`, '', accName);
+      if (stoppedByStagnation) {
+        logger.log('🛑', `账号 [${accName}] 因进度停滞提前结束，本轮共执行 ${completed} 次检索（未打满的额度留到下一轮）`, '', accName);
+      } else {
+        logger.log('🎉', `账号 [${accName}] 拟人平缓搜索完成！共执行 ${completed} 次检索`, '', accName);
+      }
       return completed;
     } catch (e) {
       logger.log('🔴', `拟人搜索流程发生异常: ${e.message}`, '', accName);
@@ -571,6 +647,7 @@ class BrowserManager extends EventEmitter {
         }
       }
 
+      await this.commitBrowserSession();
       await this.closeBrowser();
     } catch (e) {
       logger.log('🔴', `打孔卡任务流程异常: ${e.message}`, '', accName);

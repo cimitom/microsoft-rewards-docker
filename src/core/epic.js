@@ -1,4 +1,4 @@
-import { chromium } from 'playwright-core';
+import { chromium } from 'patchright-core';
 import configManager from '../config.js';
 import logger from '../logger.js';
 import networkClient from '../network.js';

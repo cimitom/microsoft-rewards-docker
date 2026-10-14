@@ -8,6 +8,7 @@ import notifier from './notifier.js';
 import historyManager from './history.js';
 import browserManager from './browser.js';
 import { accountContextLock } from './contextLock.js';
+import { SearchStagnationGuard, normalizeStagnantLimit } from './searchStagnation.js';
 import { DATA_DIR, writeFileAtomic } from '../fsUtil.js';
 
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
@@ -838,18 +839,35 @@ export class TaskManager {
         const searchMode = globalCfg.tasks?.searchEngineMode || 'browser';
         const hasBrowser = !!browserManager.getExecutablePath();
 
+        // 停滞保护：每搜完一次读一次官网真实进度，连续多次不涨就主动停手。
+        // 搜索额度到顶（或账号被限流）时，继续搜只会白白增加风控暴露面。
+        const probeSearchProgress = async () => {
+          const probe = await rewardsApi.getRewardsInfo();
+          const p = Number(probe?.pc?.progress);
+          return Number.isFinite(p) ? p : null;
+        };
+        const stagnantLimit = normalizeStagnantLimit(globalCfg.tasks?.searchStagnantLimit);
+
         if (searchMode === 'browser' && hasBrowser) {
           try {
             await browserManager.runPacedSearch(accCfg, neededPoints, {
               // 每搜完一次就刷新进度，否则整个搜索过程界面都不动
-              onProgress: applySearchProgress
+              onProgress: applySearchProgress,
+              probeProgress: probeSearchProgress,
+              stagnantLimit
             });
           } catch (e) {
             logger.log('🟡', `无头浏览器运行异常: ${e.message}，正在切换为轻量协议兜底`, '', accountName);
-            await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress);
+            await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
+              probeProgress: probeSearchProgress,
+              stagnantLimit
+            });
           }
         } else {
-          await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress);
+          await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
+            probeProgress: probeSearchProgress,
+            stagnantLimit
+          });
         }
 
         const afterInfo = await rewardsApi.getRewardsInfo();
@@ -923,8 +941,11 @@ export class TaskManager {
     logger.log('✅', `账号 [${accountName}] 任务完成！今日新增: +${accStats.earned} | 当前余额: ${accStats.balance}`, accountName);
   }
 
-  async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, onProgress = null) {
+  async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, onProgress = null, options = {}) {
     const accountName = accCfg.name || accCfg.id;
+    const { probeProgress = null, stagnantLimit = 10 } = options;
+    // 与拟人模式共用同一套停滞保护
+    const stagnation = new SearchStagnationGuard(stagnantLimit);
     // 每次搜索最多 +3 分，上限 20 次可覆盖单账号 60 分上限；
     // 旧实现写死最多 7 次（21 分），轻量模式下永远打不满搜索任务。
     const searchCount = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
@@ -946,6 +967,19 @@ export class TaskManager {
         try {
           onProgress(i + 1);
         } catch {}
+      }
+
+      // 停滞保护：连续 N 次搜索官网进度不涨就停手
+      if (typeof probeProgress === 'function' && i < searchCount - 1) {
+        let official = null;
+        try {
+          official = await probeProgress();
+        } catch {}
+        const result = stagnation.observe(official);
+        if (result.stagnant) {
+          logger.log('🛑', `连续 ${result.stagnantCount} 次搜索官网进度没有增加（停留在 ${result.bestProgress} 分），判定搜索额度已到顶，主动停止本轮搜索以免触发风控`, '', accountName);
+          break;
+        }
       }
 
       const waitSec = intervalSec + rewardsApi.randomRange(0, jitterSec);

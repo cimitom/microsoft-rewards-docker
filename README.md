@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.6.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -54,6 +54,11 @@
   - WebGL 由 SwiftShader 软件渲染改为常见核显标识，避免无头环境的软件渲染特征；
   - 启动时若镜像内 Chromium 主版本与指纹常量脱节会打印提醒，不会静默产生版本矛盾；
   - 新增 `test/fingerprint.test.js` 专门防「前后不对称」回归。
+- 🥷 **反检测与稳定性升级 (v1.6.2)**：
+  - **浏览器驱动换成 patchright**：Playwright 最容易被识别的特征不是 `navigator.webdriver`，而是 CDP 的 `Runtime.enable` / `Console.enable` 泄漏和 `--enable-automation` 启动参数。patchright 是 Playwright 的补丁分支（API 完全一致），从协议层把这些抹掉了；
+  - **每个账号持久化浏览器会话**：Cookie 与 localStorage 跨次复用，不再是「一个全新浏览器里凭空出现登录态」。写回时剔除 `_U` 身份 Cookie，并绑定账号凭据指纹 —— 换账号或重新登录后旧会话自动作废，杜绝串号；
+  - **搜索停滞保护**：连续 N 次搜索官网进度不涨就主动停手（默认 10 次，可在配置中心调整）。当天搜索额度已到顶时不再空跑，既省执行窗口，也减少风控暴露面；
+  - **单元测试增至 41 个**（新增会话持久化与停滞保护回归）。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；
@@ -185,6 +190,7 @@ npm test
 | `data/app.log` | **持久化运行日志文件**（实时记录后台自动打卡细节、接口请求与排查日志） |
 | `data/stats.json` | **任务状态快照**（记录当日积分、任务配额进度与连签天数） |
 | `data/history.json` | **历史积分账单数据**（用于前端 7 日 / 30 日历史趋势柱状图明细展示） |
+| `data/sessions/` | **每个账号的浏览器会话**（Cookie 与 localStorage，权限 0600，用于跨次复用同一台「浏览器」；不含身份 Cookie `_U`） |
 
 ---
 
@@ -219,7 +225,7 @@ npm test
 点击右上角 **「⚙️ 配置中心」** 可进行详细参数微调：
 
 - **任务开关**：可单独开启/关闭签到、新闻阅读、PC 搜索、活动卡片、桌面专属任务；
-- **防风控间隔**：搜索基准延时默认为 30 秒（内置随机浮动），支持自定义搜索词源（离线词库或热搜 API）；
+- **搜索节奏与防风控**：每次搜索的基础间隔（默认 180 秒，安全下限 60 秒）与随机浮动（默认 0~30 秒，只会延后）全局生效；**停滞保护**默认「连续 10 次搜索官网进度不涨就主动停手」，可自行调整；支持自定义搜索词源（离线词库或热搜 API）；
 - **定时巡检调度**：
   - 默认 Cron：`*/25 * * * *`（每 25 分钟后台巡检一次）；
   - 支持自定义，如 `0 8,12,20 * * *`（每天 8 点、12 点、20 点执行）；
@@ -270,6 +276,25 @@ npm test
 却要多付约 340MB 镜像体积和一层外部依赖。所以默认不装；需要时可以通过环境变量
 `CHROMIUM_PATH`（Dockerfile 里默认指向 `/usr/bin/chromium`）自行指向容器内的 Edge 可执行文件。
 
+### 驱动层：patchright 与会话持久化（v1.6.2）
+
+上面几条解决的是「字段自相矛盾」，但还有一个更硬的识别点：**自动化驱动本身**。
+Playwright 启动 Chromium 时会启用 CDP 的 `Runtime.enable`，页面只要给 `console.debug`
+挂一个 getter 就能探测到 CDP 的存在——这跟 UA 写得多像没关系。
+
+v1.6.2 把驱动换成了 [patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright)
+（Playwright 的补丁分支，API 完全一致），它从协议层修掉了 `Runtime.enable` /
+`Console.enable` 泄漏，并去掉 `--enable-automation` 启动参数。
+
+同时，每个账号的浏览器会话（Cookie + localStorage）会加密权限（0600）落盘到
+`data/sessions/`，下次执行直接复用，浏览器看起来始终是同一台机器，而不是每次都是
+「刚装好的浏览器 + 突然出现的登录态」。两条安全约束：
+
+- 写回时**剔除 `.bing.com` 的 `_U` Cookie**：它是账号身份标识，上一轮残留的旧值一旦被
+  带进下一轮就会串号或被重定向到登录页。配置里的 `_U` 每次启动都会重新注入，不影响计分。
+- 会话**绑定账号凭据指纹**：Cookie/Token 换成别的账号后，旧会话直接作废，不会把 A 账号的
+  浏览器状态带到 B 账号上。
+
 ### 仍然无法消除的差异（如实说明）
 
 - **TLS / HTTP2 指纹**：纯 HTTP 通道走的是 Node 的 OpenSSL，与 Chromium 的 BoringSSL 不同。
@@ -292,7 +317,7 @@ npm test
 **答**：微软网页 Cookie 通常有效期长达数周至数月。移动端的 OAuth Token 则由程序通过 Refresh Token 自动在后台刷新续期，无需手动干预。若 Cookie 失效，控制台及推送通知会主动提示您重新抓取。
 
 ### Q3：如何备份我的配置数据？
-**答**：所有配置文件、任务进度与统计历史均保存在映射的 `./data` 目录中（包括 `config.json` 和 `stats.json`）。更换设备时只需打包转移 `data` 目录即可实现无缝迁移。
+**答**：所有配置文件、任务进度、统计历史与浏览器会话均保存在映射的 `./data` 目录中（包括 `config.json`、`stats.json` 与 `sessions/`）。更换设备时只需打包转移 `data` 目录即可实现无缝迁移。若想强制所有账号「重新登录一次」，删掉 `data/sessions/` 即可，不会影响任务进度与积分历史。
 
 ---
 

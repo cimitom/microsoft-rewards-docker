@@ -1509,6 +1509,15 @@ const SEARCH_INTERVAL_MIN = 60;          // 安全下限：基础间隔（秒）
 const SEARCH_INTERVAL_MAX = 900;
 const SEARCH_JITTER_MIN = 30;            // 安全下限：随机浮动（秒）
 const SEARCH_JITTER_MAX = 300;
+const SEARCH_STAGNANT_MIN = 1;           // 停滞保护下限
+const SEARCH_STAGNANT_MAX = 50;
+
+// 停滞保护：连续多少次搜索官网进度不涨就停手
+function readSearchStagnantLimit() {
+  let value = parseInt(document.getElementById('cfg-search-stagnant')?.value, 10);
+  if (isNaN(value)) value = 10;
+  return Math.max(SEARCH_STAGNANT_MIN, Math.min(SEARCH_STAGNANT_MAX, value));
+}
 
 function readSearchRhythmInputs() {
   const intervalEl = document.getElementById('cfg-search-interval');
@@ -1605,6 +1614,8 @@ function populateSettingsForm() {
   const jitterEl = document.getElementById('cfg-search-jitter');
   if (intervalEl) intervalEl.value = c.tasks?.searchIntervalSec ?? 180;
   if (jitterEl) jitterEl.value = c.tasks?.searchJitterSec ?? 30;
+  const stagnantEl = document.getElementById('cfg-search-stagnant');
+  if (stagnantEl) stagnantEl.value = c.tasks?.searchStagnantLimit ?? 10;
   updateSearchRhythmHint();
   document.getElementById('cfg-search-engine').value = c.tasks?.searchEngineMode || 'browser';
   document.getElementById('cfg-search-api').value = c.tasks?.searchApi || 'baidu.official';
@@ -1752,6 +1763,7 @@ async function saveSettingsFromModal() {
       keepRunning: document.getElementById('cfg-task-keep').checked,
       searchIntervalSec: searchRhythm.interval,
       searchJitterSec: searchRhythm.jitter,
+      searchStagnantLimit: readSearchStagnantLimit(),
       searchEngineMode: document.getElementById('cfg-search-engine')?.value || 'browser',
       searchApi: document.getElementById('cfg-search-api')?.value || 'baidu.official'
     },
