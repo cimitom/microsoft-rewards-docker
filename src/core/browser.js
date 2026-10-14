@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { chromium } from 'playwright-core';
 import logger from '../logger.js';
 import rewardsApi from './api.js';
+import configManager from '../config.js';
 
 class BrowserManager extends EventEmitter {
   constructor() {
@@ -240,20 +241,34 @@ class BrowserManager extends EventEmitter {
   }
 
   /**
-   * 平缓拉长模式：在设定的时间跨度（默认约 2 小时）内平滑完成 PC 搜索
+   * 平缓拉长模式：按全局「搜索节奏」设置（基础间隔 ± 随机浮动）完成 PC 搜索。
+   * 执行窗口硬性限制为 3 小时（对应 4 小时时段抛去首小时随机启动）。
    */
   async runPacedSearch(acc, neededPoints, options = {}) {
     const accName = acc?.name || '当前账号';
-    const { durationHours = 2, onProgress = null } = options; // 默认平摊到 2 小时
+    const { onProgress = null } = options;
     const totalSearches = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
-    const totalSeconds = durationHours * 3600;
-    const baseIntervalSec = Math.max(45, Math.floor(totalSeconds / totalSearches)); // 平均每 3.5~4 分钟一次
+
+    // 全局搜索节奏（配置中心「任务与防风控」→ 搜索节奏设置）
+    const cfg = configManager.get();
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const wantedIntervalSec = clamp(Number(cfg.tasks?.searchIntervalSec ?? 180) || 180, 30, 900);
+    const jitterSec = clamp(Number(cfg.tasks?.searchJitterSec ?? 30) || 0, 0, 300);
+    // 3 小时硬上限：任何情况下 次数 × (间隔 + 浮动) 不得超过 10800 秒
+    const MAX_WINDOW_SEC = 3 * 3600;
+    const perSearchBudget = Math.floor(MAX_WINDOW_SEC / totalSearches);
+    const intervalSec = Math.max(30, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
+    const estimatedSec = totalSearches * intervalSec + Math.floor(totalSearches * jitterSec / 2);
+    const worstSec = totalSearches * (intervalSec + jitterSec);
+    if (intervalSec < wantedIntervalSec) {
+      logger.log('⚠️', `为保证 ${totalSearches} 次搜索在 3 小时内完成，本次间隔已自动压缩为 ${intervalSec}±${jitterSec} 秒`, '', accName);
+    }
 
     if (acc?.cookie && !acc.cookie.includes('_U=')) {
       logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请在配置中心更新包含 _U 的完整 Cookie`, '', accName);
     }
 
-    logger.log('🖥️', `启动 Playwright 拟人真机搜索：总计需 ${totalSearches} 次，将在约 ${durationHours} 小时内平滑分散执行（每 ~${(baseIntervalSec/60).toFixed(1)} 分钟搜索一次，彻底避开冷却限制）`, '', accName);
+    logger.log('🖥️', `启动 Playwright 拟人真机搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 ${intervalSec}±${jitterSec} 秒，预计约 ${(estimatedSec/60).toFixed(0)} 分钟（最长 ${(worstSec/60).toFixed(0)} 分钟，上限 180 分钟）`, '', accName);
 
     this.shouldStop = false;
     let completed = 0;
@@ -277,6 +292,7 @@ class BrowserManager extends EventEmitter {
           currentQuery: query,
           searchCount: completed,
           totalTarget: totalSearches,
+          pointsNeeded: neededPoints,
           nextSearchIn: 0,
           lastAction: `[第 ${completed}/${totalSearches} 轮] 正在打开必应主页...`
         });
@@ -323,8 +339,8 @@ class BrowserManager extends EventEmitter {
         // 如果已经是最后一次，不等待
         if (i === totalSearches - 1) break;
 
-        // 计算下一次搜索的拟人休眠时间 (基准时间 ± 30秒随机浮动)
-        const waitSec = Math.max(30, baseIntervalSec + rewardsApi.randomRange(-30, 30));
+        // 计算下一次搜索的拟人休眠时间（全局基础间隔 ± 随机浮动）
+        const waitSec = Math.max(30, intervalSec + rewardsApi.randomRange(-jitterSec, jitterSec));
         logger.log('⏳', `拟人呼吸间隔休眠：${(waitSec / 60).toFixed(1)} 分钟后执行第 ${completed + 1} 次搜索...`, '', accName);
 
         // 逐秒倒计时更新，便于 WebUI 前端实时显示倒计时

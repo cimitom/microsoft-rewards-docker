@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -15,10 +16,12 @@ import browserManager from '../core/browser.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.4.8';
+const CURRENT_VERSION = '1.4.9';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
-function getCpuUsage() {
+
+// 宿主机整机 CPU 负载率（仅在读不到容器 cgroup 时作为回退值）
+function getHostCpuUsage() {
   const cpus = os.cpus();
   let idle = 0;
   let total = 0;
@@ -33,6 +36,93 @@ function getCpuUsage() {
   lastCpuInfo = cpus.map(c => c.times);
   const usage = total > 0 ? Math.max(0, Math.min(100, Math.round(((total - idle) / total) * 100))) : 2;
   return usage;
+}
+
+// ===== 容器资源监控 =====
+// 说明：os.cpus()/os.totalmem() 读到的是「宿主机整机」数据，不是容器自身占用。
+// 在 Docker/NAS 里必须读 cgroup，才能得到用户实际关心的容器 CPU 与内存。
+// MSR_CGROUP_DIR 仅用于测试时指向伪造的 cgroup 目录。
+const CGROUP_ROOT = process.env.MSR_CGROUP_DIR || '/sys/fs/cgroup';
+
+function readTextFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
+
+/** 容器累计 CPU 时间（微秒），读不到返回 null */
+function readContainerCpuUsec() {
+  // cgroup v2: /sys/fs/cgroup/cpu.stat -> usage_usec
+  const v2 = readTextFile(path.join(CGROUP_ROOT, 'cpu.stat'));
+  if (v2) {
+    const m = v2.match(/^usage_usec\s+(\d+)/m);
+    if (m) return Number(m[1]);
+  }
+  // cgroup v1: cpuacct.usage 单位是纳秒
+  const v1 = readTextFile(path.join(CGROUP_ROOT, 'cpuacct/cpuacct.usage'));
+  if (v1 && /^\d+$/.test(v1)) return Math.floor(Number(v1) / 1000);
+  return null;
+}
+
+let lastContainerCpu = null;
+let lastContainerCpuPercent = 0;
+
+/**
+ * 容器 CPU 占用百分比（与 docker stats 口径一致：占单核的百分比，
+ * 例如 150% 表示约 1.5 个核心）。首次采样没有基线，返回 0。
+ */
+function getContainerCpuPercent() {
+  const usageUsec = readContainerCpuUsec();
+  const now = Date.now();
+  if (usageUsec === null) return null;
+
+  if (!lastContainerCpu) {
+    lastContainerCpu = { usageUsec, at: now };
+    return 0;
+  }
+  const cpuDelta = usageUsec - lastContainerCpu.usageUsec;
+  const wallDeltaUsec = (now - lastContainerCpu.at) * 1000;
+  // 采样窗口过短（例如用户手动连点刷新）会让百分比剧烈抖动，直接复用上次结果
+  if (wallDeltaUsec < 1000 * 1000) return lastContainerCpuPercent;
+  lastContainerCpu = { usageUsec, at: now };
+  if (cpuDelta < 0) return lastContainerCpuPercent;
+  lastContainerCpuPercent = Math.max(0, Math.min(999, Math.round((cpuDelta / wallDeltaUsec) * 100)));
+  return lastContainerCpuPercent;
+}
+
+/**
+ * 容器内存占用（字节）。与 docker stats 一样扣除 inactive file cache，
+ * 否则会把页面缓存也算成占用。读不到 cgroup 时返回 null。
+ */
+function readContainerMemory() {
+  // cgroup v2
+  let current = readTextFile(path.join(CGROUP_ROOT, 'memory.current'));
+  let limitRaw = readTextFile(path.join(CGROUP_ROOT, 'memory.max'));
+  let stat = readTextFile(path.join(CGROUP_ROOT, 'memory.stat'));
+  if (current) {
+    const inactiveFile = stat ? Number((stat.match(/^inactive_file\s+(\d+)/m) || [])[1] || 0) : 0;
+    const limit = limitRaw && limitRaw !== 'max' ? Number(limitRaw) : null;
+    return {
+      usage: Math.max(0, Number(current) - inactiveFile),
+      limit: limit && Number.isFinite(limit) ? limit : null
+    };
+  }
+  // cgroup v1
+  current = readTextFile(path.join(CGROUP_ROOT, 'memory/memory.usage_in_bytes'));
+  limitRaw = readTextFile(path.join(CGROUP_ROOT, 'memory/memory.limit_in_bytes'));
+  stat = readTextFile(path.join(CGROUP_ROOT, 'memory/memory.stat'));
+  if (current) {
+    const inactiveFile = stat ? Number((stat.match(/^total_inactive_file\s+(\d+)/m) || [])[1] || 0) : 0;
+    const limitNum = limitRaw ? Number(limitRaw) : null;
+    return {
+      usage: Math.max(0, Number(current) - inactiveFile),
+      // v1 的“无限制”是一个极大的数字（约 2^63），需要过滤掉
+      limit: limitNum && limitNum < 1e15 ? limitNum : null
+    };
+  }
+  return null;
 }
 
 let lastPingMs = 28;
@@ -86,18 +176,35 @@ export function createServer() {
   // 0. 系统硬件与网络实时监控指标
   app.get('/api/system/metrics', async (req, res) => {
     try {
-      const cpuPercent = getCpuUsage();
+      const containerCpu = getContainerCpuPercent();
+      const hostCpuPercent = getHostCpuUsage();
       const ping = await getNetworkPing();
+
+      // 宿主机整机内存（仅作参考，NAS 上通常远大于容器占用）
       const totalMemBytes = os.totalmem();
       const freeMemBytes = os.freemem();
       const usedMemBytes = totalMemBytes - freeMemBytes;
+      const hostMemPercent = Math.round((usedMemBytes / totalMemBytes) * 100);
+
+      // 容器自身内存（含 Chromium 等子进程），这才是用户想看的数字
+      const containerMem = readContainerMemory();
       const memUsage = process.memoryUsage();
       const procMemMB = Math.round(memUsage.rss / (1024 * 1024));
       const heapUsedMB = Math.round(memUsage.heapUsed / (1024 * 1024));
       const heapTotalMB = Math.round(memUsage.heapTotal / (1024 * 1024));
       const totalMemGB = (totalMemBytes / (1024 * 1024 * 1024)).toFixed(1);
       const usedMemGB = (usedMemBytes / (1024 * 1024 * 1024)).toFixed(1);
-      const memPercent = Math.round((usedMemBytes / totalMemBytes) * 100);
+
+      const containerMemMB = containerMem ? Math.round(containerMem.usage / (1024 * 1024)) : procMemMB;
+      const containerLimitMB = containerMem?.limit ? Math.round(containerMem.limit / (1024 * 1024)) : null;
+      const containerMemPercent = containerLimitMB
+        ? Math.max(0, Math.min(100, Math.round((containerMemMB / containerLimitMB) * 100)))
+        : null;
+
+      // 顶部胶囊优先展示容器指标；读不到 cgroup（例如本机直接跑）时回退到整机/进程指标
+      const displayCpuPercent = containerCpu === null ? hostCpuPercent : containerCpu;
+      const displayMemMB = containerMem ? containerMemMB : procMemMB;
+      const displayMemPercent = containerMemPercent === null ? hostMemPercent : containerMemPercent;
 
       const uptimeSec = Math.floor(process.uptime());
       const uptimeStr = uptimeSec > 3600
@@ -107,15 +214,21 @@ export function createServer() {
       res.json({
         success: true,
         data: {
-          cpu: `${cpuPercent}%`,
-          procMem: `${procMemMB} MB`,
+          cpu: `${displayCpuPercent}%`,
+          cpuIsContainer: containerCpu !== null,
+          procMem: `${displayMemMB} MB`,
+          memIsContainer: !!containerMem,
           sysMem: `${usedMemGB}G/${totalMemGB}G`,
-          memPercent,
+          memPercent: displayMemPercent,
           ping: `${ping} ms`,
           containerDetails: {
             processRss: `${procMemMB} MB`,
             heap: `${heapUsedMB} MB / ${heapTotalMB} MB`,
-            systemMemory: `${usedMemGB} GB / ${totalMemGB} GB (${memPercent}%)`,
+            containerMemory: containerMem ? `${containerMemMB} MB` : null,
+            containerMemoryLimit: containerLimitMB ? `${containerLimitMB} MB` : '无限制',
+            containerMemoryPercent: containerMemPercent,
+            hostMemory: `${usedMemGB} GB / ${totalMemGB} GB (${hostMemPercent}%)`,
+            hostCpu: `${hostCpuPercent}%`,
             uptime: uptimeStr,
             platform: `${os.type()} ${os.arch()}`,
             nodeVersion: process.version

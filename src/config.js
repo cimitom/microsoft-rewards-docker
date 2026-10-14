@@ -49,7 +49,9 @@ const DEFAULT_CONFIG = {
     quiz: true,
     desktopApp: true,
     dailySet: true,
-    searchSpan: 30,
+    searchSpan: 30, // 旧版 HTTP 模式间隔（已废弃，保留以兼容老配置）
+    searchIntervalSec: 180, // 全局搜索节奏：每次搜索基础间隔（秒）
+    searchJitterSec: 30,    // 全局搜索节奏：每次随机浮动（±秒）
     searchApi: 'baidu.official', // 'offline' | 'baidu.official' | 'hot.nntool.cc' | 'hot.cnxiaobai.com'
     searchEngineMode: 'browser', // 'browser' (Playwright 真机拟人) | 'http' (轻量HTTP)
     keepRunning: true

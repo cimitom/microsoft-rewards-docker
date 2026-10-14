@@ -8,6 +8,8 @@ let selectedAccountId = 'all'; // 'all' 或具体账号 id (如 'acc_1')
 let editingAccountIdInModal = null;
 // 前端日志视图的起始时间：点击「清空」后只显示此后的新日志（后端日志不受影响）
 let logViewSince = 0;
+// 最近一次系统指标（容器 CPU/内存），供浏览器监控卡片复用
+let lastSystemMetrics = null;
 let diagMode = 'single';
 let diagAccountId = null;
 
@@ -576,6 +578,10 @@ function initUIEvents() {
   document.getElementById('diag-account-select')?.addEventListener('change', (e) => {
     diagAccountId = e.target.value;
   });
+
+  // 搜索节奏：输入时实时刷新预估执行时间与 3 小时窗口校验
+  document.getElementById('cfg-search-interval')?.addEventListener('input', updateSearchRhythmHint);
+  document.getElementById('cfg-search-jitter')?.addEventListener('input', updateSearchRhythmHint);
 }
 
 function initSecretToggles() {
@@ -737,6 +743,7 @@ async function fetchSystemMetrics() {
     const res = await fetch('/api/system/metrics').then(r => r.json());
     if (res.success && res.data) {
       const d = res.data;
+      lastSystemMetrics = d;
       const cpuEl = document.getElementById('metric-cpu');
       const memEl = document.getElementById('metric-mem');
       const pingEl = document.getElementById('metric-ping');
@@ -747,7 +754,13 @@ async function fetchSystemMetrics() {
 
       if (pill && d.containerDetails) {
         const cd = d.containerDetails;
-        pill.setAttribute('data-tip', `📦 容器运行环境: Node.js ${cd.nodeVersion} on ${cd.platform}\n⏱️ 容器运行时间: ${cd.uptime}\n⚡ 容器进程内存占用: ${cd.processRss} (堆内存: ${cd.heap})\n💾 宿主机物理内存: ${cd.systemMemory}\n💻 系统 CPU 负载率: ${d.cpu} | 🌐 微软网络延时: ${d.ping}\n🔄 提示: 点击立即刷新`);
+        const memLine = cd.containerMemory
+          ? `🧠 容器内存占用: ${cd.containerMemory} / ${cd.containerMemoryLimit}${cd.containerMemoryPercent !== null ? ` (${cd.containerMemoryPercent}%)` : ''}`
+          : `🧠 容器内存占用: 读取不到 cgroup，回退为 Node 进程 ${cd.processRss}`;
+        const cpuLine = d.cpuIsContainer
+          ? `💻 容器 CPU 占用: ${d.cpu}（占单核百分比）`
+          : `💻 CPU 占用: ${d.cpu}（宿主机整机，未读到容器 cgroup）`;
+        pill.setAttribute('data-tip', `📦 容器运行环境: Node.js ${cd.nodeVersion} on ${cd.platform}\n⏱️ 容器运行时间: ${cd.uptime}\n${memLine}\n🧩 Node 进程 RSS: ${cd.processRss} (堆内存: ${cd.heap})\n${cpuLine}\n🖥️ 宿主机物理内存: ${cd.hostMemory}\n🌐 微软网络延时: ${d.ping}\n🔄 提示: 点击立即刷新`);
       }
     }
   } catch {}
@@ -760,7 +773,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.4.8';
+  const current = updateInfo?.currentVersion || '1.4.9';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -800,7 +813,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.8'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.4.9'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -820,7 +833,7 @@ function renderBrowserMonitor(b) {
   pill.className = `browser-status-pill ${isRunning ? 'status-running' : 'status-idle'}`;
 
   const statusMap = {
-    idle: '空闲休眠中 (0 MB)',
+    idle: '空闲休眠中',
     starting: '正在启动 Chromium...',
     navigating: '打开 Bing 页面中...',
     typing: '正在模拟真人键盘打字...',
@@ -832,9 +845,17 @@ function renderBrowserMonitor(b) {
   pillText.innerText = statusMap[b.status] || (isRunning ? '运行中' : '空闲休眠中');
   bmAccount.innerText = b.activeAccountName || '--';
   bmQuery.innerText = b.currentQuery || '--';
-  bmRound.innerText = b.totalTarget > 0 ? `${b.searchCount} / ${b.totalTarget}` : '0 / 0';
+  if (bmRound) {
+    bmRound.innerText = b.totalTarget > 0 ? `${b.searchCount} / ${b.totalTarget}` : '0 / 0';
+    // 说明口径：这里统计的是「本次为补足剩余配额需要跑几轮搜索」，不是总进度
+    bmRound.setAttribute('data-tip', b.totalTarget > 0
+      ? `本次需补足剩余配额 ${b.pointsNeeded || b.totalTarget * 3} 分，每次搜索约 +3 分，共安排 ${b.totalTarget} 轮；与上方总进度是两个口径`
+      : '本次补分搜索轮次');
+  }
   bmCountdown.innerText = b.nextSearchIn > 0 ? `${b.nextSearchIn} 秒` : '--';
-  bmMem.innerText = isRunning ? `${b.memoryMB || 180} MB` : '0 MB';
+  // 用容器真实内存（含 Chromium 子进程）替代原来写死的 180MB
+  const containerMem = lastSystemMetrics?.procMem;
+  bmMem.innerText = containerMem || (isRunning ? `${b.memoryMB || '--'} MB` : '--');
   bmAction.innerText = b.lastAction || '浏览器当前处于空闲休眠状态 (0 内存占用)';
 }
 
@@ -1390,6 +1411,52 @@ async function fetchConfig() {
   }
 }
 
+// ===== 全局搜索节奏（任务与防风控） =====
+const SEARCH_MAX_ROUNDS = 20;            // 单账号最多 20 次搜索（60 分 ÷ 3 分/次）
+const SEARCH_WINDOW_MAX_SEC = 3 * 3600;  // 4 小时时段抛去首小时随机启动 = 3 小时执行窗口
+
+function readSearchRhythmInputs() {
+  const intervalEl = document.getElementById('cfg-search-interval');
+  const jitterEl = document.getElementById('cfg-search-jitter');
+  let interval = parseInt(intervalEl?.value, 10);
+  let jitter = parseInt(jitterEl?.value, 10);
+  if (isNaN(interval)) interval = 180;
+  if (isNaN(jitter)) jitter = 30;
+  interval = Math.max(30, Math.min(900, interval));
+  jitter = Math.max(0, Math.min(300, jitter));
+  return { interval, jitter };
+}
+
+function formatDurationCN(sec) {
+  const total = Math.max(0, Math.round(sec));
+  const h = Math.floor(total / 3600);
+  const m = Math.round((total % 3600) / 60);
+  if (h > 0) return `${h} 小时 ${m} 分`;
+  return `${m} 分钟`;
+}
+
+// 更新预估执行时间提示；返回是否满足「≤ 3 小时」的硬约束
+function updateSearchRhythmHint() {
+  const hint = document.getElementById('cfg-search-rhythm-hint');
+  if (!hint) return true;
+  const { interval, jitter } = readSearchRhythmInputs();
+  const fastestSec = Math.max(30, interval - jitter) * SEARCH_MAX_ROUNDS;
+  const slowestSec = (interval + jitter) * SEARCH_MAX_ROUNDS;
+  const ok = slowestSec <= SEARCH_WINDOW_MAX_SEC;
+
+  if (ok) {
+    hint.innerHTML = `按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算：单次 ${interval}±${jitter} 秒，`
+      + `总耗时约 <strong>${formatDurationCN(fastestSec)} ~ ${formatDurationCN(slowestSec)}</strong>，`
+      + `在 3 小时执行窗口内 ✅`;
+    hint.style.color = '';
+  } else {
+    hint.innerHTML = `⚠️ 按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算最慢需要 <strong>${formatDurationCN(slowestSec)}</strong>，`
+      + `已超过 3 小时上限。请让「基础间隔 + 随机浮动」≤ 540 秒（例如 180+30）。`;
+    hint.style.color = '#F87171';
+  }
+  return ok;
+}
+
 function populateSettingsForm() {
   if (!currentConfig) return;
   const c = currentConfig;
@@ -1422,7 +1489,11 @@ function populateSettingsForm() {
   document.getElementById('cfg-task-dailyset').checked = c.tasks?.dailySet !== false;
   document.getElementById('cfg-task-desktop').checked = c.tasks?.desktopApp !== false;
   document.getElementById('cfg-task-keep').checked = c.tasks?.keepRunning !== false;
-  document.getElementById('cfg-search-span').value = c.tasks?.searchSpan || 30;
+  const intervalEl = document.getElementById('cfg-search-interval');
+  const jitterEl = document.getElementById('cfg-search-jitter');
+  if (intervalEl) intervalEl.value = c.tasks?.searchIntervalSec ?? 180;
+  if (jitterEl) jitterEl.value = c.tasks?.searchJitterSec ?? 30;
+  updateSearchRhythmHint();
   document.getElementById('cfg-search-engine').value = c.tasks?.searchEngineMode || 'browser';
   document.getElementById('cfg-search-api').value = c.tasks?.searchApi || 'baidu.official';
   // 主题
@@ -1505,6 +1576,12 @@ async function saveSettingsFromModal() {
     alert('配置尚未加载完成，为避免覆盖账号数据，请稍后重试。');
     return;
   }
+  // 搜索节奏必须落在 3 小时执行窗口内，否则拒绝保存（避免搜索跑不完就跨到下一个时段）
+  if (!updateSearchRhythmHint()) {
+    alert('搜索节奏超出 3 小时执行窗口：请让「基础间隔 + 随机浮动」≤ 540 秒（按最多 20 次搜索估算）。');
+    return;
+  }
+  const searchRhythm = readSearchRhythmInputs();
   const currentAccId = editingAccountIdInModal || 'acc_1';
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
@@ -1559,7 +1636,8 @@ async function saveSettingsFromModal() {
       dailySet: document.getElementById('cfg-task-dailyset').checked,
       desktopApp: document.getElementById('cfg-task-desktop').checked,
       keepRunning: document.getElementById('cfg-task-keep').checked,
-      searchSpan: Number(document.getElementById('cfg-search-span').value) || 30,
+      searchIntervalSec: searchRhythm.interval,
+      searchJitterSec: searchRhythm.jitter,
       searchEngineMode: document.getElementById('cfg-search-engine')?.value || 'browser',
       searchApi: document.getElementById('cfg-search-api')?.value || 'baidu.official'
     },

@@ -663,10 +663,8 @@ export class TaskManager {
 
         if (searchMode === 'browser' && hasBrowser) {
           try {
-            const duration = accCfg.timeSlot?.durationHours || 2;
             await browserManager.runPacedSearch(accCfg, neededPoints, {
-              durationHours: duration,
-              // 每搜完一次就刷新进度，否则整个搜索过程（最长 2 小时）界面都不动
+              // 每搜完一次就刷新进度，否则整个搜索过程界面都不动
               onProgress: applySearchProgress
             });
           } catch (e) {
@@ -716,7 +714,13 @@ export class TaskManager {
     // 每次搜索最多 +3 分，上限 20 次可覆盖单账号 60 分上限；
     // 旧实现写死最多 7 次（21 分），轻量模式下永远打不满搜索任务。
     const searchCount = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
-    logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求`, '', accountName);
+    // 与拟人模式共用全局搜索节奏，并同样受 3 小时执行窗口约束
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const wantedIntervalSec = clamp(Number(globalCfg.tasks?.searchIntervalSec ?? 180) || 180, 30, 900);
+    const jitterSec = clamp(Number(globalCfg.tasks?.searchJitterSec ?? 30) || 0, 0, 300);
+    const perSearchBudget = Math.floor((3 * 3600) / searchCount);
+    const intervalSec = Math.max(30, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
+    logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 ${intervalSec}±${jitterSec} 秒`, '', accountName);
 
     for (let i = 0; i < searchCount && this.running; i++) {
       const word = await rewardsApi.getHotSearchWord();
@@ -730,8 +734,8 @@ export class TaskManager {
         } catch {}
       }
 
-      const span = Number(globalCfg.tasks?.searchSpan || 30);
-      const waitTime = rewardsApi.randomRange(Math.max(10, span - 10) * 1000, (span + 10) * 1000);
+      const waitSec = Math.max(10, intervalSec + rewardsApi.randomRange(-jitterSec, jitterSec));
+      const waitTime = waitSec * 1000;
       logger.log('⏳', `等待 ${(waitTime / 1000).toFixed(1)} 秒...`, '', accountName);
       await rewardsApi.delay(waitTime);
     }

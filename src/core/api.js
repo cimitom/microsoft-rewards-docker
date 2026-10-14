@@ -682,10 +682,18 @@ export class RewardsApi {
             const qText = qChunks.length > 0 ? qChunks.join('') : String(questHtml).replace(/\\"/g, '"');
             const qOfferRegex = /\{[^{}]*?"offerId"\s*:\s*"(WW_pcchild\d+[^"]+)"[^{}]*?\}/g;
             let qo;
+            let desktopTotal = 0;
+            let desktopReady = 0;
+            let desktopLocked = 0;
+            let desktopCompleted = 0;
             while ((qo = qOfferRegex.exec(qText)) !== null) {
               try {
                 const qItem = JSON.parse(qo[0].replace(/:\$undefined/g, ':null').replace(/:\$D[^\",}]+/g, ':null'));
+                desktopTotal++;
+                if (qItem.isCompleted === true) { desktopCompleted++; continue; }
+                if (qItem.isLocked === true) { desktopLocked++; continue; }
                 if (qItem.offerId && qItem.hash && qItem.isLocked === false && qItem.isCompleted === false) {
+                  desktopReady++;
                   logger.log('🖥️', `发现桌面端专享打卡任务: ${qItem.title || qItem.offerId}`);
                   pushCard({
                     title: `[桌面专享] ${qItem.title || qItem.name || qItem.offerId}`,
@@ -698,6 +706,10 @@ export class RewardsApi {
                   });
                 }
               } catch {}
+            }
+            if (desktopTotal > 0) {
+              // 帮助用户理解「昨天 3 个今天 1 个」：周打孔卡是按天逐步解锁的
+              logger.log('🖥️', `桌面每周专属任务：共 ${desktopTotal} 项，本次可打卡 ${desktopReady} 项（已完成 ${desktopCompleted} / 未解锁 ${desktopLocked}）`);
             }
           }
         }
