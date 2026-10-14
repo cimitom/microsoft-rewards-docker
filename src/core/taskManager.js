@@ -300,22 +300,42 @@ export class TaskManager {
           accStats.streakDays = streakInfo.streakDays;
         }
 
-        // 5. 智能识别签到与每日活动状态
-        //    这里只是「推断」：旧逻辑用 or（搜索或阅读任一打满就全标完成），
-        //    误报很多（明明没做却显示已完成）。现在要求两者都打满才推断，
-        //    并且不碰 promos —— 它有自己的真实进度（x/4 张卡片）。
-        const isSearchDone = accStats.tasks.search?.done;
-        const isReadDone = accStats.tasks.read?.done;
-        if (isSearchDone && isReadDone) {
-          const inferDone = (key, progress, points) => {
-            const t = accStats.tasks[key];
-            if (!t) return;
-            if (Number(t.progress || 0) < progress) t.progress = progress;
-            if (!t.points) t.points = points;
-            t.done = true;
-          };
-          inferDone('sign', 1, 10);
-          inferDone('dailySet', 3, 30);
+        // 5. 双端签入 / 每日活动集：只认官网连签任务的真实状态
+        //
+        //    这里以前是「搜索和阅读都打满就推断签到与活动也完成了」，属于猜测。
+        //    那正是「脚本显示双端签入已完成、官网必应应用连续打卡却还是 0/1」的根因。
+        //    现在改为以官网 streak 模型为准，并且能双向校正：
+        //    官网说完成就标完成，官网明确说没完成就把误标的完成状态纠正回来。
+        const appStreak = info.streaks?.bingapp;
+        const signTask = accStats.tasks.sign;
+        if (appStreak && signTask) {
+          if (appStreak.isCurrentDayCompleted === true) {
+            signTask.progress = 1;
+            signTask.max = 1;
+            if (!signTask.points) signTask.points = 10;
+            signTask.done = true;
+          } else if (appStreak.isCurrentDayCompleted === false) {
+            // 官网明确显示今日未签到（签到 0/1），不能继续显示「已完成」
+            signTask.progress = 0;
+            signTask.done = false;
+          }
+        }
+
+        const dsStreak = info.streaks?.dailyset;
+        const dsTask = accStats.tasks.dailySet;
+        if (dsStreak && dsTask && Number(dsStreak.activitiesTotal || 0) > 0) {
+          const dsTotal = Number(dsStreak.activitiesTotal);
+          const dsDone = Math.min(Number(dsStreak.activitiesCompleted || 0), dsTotal);
+          const dsFinished = dsDone >= dsTotal;
+          dsTask.max = dsTotal;
+          dsTask.progress = dsFinished ? dsTotal : dsDone;
+          if (dsFinished) {
+            if (!dsTask.points) dsTask.points = 30;
+            dsTask.done = true;
+          } else {
+            dsTask.points = 0;
+            dsTask.done = false;
+          }
         }
 
         // 重新计算今日已增总分
@@ -539,15 +559,32 @@ export class TaskManager {
 
         if (tokenOk) {
           const appRes = await rewardsApi.signApp();
-          if (appRes) {
+          if (appRes && Number(appRes.points || 0) > 0) {
             signSuccess = true;
-            signPoints += Number(appRes.points || 0);
-            if (appRes.points > 0) {
-              logger.log('📱', `App 端静默签到成功 +${appRes.points} 积分`, accountName);
-            } else if (appRes.isDuplicate) {
-              logger.log('📱', 'App 端今日已签到过，跳过', accountName);
+            signPoints += Number(appRes.points);
+            logger.log('📱', `App 端静默签到成功 +${appRes.points} 积分`, accountName);
+          } else if (appRes && appRes.isDuplicate) {
+            signSuccess = true;
+            logger.log('📱', 'App 端今日已签到过，跳过', accountName);
+          } else if (appRes) {
+            // 接口既没返积分也没报重复：无法区分「今天已经签过」还是「根本没签成」，
+            // 直接读官网「必应应用连续打卡」的真实状态来判定，不凭猜测标已完成。
+            await rewardsApi.randomDelay(1500, 3000);
+            const appStatus = await rewardsApi.getAppCheckInStatus();
+            if (appStatus?.isCurrentDayCompleted) {
+              signSuccess = true;
+              logger.log('📱', `App 端签到已生效（官网连签第 ${appStatus.currentDay || 1} 天）`, accountName);
             } else {
-              logger.log('📱', `App 端签到已提交 (${appRes.offerId || 'Gamification_Sapphire_DailyCheckIn'})`, accountName);
+              const progressText = appStatus ? `${appStatus.completedDays || 0}/7 天` : '状态未知';
+              logger.log('🟡', `App 端签到未生效：官网「必应应用连续打卡」仍为 ${progressText}，请检查该账号的移动端授权 (Refresh Token) 是否有效`, accountName);
+              // 典型误配：这个账号的移动端 Token 其实是另一个微软账号的，
+              // 签到会算到那个账号上，本账号自然永远是 0/1。
+              const tokenBalance = Number(appRes.balance);
+              const cookieBalance = Number(accStats.balance);
+              if (Number.isFinite(tokenBalance) && Number.isFinite(cookieBalance)
+                && cookieBalance > 0 && Math.abs(tokenBalance - cookieBalance) > 100) {
+                logger.log('🔴', `注意：移动端 Token 所属账号积分 (${tokenBalance}) 与网页端 Cookie 所属账号积分 (${cookieBalance}) 不一致，该账号的移动端授权很可能绑定的是另一个微软账号，请在配置向导里重新授权`, accountName);
+              }
             }
           } else {
             logger.log('🟡', 'App 端签到未成功（Token 或接口异常），下次巡检会自动重试', accountName);

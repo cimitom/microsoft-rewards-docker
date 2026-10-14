@@ -798,7 +798,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.5.2';
+  const current = updateInfo?.currentVersion || '1.5.3';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -838,7 +838,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.5.2'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.5.3'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -1055,6 +1055,18 @@ function renderDashboard(data) {
     }
   }
 
+  // 「最后更新」时间：单账号取该账号的 lastUpdate，汇总视图取所有账号里最新的一次。
+  // 这个元素以前只写在 HTML 里、JS 从来没赋值，所以一直显示 "--"。
+  const lastUpdateEl = document.getElementById('last-update-time');
+  if (lastUpdateEl) {
+    const lastUpdateTs = isAllMode
+      ? Math.max(0, ...(summary?.accountsList || []).map(a => Number(a.lastUpdate) || 0))
+      : Number(stats.lastUpdate) || 0;
+    lastUpdateEl.innerText = lastUpdateTs > 0
+      ? `最后更新：${new Date(lastUpdateTs).toLocaleString('zh-CN', { hour12: false })}`
+      : '最后更新：--';
+  }
+
   // 5. 渲染任务网格
   const taskGrid = document.getElementById('task-grid');
   taskGrid.innerHTML = '';
@@ -1084,6 +1096,18 @@ function renderDashboard(data) {
         subtext = t.expiresText ? `${t.expiresText} · 每周打孔卡` : '每周打孔卡';
         progressLabel = `进度: ${p} / ${m} 个任务`;
         pointsBadge = `+${t.points || 20} 积分`;
+      }
+    }
+
+    if (key === 'sign') {
+      // 双端签入是否完成以官网「必应应用连续打卡」为准。
+      // 这里把官网真实状态直接标在卡片上，避免出现「脚本显示已完成、
+      // 官网 App 连签还是 0/1」这种对不上的情况。
+      const appStreak = stats.streaks?.bingapp;
+      if (appStreak) {
+        const days = Number(appStreak.completedDays || 0);
+        const todayText = appStreak.isCurrentDayCompleted ? '今日已签' : '今日未签';
+        subtext = `${subtext} · 官网 App 连签 ${days}/7 天（${todayText}）`;
       }
     }
 

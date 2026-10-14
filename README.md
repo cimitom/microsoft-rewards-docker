@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.5.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.5.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -31,6 +31,10 @@
 - 🧩 **任务区打孔卡自动推进 (v1.5.2 新增)**：
   - 自动识别「任务」区的每月/每周打孔卡（如「十月必看五大亮点」），每天解锁一项后自动完成当日可做的任务；
   - 每天只推进一次，避免重复打开任务页增加风控暴露面。
+- 📌 **任务进度不再“猜” (v1.5.3 修复)**：
+  - 「双端签入」「每日活动集」改为以官网连签任务真实状态为准，官网说没完成就会把误标的「已完成」纠正回来，并在卡片上直接显示「官网 App 连签 X/7 天（今日已签/未签）」；
+  - 「最后更新」时间不再恒为 `--`；
+  - App 签到未生效时会明确提示是 Token 失效还是移动端授权绑错了账号。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；

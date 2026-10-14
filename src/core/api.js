@@ -464,6 +464,36 @@ export class RewardsApi {
   }
 
   /**
+   * 查询「必应应用连续打卡」今日的真实完成状态。
+   *
+   * 签到接口在「已签过」和「没签成」两种情况下都可能返回 0 积分，
+   * 单看返回值分不清，所以这里直接读官网 earn 页里的 streak 模型做判定。
+   */
+  async getAppCheckInStatus() {
+    try {
+      const html = await networkClient.request({
+        url: 'https://rewards.bing.com/earn',
+        headers: { 'user-agent': USER_AGENTS.pc }
+      });
+      if (!html) return null;
+      const clean = String(html).replace(/\\"/g, '"');
+      const key = '"partner":"bingapp"';
+      let idx = -1;
+      // partner 会出现两次（埋点 data 与真正的 streak 模型），只有模型那段带 completedDays
+      while ((idx = clean.indexOf(key, idx + 1)) !== -1) {
+        const win = clean.slice(Math.max(0, idx - 1600), idx + 300);
+        if (!/"completedDays":\d+/.test(win)) continue;
+        return {
+          isCurrentDayCompleted: /"isCurrentDayCompleted":true/.test(win),
+          completedDays: Number((win.match(/"completedDays":(\d+)/) || [])[1] || 0),
+          currentDay: Number((win.match(/"currentDay":(\d+)/) || [])[1] || 0)
+        };
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
    * 移动端 App 签入
    */
   async signApp() {
@@ -502,10 +532,23 @@ export class RewardsApi {
           const act = data.response.activity;
           const points = Number(act.p || act.points || 0);
           const appliedOffer = act.a?.offerid || act.attributes?.offerid || '';
-          return { points, offerId: appliedOffer, isDuplicate: !!data.response.isDuplicate };
+          // balance 是「该 Token 所属账号」的积分，可用于判断 Token 与 Cookie 是否同一个号
+          const balance = Number(data.response.balance);
+          return {
+            points,
+            offerId: appliedOffer,
+            isDuplicate: !!data.response.isDuplicate,
+            balance: Number.isFinite(balance) ? balance : null
+          };
         }
         if (data.response.isDuplicate || data.response.activity === null) {
-          return { points: 0, offerId: APP_CONFIG.offerIds.dailyCheckIn, isDuplicate: true };
+          const balance = Number(data.response.balance);
+          return {
+            points: 0,
+            offerId: APP_CONFIG.offerIds.dailyCheckIn,
+            isDuplicate: true,
+            balance: Number.isFinite(balance) ? balance : null
+          };
         }
       }
     } catch (e) {
