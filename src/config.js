@@ -412,6 +412,7 @@ class ConfigManager {
         sessionValid: data.sessionValid ?? null,
         lastVerifyAt: data.lastVerifyAt || 0,
         lastVerifyMessage: data.lastVerifyMessage || '',
+        lastSessionImportAt: data.lastSessionImportAt || 0,
         lastClaimAt: data.lastClaimAt || 0,
         lastClaimMessage: data.lastClaimMessage || '',
         handledGames: data.handledGames || {}

@@ -10,6 +10,8 @@ process.env.MSR_DATA_DIR = tmpDir;
 const {
   isEpicChallengeText,
   isEpicLoginText,
+  EPIC_ORDER_BUTTON_RE,
+  EPIC_SUCCESS_TEXT_RE,
   epicProfilePath,
   EpicManager
 } = await import('../src/core/epic.js');
@@ -64,4 +66,30 @@ test('EpicManager 在任务进行中时拒绝校验与并发', async () => {
     async () => em.claimOne('demo_epic_1'),
     /Epic 任务正在运行中/
   );
+});
+
+test('Epic 结账按钮与成功文案覆盖“添加到库”当前文案', () => {
+  assert.equal(EPIC_ORDER_BUTTON_RE.test('添加到库'), true);
+  assert.equal(EPIC_ORDER_BUTTON_RE.test('Add to Library'), true);
+  assert.equal(EPIC_ORDER_BUTTON_RE.test('确认订单'), true);
+  assert.equal(EPIC_ORDER_BUTTON_RE.test('愿望清单'), false);
+
+  assert.equal(EPIC_SUCCESS_TEXT_RE.test('已添加到库'), true);
+  assert.equal(EPIC_SUCCESS_TEXT_RE.test('Added to your library'), true);
+  assert.equal(EPIC_SUCCESS_TEXT_RE.test('获取'), false);
+});
+
+test('Epic 停止请求会关闭活动浏览器上下文并标记状态', async () => {
+  const em = new EpicManager();
+  let closed = false;
+  em.running = true;
+  em.activeContext = { close: async () => { closed = true; } };
+  const result = await em.stop();
+  assert.equal(result.stopped, true);
+  assert.equal(closed, true);
+  assert.equal(em.stopRequested, true);
+  assert.equal(em.state.status, 'stopping');
+  em.running = false;
+  em.activeContext = null;
+  em.stopRequested = false;
 });

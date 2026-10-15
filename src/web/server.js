@@ -18,7 +18,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.6.6';
+const CURRENT_VERSION = '1.6.7';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -876,6 +876,9 @@ export function createServer() {
   // 导入会话（Cookie-Editor JSON / storageState / 原始 Cookie 串）
   app.post('/api/epic/accounts/:id/session', (req, res) => {
     try {
+      if (epicManager.running || epicManager.verifying || epicManager.checking) {
+        return res.status(409).json({ success: false, message: 'Epic 任务正在运行中，请先点击停止按钮，再更新会话' });
+      }
       const acc = configManager.findEpicAccount(req.params.id);
       if (!acc) return res.status(404).json({ success: false, message: '账号不存在' });
       const storageState = epicManager.parseSessionInput(req.body?.session);
@@ -884,7 +887,8 @@ export function createServer() {
         storageState,
         sessionValid: null,
         lastVerifyAt: 0,
-        lastVerifyMessage: ''
+        lastVerifyMessage: '',
+        lastSessionImportAt: Date.now()
       });
       logger.log('🎮', `Epic 账号 [${acc.name}] 会话已导入（${summary.cookieCount} 个 Cookie${summary.hasEpicSession ? '，包含 Epic 登录凭据' : '，⚠️ 未检测到 EPIC 登录 Cookie'}）`, '', acc.name);
       res.json({ success: true, data: summary });
@@ -919,6 +923,18 @@ export function createServer() {
       const accountId = req.body?.accountId || null;
       const data = accountId ? await epicManager.claimOne(accountId) : await epicManager.claimAll();
       res.json({ success: true, data });
+    } catch (e) {
+      if (e?.code === 'EPIC_STOPPED') {
+        return res.json({ success: true, stopped: true, message: e.message, data: { results: [] } });
+      }
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/epic/stop', async (req, res) => {
+    try {
+      const result = await epicManager.stop();
+      res.json({ success: true, ...result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }

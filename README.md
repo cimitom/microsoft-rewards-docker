@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.6.6-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.7-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -88,6 +88,13 @@
   - **校验与更新进度弹窗**：彻底替换系统阻塞式弹窗，新增平滑网页对话框与分阶段动态进度条，直观追踪「初始化-打开商城-验证会话-核销订单」完整链路；
   - **全账号编辑入口与凭据维护**：微软账号卡片、顶部操作栏与任务网格均配备「✏️ 编辑账号」按钮，Cookie 失效时一键覆盖或清空，修改无缝即时生效；
   - **单元测试增至 55 个**。
+- 🛑 **Epic 停止按钮与领取链路加固 (全新 v1.6.7)**：
+  - **Epic 浏览器状态新增手动停止按钮**：领取或校验占用浏览器资源时，可立即关闭当前持久化上下文并释放浏览器锁，不再阻塞微软积分任务；
+  - **结账按钮文案自适应**：补齐 Epic 当前使用的「添加到库 / Add to Library」结账按钮，避免商品页加载正常却误报“未出现下单按钮”；
+  - **点击获取改为非阻塞状态机**：点击后不再被未完成的导航拖死，主动检测结账层、验证覆盖层、新标签页与 iframe；
+  - **会话导入保护**：领取运行期间禁止覆盖会话，避免旧浏览器上下文在结束时反向覆盖刚导入的新 Cookie；
+  - **微软测搜与进度刷新网页化**：单次安全测搜、刷新账号进度、官网同步全部改为网页进度弹窗，实时显示步骤、明细与结果；
+  - **单元测试增至 57 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；

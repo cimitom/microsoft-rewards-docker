@@ -16,6 +16,8 @@ const STORE_HOME = `${STORE_BASE}/`;
 const EPIC_PROFILE_DIR = path.join(DATA_DIR, 'epic-profiles');
 const CHALLENGE_TEXT_RE = /verify you are human|确认您是真人|正在验证|checking your browser|cf-mitigated|try again|cloudflare/i;
 const LOGIN_TEXT_RE = /sign in|log in|登录|登入/i;
+export const EPIC_ORDER_BUTTON_RE = /添加到库|添加至库|加入库|Add to Library|下订单|下单|确认订单|结账|Place Order|Checkout/i;
+export const EPIC_SUCCESS_TEXT_RE = /已添加到库|已加入库|已拥有|谢谢|感谢|订单已提交|Added to your library|In Library|Thanks|Thank you|Order confirmed/i;
 
 function safeProfileId(accountId) {
   return String(accountId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_');
@@ -31,6 +33,14 @@ export function isEpicChallengeText(text) {
 
 export function isEpicLoginText(text) {
   return LOGIN_TEXT_RE.test(String(text || ''));
+}
+
+class EpicStopError extends Error {
+  constructor(message = 'Epic 任务已手动停止') {
+    super(message);
+    this.name = 'EpicStopError';
+    this.code = 'EPIC_STOPPED';
+  }
 }
 
 // 与积分任务共用同一套浏览器身份，避免同一个出口 IP 上出现两套互相矛盾的指纹
@@ -51,6 +61,9 @@ export class EpicManager {
     this.running = false;
     this.checking = false;
     this.verifying = false;
+    this.stopRequested = false;
+    this.activeContext = null;
+    this.activeAccountId = null;
     this.runningAccountId = null;
     this.lastRun = null; // { startedAt, finishedAt, results: [] }
     this.lastCheckAt = 0;
@@ -77,6 +90,37 @@ export class EpicManager {
 
   updateState(partial) {
     Object.assign(this.state, partial, { lastUpdate: Date.now() });
+  }
+
+  throwIfStopped() {
+    if (this.stopRequested) throw new EpicStopError();
+  }
+
+  async interruptibleDelay(ms) {
+    const deadline = Date.now() + Math.max(0, Number(ms) || 0);
+    while (Date.now() < deadline) {
+      this.throwIfStopped();
+      await this.delay(Math.min(250, deadline - Date.now()));
+    }
+  }
+
+  async stop() {
+    const active = this.running || this.checking || this.verifying || !!this.activeContext;
+    if (!active) {
+      return { stopped: false, message: '当前没有正在运行的 Epic 任务' };
+    }
+    this.stopRequested = true;
+    this.updateState({
+      status: 'stopping',
+      progress: this.state.progress || 0,
+      code: 'stopped',
+      lastAction: '正在停止 Epic 任务并释放浏览器资源...'
+    });
+    logger.log('🛑', '收到手动停止指令，正在关闭 Epic 浏览器并释放资源');
+    if (this.activeContext) {
+      await this.activeContext.close().catch(() => {});
+    }
+    return { stopped: true, message: '停止指令已发送，浏览器资源即将释放' };
   }
 
   getBrowserProxy() {
@@ -126,12 +170,15 @@ export class EpicManager {
   }
 
   async readPageText(page) {
-    try {
-      const body = await page.locator('body').innerText({ timeout: 1200 });
-      return String(body || '');
-    } catch {
-      return '';
+    const parts = [];
+    const frames = page.frames();
+    for (const frame of frames.slice(0, 20)) {
+      try {
+        const text = await frame.locator('body').innerText({ timeout: 800 });
+        if (text) parts.push(text);
+      } catch {}
     }
+    return parts.join('\n');
   }
 
   async detectPageState(page) {
@@ -141,17 +188,19 @@ export class EpicManager {
 
     if (isEpicChallengeText(combined)) return { state: 'challenge', text: combined };
 
-    const owned = await page.locator('text=已在库中').count().catch(() => 0);
-    if (owned > 0) return { state: 'owned', text: combined };
+    for (const frame of page.frames().slice(0, 20)) {
+      const owned = await frame.locator('text=已在库中').count().catch(() => 0);
+      if (owned > 0) return { state: 'owned', text: combined };
 
-    const getBtn = page.getByRole('button', { name: /^获取$|^Get$/ }).first();
-    if (await getBtn.count().catch(() => 0) > 0 && await getBtn.isVisible().catch(() => false)) {
-      return { state: 'product', text: combined };
-    }
+      const getBtn = frame.getByRole('button', { name: /^获取$|^Get$/ }).first();
+      if (await getBtn.count().catch(() => 0) > 0 && await getBtn.isVisible().catch(() => false)) {
+        return { state: 'product', text: combined };
+      }
 
-    const loginEntry = page.getByRole('link', { name: /登录|Sign in|Log in/ }).first();
-    if (await loginEntry.count().catch(() => 0) > 0 && await loginEntry.isVisible().catch(() => false)) {
-      return { state: 'login', text: combined };
+      const loginEntry = frame.getByRole('link', { name: /登录|Sign in|Log in/ }).first();
+      if (await loginEntry.count().catch(() => 0) > 0 && await loginEntry.isVisible().catch(() => false)) {
+        return { state: 'login', text: combined };
+      }
     }
 
     if (isEpicLoginText(combined)) return { state: 'login', text: combined };
@@ -162,6 +211,7 @@ export class EpicManager {
     const deadline = Date.now() + timeout;
     let last = { state: 'unknown', text: '' };
     while (Date.now() < deadline) {
+      this.throwIfStopped();
       last = await this.detectPageState(page);
       if (wanted.includes(last.state)) return last;
       await this.delay(500);
@@ -170,6 +220,7 @@ export class EpicManager {
   }
 
   async navigateEpicPage(page, url, timeout = 45000) {
+    this.throwIfStopped();
     let navigationError = null;
     try {
       await page.goto(url, { waitUntil: 'commit', timeout: Math.min(15000, timeout) });
@@ -177,6 +228,7 @@ export class EpicManager {
       navigationError = e;
     }
     await page.waitForLoadState('domcontentloaded', { timeout: Math.max(5000, timeout - 15000) }).catch(() => {});
+    this.throwIfStopped();
     const result = await this.waitForPageState(page, ['product', 'challenge', 'login', 'owned'], timeout);
     return { ...result, navigationError };
   }
@@ -207,6 +259,7 @@ export class EpicManager {
     return {
       running: this.running,
       verifying: this.verifying,
+      stopRequested: this.stopRequested,
       runningAccountId: this.runningAccountId,
       lastRun: this.lastRun,
       lastCheckAt: this.lastCheckAt,
@@ -422,8 +475,13 @@ export class EpicManager {
 
   async visibleButtonTexts(page) {
     try {
-      const texts = await page.locator('button').allInnerTexts();
-      return [...new Set(texts.map(t => String(t).trim()).filter(Boolean))].slice(0, 12).join(' / ');
+      const texts = [];
+      for (const frame of page.frames().slice(0, 20)) {
+        try {
+          texts.push(...await frame.locator('button').allInnerTexts());
+        } catch {}
+      }
+      return [...new Set(texts.map(t => String(t).trim()).filter(Boolean))].slice(0, 16).join(' / ');
     } catch {
       return '(读取失败)';
     }
@@ -577,7 +635,7 @@ export class EpicManager {
   }
 
   /** 领取单个游戏；status: claimed(本次领到) / owned(本来就有) / skipped(无页面) / failed */
-  async claimSingle(page, game) {
+  async claimSingle(page, game, context = null) {
     const result = {
       id: game.id,
       title: game.title,
@@ -645,15 +703,27 @@ export class EpicManager {
         result.message = `未找到「获取」按钮（当前按钮：${await this.visibleButtonTexts(page)}）`;
         return result;
       }
-      await getBtn.click({ timeout: 10000 });
+      const pageCountBeforeClick = context ? context.pages().length : 1;
+      await getBtn.click({ timeout: 10000, noWaitAfter: true });
       await this.delay(2000);
 
+      if (context) {
+        const pages = context.pages();
+        if (pages.length > pageCountBeforeClick) {
+          page = pages[pages.length - 1];
+          await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+        }
+      }
+
       this.updateState({ status: 'ordering', progress: 70, lastAction: `等待结账窗口...` });
-      const orderBtn = page.getByRole('button', { name: /下订单|下单|确认订单|结账|Place Order|Checkout/ }).first();
+      const orderBtn = page.getByRole('button', { name: EPIC_ORDER_BUTTON_RE }).first();
       const checkoutDeadline = Date.now() + 25000;
+      const checkoutStartedAt = Date.now();
       let checkoutReady = false;
+      let escapeTried = false;
       while (Date.now() < checkoutDeadline) {
-        const successCount = await page.locator('text=/谢谢|感谢|订单已提交|Thanks|Thank you|Order confirmed/').count().catch(() => 0);
+        this.throwIfStopped();
+        const successCount = await page.getByText(EPIC_SUCCESS_TEXT_RE).count().catch(() => 0);
         if (successCount > 0) {
           result.ok = true;
           result.status = 'claimed';
@@ -686,6 +756,13 @@ export class EpicManager {
           checkoutReady = true;
           break;
         }
+
+        if (!escapeTried && Date.now() - checkoutStartedAt > 2500) {
+          escapeTried = true;
+          this.updateState({ lastAction: '未发现结账按钮，尝试关闭验证覆盖层后复检...' });
+          await page.keyboard.press('Escape').catch(() => {});
+          await this.delay(1200);
+        }
         await this.delay(500);
       }
 
@@ -705,10 +782,10 @@ export class EpicManager {
       } catch {}
 
       this.updateState({ status: 'ordering', progress: 82, lastAction: `确认订单...` });
-      await orderBtn.click({ timeout: 10000 });
+      await orderBtn.click({ timeout: 10000, noWaitAfter: true });
       await this.delay(5000);
 
-      const successText = await page.locator('text=/谢谢|感谢|订单已提交|Thanks|Thank you|Order confirmed/').count();
+      const successText = await page.getByText(EPIC_SUCCESS_TEXT_RE).count();
       if (successText > 0) {
         result.ok = true;
         result.status = 'claimed';
@@ -758,6 +835,7 @@ export class EpicManager {
     const slotOwner = `epic-verify:${accountId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
     const gotSlot = await browserSlotLock.acquire(slotOwner, 180000);
     if (!gotSlot) throw new Error('浏览器资源正被积分任务占用，请稍后再试');
+    this.throwIfStopped();
     let context = null;
     this.verifying = true;
     try {
@@ -769,6 +847,8 @@ export class EpicManager {
       });
       const launched = await this.launchPersistentContext(acc, execPath);
       context = launched.context;
+      this.activeContext = context;
+      this.activeAccountId = accountId;
       const page = launched.page;
       let pageState = await this.navigateEpicPage(page, STORE_HOME, 20000);
       if (pageState.state === 'challenge') {
@@ -800,6 +880,11 @@ export class EpicManager {
       return { valid, blocked, message };
     } finally {
       this.verifying = false;
+      if (this.activeContext === context) {
+        this.activeContext = null;
+        this.activeAccountId = null;
+      }
+      this.stopRequested = false;
       if (context) await context.close().catch(() => {});
       browserSlotLock.release(slotOwner);
     }
@@ -810,6 +895,7 @@ export class EpicManager {
    * 只处理「本次促销期内尚未领取成功」的游戏；失败按设置重试，仍失败则留给下一轮检查。
    */
   async claimForAccount(accountId, prefetchedGames = null) {
+    const runStartedAt = Date.now();
     const acc = configManager.findEpicAccount(accountId);
     if (!acc) throw new Error('Epic 账号不存在');
     if (!acc.storageState?.cookies?.length) throw new Error('该账号尚未导入会话，请先导入 Cookie');
@@ -842,24 +928,29 @@ export class EpicManager {
         const gotSlot = await browserSlotLock.acquire(slotOwner, 180000);
         if (!gotSlot) throw new Error('浏览器资源正被积分任务占用，请稍后再试');
         slotHeld = true;
+        this.throwIfStopped();
         const launched = await this.launchPersistentContext(acc, execPath);
         context = launched.context;
         page = launched.page;
+        this.activeContext = context;
+        this.activeAccountId = accountId;
       }
 
       const maxAttempts = settings.retryCount + 1;
       for (const game of pending) {
+        this.throwIfStopped();
         let final = null;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          this.throwIfStopped();
           this.updateState({ attempt, maxAttempts, gameTitle: game.title });
-          const r = await this.claimSingle(page, game);
+          const r = await this.claimSingle(page, game, context);
           final = r;
           if (r.status !== 'failed') break;
           if (r.code === 'auth_expired' || r.code === 'challenge') {
             if (r.code === 'challenge' && attempt === 1 && maxAttempts > 1) {
               this.updateState({ status: 'retrying', progress: 48, lastAction: `「${game.title}」遇到人机验证，${settings.retryIntervalSec} 秒后再试一次...` });
               logger.log('🟡', `「${game.title}」遇到人机验证，将再尝试一次`, '', acc.name);
-              await this.delay(settings.retryIntervalSec * 1000);
+              await this.interruptibleDelay(settings.retryIntervalSec * 1000);
               continue;
             }
             break;
@@ -867,13 +958,13 @@ export class EpicManager {
           if (attempt < maxAttempts) {
             this.updateState({ status: 'retrying', progress: 55, lastAction: `「${game.title}」第 ${attempt} 次失败，${settings.retryIntervalSec} 秒后重试...` });
             logger.log('🟡', `「${game.title}」第 ${attempt}/${maxAttempts} 次失败：${r.message}`, '', acc.name);
-            await this.delay(settings.retryIntervalSec * 1000);
+            await this.interruptibleDelay(settings.retryIntervalSec * 1000);
           }
         }
         results.push(final);
         const icon = final.status === 'blocked' ? '🛡️' : (final.status === 'failed' ? '🔴' : (final.status === 'owned' ? '🟡' : '✅'));
         logger.log(icon, `${game.title}：${final.message}`, '', acc.name);
-        await this.delay(1500 + Math.floor(Math.random() * 2000));
+        await this.interruptibleDelay(1500 + Math.floor(Math.random() * 2000));
       }
 
       // 记录已处理游戏（只记成功/已有），失败留给下一轮检查
@@ -895,14 +986,25 @@ export class EpicManager {
         lastClaimMessage: `本次领取 ${claimedCount} 个 / 已有 ${ownedCount} 个 / 失败 ${failedCount} 个 / 拦截 ${blockedCount} 个`
       };
       if (!demo && context) {
-        patch.storageState = await context.storageState();
-        const authStates = results.map(r => r.authValid).filter(v => v === true || v === false);
-        if (authStates.includes(true)) patch.sessionValid = true;
-        else if (authStates.length > 0 && authStates.every(v => v === false)) patch.sessionValid = false;
+        this.throwIfStopped();
+        const freshAcc = configManager.findEpicAccount(accountId);
+        const sessionChangedDuringRun = Number(freshAcc?.lastSessionImportAt || 0) > runStartedAt;
+        if (!sessionChangedDuringRun) {
+          patch.storageState = await context.storageState();
+          const authStates = results.map(r => r.authValid).filter(v => v === true || v === false);
+          if (authStates.includes(true)) patch.sessionValid = true;
+          else if (authStates.length > 0 && authStates.every(v => v === false)) patch.sessionValid = false;
+        } else {
+          logger.log('🟡', '领取期间检测到更新的 Epic 会话，本次不写回旧浏览器状态', '', acc.name);
+        }
       }
       configManager.updateEpicAccount(accountId, patch);
     } finally {
       if (context) await context.close().catch(() => {});
+      if (this.activeContext === context) {
+        this.activeContext = null;
+        this.activeAccountId = null;
+      }
       if (slotHeld && slotOwner) browserSlotLock.release(slotOwner);
     }
 
@@ -969,6 +1071,11 @@ export class EpicManager {
           const { results } = await this.claimForAccount(acc.id, allGames);
           allResults.push({ accountId: acc.id, accountName: acc.name, results });
         } catch (e) {
+          if (e?.code === 'EPIC_STOPPED') {
+            logger.log('🛑', `Epic 账号 [${acc.name}] 已手动停止`, '', acc.name);
+            allResults.push({ accountId: acc.id, accountName: acc.name, stopped: true, error: e.message, results: [] });
+            break;
+          }
           logger.log('🔴', `Epic 账号 [${acc.name}] 领取失败: ${e.message}`, '', acc.name);
           configManager.updateEpicAccount(acc.id, { sessionValid: false, lastVerifyMessage: e.message });
           allResults.push({ accountId: acc.id, accountName: acc.name, error: e.message, results: [] });
@@ -976,7 +1083,7 @@ export class EpicManager {
         // 不同账号之间的操作间隔（全局设置）
         if (i < accounts.length - 1) {
           this.updateState({ status: 'waiting', progress: 90, lastAction: `等待 ${settings.accountGapSec} 秒后切换下一个账号...` });
-          await this.delay(settings.accountGapSec * 1000);
+          await this.interruptibleDelay(settings.accountGapSec * 1000);
         }
       }
 
@@ -985,6 +1092,9 @@ export class EpicManager {
       return { accounts: accounts.map(a => ({ id: a.id, name: a.name })), results: allResults };
     } finally {
       this.running = false;
+      this.stopRequested = false;
+      this.activeContext = null;
+      this.activeAccountId = null;
       this.runningAccountId = null;
       this.lastCheckAt = Date.now();
     }
@@ -1005,6 +1115,9 @@ export class EpicManager {
       return { games, results };
     } finally {
       this.running = false;
+      this.stopRequested = false;
+      this.activeContext = null;
+      this.activeAccountId = null;
       this.runningAccountId = null;
       this.lastCheckAt = Date.now();
     }
