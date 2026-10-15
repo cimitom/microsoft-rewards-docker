@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.6.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -67,6 +67,13 @@
   - **商店巡检节奏预设**：新增常规每周 (12h)、节日每日 (1h) 与极速 (30m) 一键切换；
   - **关键缺陷修复**：修复凭据清空失效导致 Token 死循环报错、搜索词索引越界崩溃、多账号离散调度通知骚扰、调度计划跨实例恢复与 Epic 平台指纹对齐；
   - **单元测试增至 44 个**。
+- 🎯 **单账号任务聚焦与月度打孔卡深度追踪 (全新 v1.6.4)**：
+  - **任务清单严格隔离**：「今日自动化任务进度清单」只在选中单个账号时显示，全部账号汇总视图下自动隐藏，避免在全局模式下产生误导；
+  - **修复标题与任务卡片间距**：优化容器布局与间距，排版紧凑自然；
+  - **新增月度打孔卡卡片**：在任务网格中独立展示月度重点打孔卡（如「十月必看五大亮点」），动态显示完成进度与到期天数；
+  - **打孔卡推进历史悬停浮层**：为每周桌面专属任务与月度打孔卡新增悬停浮层，清晰呈现每一步的完成时间戳（如 `10/14 18:34 已完成 · 服装季来了`），支持同天多步与跨天状态无损继承；
+  - **移除打孔卡全天硬锁**：优化打孔卡触发机制与重试冷却，支持满 24 小时后智能续接打卡；
+  - **单元测试增至 47 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；

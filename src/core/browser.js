@@ -557,10 +557,11 @@ class BrowserManager extends EventEmitter {
   async runQuestPunchCards(acc, quests = []) {
     const accName = acc?.name || '当前账号';
     const pending = (quests || []).filter(q => q && !q.done);
-    if (pending.length === 0) return { attempted: 0, completed: 0 };
+    if (pending.length === 0) return { attempted: 0, completed: 0, details: [] };
 
     let attempted = 0;
     let completed = 0;
+    const completedSteps = [];
 
     try {
       this.shouldStop = false;
@@ -637,7 +638,14 @@ class BrowserManager extends EventEmitter {
 
           if (navigated) {
             completed++;
-            logger.log('✅', `打孔卡「${displayName}」今日任务已完成`, '', accName);
+            const stepName = cta.text || `第 ${completed} 项`;
+            completedSteps.push({
+              questId: quest.questId,
+              title: displayName,
+              stepName,
+              at: Date.now()
+            });
+            logger.log('✅', `打孔卡「${displayName}」今日任务已完成 (${stepName})`, '', accName);
             await this.delay(rewardsApi.randomRange(2500, 5000));
           } else {
             logger.log('🟡', `打孔卡「${displayName}」点击后没有跳转到任务页，本次跳过`, '', accName);
@@ -654,7 +662,7 @@ class BrowserManager extends EventEmitter {
       await this.closeBrowser();
     }
 
-    return { attempted, completed };
+    return { attempted, completed, details: completedSteps };
   }
 
   /**

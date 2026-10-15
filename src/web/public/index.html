@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.6.3</span>
+            <span class="version-label" id="version-label">v1.6.4</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -156,8 +156,8 @@
         </div>
       </section>
 
-      <!-- 任务进度网格 -->
-      <section class="section-card" id="task-list-section">
+      <!-- 任务进度网格（仅在单账号模式下展示，汇总模式自动隐藏） -->
+      <section class="section-card" id="task-list-section" style="display: none;">
         <div class="section-header">
           <div class="section-title">
             <span>📋</span> <span id="task-list-title">今日自动化任务进度清单</span>

@@ -11,6 +11,7 @@ const { default: configManager, SECRET_PLACEHOLDER, SECRET_CLEAR } = await impor
 const { default: rewardsApi } = await import('../src/core/api.js');
 const { default: scheduler } = await import('../src/scheduler.js');
 const { default: networkClient } = await import('../src/network.js');
+const { TaskManager } = await import('../src/core/taskManager.js');
 
 test('SECRET_CLEAR 和 null 可以彻底清空凭据，而不是被旧值复原', () => {
   configManager.upsertAccount({
@@ -105,4 +106,53 @@ test('getRewardsInfo 解析 dashboard 待领取额外积分与必应应用连签
   } finally {
     networkClient.request = origRequest;
   }
+});
+
+test('getRewardsInfo 解析月度打孔卡（十月必看五大亮点）与到期天数', async () => {
+  const earnHtml = `
+    <div>
+      <h1>十月必看五大亮点：服饰、玩具、手机、超值优惠和AI设备</h1>
+      <p>+50</p>
+      <p>状态: 2/5 个任务</p>
+      <p>到期日期 14 天后</p>
+      <a href="/earn/quest/ENWW_pcparent_FY27_BingMonthlyPC_Oct_punchcard">查看</a>
+    </div>
+  `;
+  const origRequest = networkClient.request;
+  networkClient.request = async (opt) => {
+    if (opt.url.includes('/earn')) return earnHtml;
+    return '';
+  };
+  try {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.ok(info.monthlyQuest, '必须识别出月度打孔卡');
+    assert.equal(info.monthlyQuest.progress, 2);
+    assert.equal(info.monthlyQuest.max, 5);
+    assert.equal(info.monthlyQuest.points, 50);
+    assert.match(info.monthlyQuest.title, /十月必看五大亮点/);
+    assert.match(info.monthlyQuest.expiresText, /14 天后/);
+  } finally {
+    networkClient.request = origRequest;
+  }
+});
+
+test('TaskManager recordPunchCardSteps 记录多步时间戳且支持同天多步', () => {
+  const tm = new TaskManager();
+  const accId = 'acc_test_steps';
+  tm.ensureAccountStats(accId);
+
+  const now = Date.now();
+  tm.recordPunchCardSteps(accId, [
+    { title: '十月必看五大亮点', stepName: '服装季来了', at: now - 3600000 },
+    { title: '十月必看五大亮点', stepName: '热门玩具与礼物创意', at: now }
+  ]);
+
+  const st = tm.ensureAccountStats(accId);
+  const mQuest = st.tasks.monthlyQuest;
+  assert.ok(mQuest);
+  assert.equal(mQuest.progress, 2);
+  assert.equal(mQuest.stepLogs.length, 2);
+  assert.equal(mQuest.stepLogs[0].name, '服装季来了');
+  assert.equal(mQuest.stepLogs[1].name, '热门玩具与礼物创意');
+  assert.ok(mQuest.stepLogs[1].at > mQuest.stepLogs[0].at);
 });

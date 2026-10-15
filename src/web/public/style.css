@@ -1882,7 +1882,7 @@ body {
 .instant-tooltip {
   position: fixed;
   z-index: 9999;
-  max-width: min(340px, calc(100vw - 24px));
+  max-width: min(440px, calc(100vw - 24px));
   padding: 8px 11px;
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.97);
@@ -1903,6 +1903,16 @@ body {
 .instant-tooltip.visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+/* Task List Section & Spacing Alignment (仅在选中单账号时由 JS 显式设置为 flex) */
+#task-list-section {
+  flex-direction: column;
+  gap: 18px;
+}
+
+#task-list-section .section-header {
+  margin-bottom: 2px;
 }
 
 /* Task Grid */

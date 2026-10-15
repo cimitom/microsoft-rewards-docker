@@ -881,7 +881,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.6.3';
+  const current = updateInfo?.currentVersion || '1.6.4';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -921,7 +921,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.6.3'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.6.4'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -1163,7 +1163,7 @@ function renderDashboard(data) {
     }
     const taskListSection = document.getElementById('task-list-section');
     if (taskListSection) {
-      taskListSection.style.display = 'block';
+      taskListSection.style.display = 'flex';
     }
     if (taskListTitle) {
       taskListTitle.innerText = `账号 [${escapeHtml(stats.name || '')}] 今日自动化任务进度清单`;
@@ -1181,6 +1181,38 @@ function renderDashboard(data) {
       ? `最后更新：${new Date(lastUpdateTs).toLocaleString('zh-CN', { hour12: false })}`
       : '最后更新：--';
   }
+
+function formatPunchCardTooltip(t) {
+  const p = Number(t.progress || 0);
+  const m = Number(t.max || 1);
+  const logs = Array.isArray(t.stepLogs) ? t.stepLogs : [];
+  const lines = [
+    `📋 ${t.name || '打孔卡'} 推进历史明细 (${p}/${m}):`
+  ];
+  if (t.expiresText) {
+    lines.push(`⏳ ${t.expiresText}`);
+  }
+  lines.push('───────────────────────');
+
+  for (let s = 1; s <= m; s++) {
+    const log = logs.find(l => l.step === s);
+    if (log && log.at) {
+      const d = new Date(log.at);
+      const dateStr = !isNaN(d.getTime())
+        ? `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+        : '已完成';
+      const label = log.name ? ` · ${log.name}` : '';
+      lines.push(`● 第 ${s} 项: ${dateStr} 已完成${label}`);
+    } else if (s <= p) {
+      lines.push(`● 第 ${s} 项: 已完成`);
+    } else if (s === p + 1) {
+      lines.push(`○ 第 ${s} 项: 待打卡 / 待解锁`);
+    } else {
+      lines.push(`○ 第 ${s} 项: 待解锁 (完成上一项后满 24 小时)`);
+    }
+  }
+  return lines.join('\n');
+}
 
   // 5. 渲染任务网格
   const taskGrid = document.getElementById('task-grid');
@@ -1208,9 +1240,28 @@ function renderDashboard(data) {
         pointsBadge = '+0 积分';
       } else {
         // 有到期时间才显示，没有就只显示任务类型，不编造「5 天后」
-        subtext = t.expiresText ? `${t.expiresText} · 每周打孔卡` : '每周打孔卡';
+        subtext = t.expiresText ? `${t.expiresText} · 每周打孔卡 (悬停查看记录)` : '每周打孔卡 (悬停查看记录)';
         progressLabel = `进度: ${p} / ${m} 个任务`;
         pointsBadge = `+${t.points || 20} 积分`;
+        card.setAttribute('data-tip', formatPunchCardTooltip(t));
+        card.style.cursor = 'help';
+      }
+    }
+
+    if (key === 'monthlyQuest') {
+      const p = Number(t.progress || 0);
+      const m = Number(t.max || 5) || 5;
+      progPercent = Math.round((p / m) * 100);
+      if (t.available === false && p === 0) {
+        subtext = '本月未检测到该任务 · 月度打孔卡';
+        progressLabel = `进度: 0 / ${m} 个任务`;
+        pointsBadge = '+0 积分';
+      } else {
+        subtext = t.expiresText ? `${t.expiresText} · 每月打孔卡 (悬停查看记录)` : '每月打孔卡 (悬停查看记录)';
+        progressLabel = `进度: ${p} / ${m} 个任务`;
+        pointsBadge = `+${t.points || 50} 积分`;
+        card.setAttribute('data-tip', formatPunchCardTooltip(t));
+        card.style.cursor = 'help';
       }
     }
 

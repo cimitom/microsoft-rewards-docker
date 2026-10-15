@@ -44,7 +44,8 @@ export class TaskManager {
         search: { name: "必应 PC 搜索任务", progress: 0, max: 60, points: 0, unit: "分", icon: "🔍", done: false },
         dailySet: { name: "每日活动集 (Daily Set)", progress: 0, max: 3, points: 0, unit: "个", icon: "📅", done: false },
         promos: { name: "活动卡片与 Quiz 问答", progress: 0, max: 1, points: 0, unit: "项", icon: "🧩", done: false },
-        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "", available: false, done: false }
+        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "", available: false, done: false, stepLogs: [] },
+        monthlyQuest: { name: "月度打孔卡任务", progress: 0, max: 5, points: 50, unit: "个任务", icon: "🎯", expiresText: "", available: false, done: false, stepLogs: [] }
       }
     };
   }
@@ -84,6 +85,26 @@ export class TaskManager {
             };
           }
           return merged;
+        } else if (parsed && parsed.accounts && typeof parsed.accounts === 'object') {
+          // 跨日换天：日常任务清空，但继承跨天多日打孔卡状态与打孔记录，避免第二天被清零
+          for (const [accId, oldAcc] of Object.entries(parsed.accounts)) {
+            if (!baseStats.accounts[accId]) {
+              baseStats.accounts[accId] = this.createDefaultAccountStats(accId, oldAcc.name || accId);
+            }
+            if (oldAcc.tasks?.desktopApp) {
+              baseStats.accounts[accId].tasks.desktopApp = {
+                ...baseStats.accounts[accId].tasks.desktopApp,
+                ...oldAcc.tasks.desktopApp
+              };
+            }
+            if (oldAcc.tasks?.monthlyQuest) {
+              baseStats.accounts[accId].tasks.monthlyQuest = {
+                ...baseStats.accounts[accId].tasks.monthlyQuest,
+                ...oldAcc.tasks.monthlyQuest
+              };
+            }
+          }
+          return baseStats;
         }
       }
     } catch (e) {
@@ -121,6 +142,27 @@ export class TaskManager {
         dApp.unit = "个任务";
         dApp.max = 8;
         if (dApp.available === undefined) dApp.available = false;
+        if (!Array.isArray(dApp.stepLogs)) dApp.stepLogs = [];
+      }
+      const mQuest = this.stats.accounts[id].tasks?.monthlyQuest;
+      if (!mQuest) {
+        this.stats.accounts[id].tasks.monthlyQuest = {
+          name: "月度打孔卡任务",
+          progress: 0,
+          max: 5,
+          points: 50,
+          unit: "个任务",
+          icon: "🎯",
+          expiresText: "",
+          available: false,
+          done: false,
+          stepLogs: []
+        };
+      } else {
+        if (!Array.isArray(mQuest.stepLogs)) mQuest.stepLogs = [];
+        if (mQuest.max === undefined) mQuest.max = 5;
+        if (mQuest.unit === undefined) mQuest.unit = "个任务";
+        if (mQuest.icon === undefined) mQuest.icon = "🎯";
       }
       if (!this.stats.accounts[id].stamps) {
         this.stats.accounts[id].stamps = { progress: 0, max: 12 };
@@ -317,6 +359,19 @@ export class TaskManager {
         if (info.desktopApp) {
           const dProgress = Number(info.desktopApp.progress ?? 0);
           const dMax = Number(info.desktopApp.max ?? 8) || 8;
+          const prevDesktop = accStats.tasks.desktopApp || {};
+          const prevLogs = Array.isArray(prevDesktop.stepLogs) ? prevDesktop.stepLogs : [];
+          const updatedLogs = [...prevLogs];
+          for (let s = 1; s <= dProgress; s++) {
+            if (!updatedLogs.some(l => l.step === s)) {
+              updatedLogs.push({
+                step: s,
+                at: Date.now() - (dProgress - s) * 86400000,
+                name: `第 ${s} 任务`
+              });
+            }
+          }
+          updatedLogs.sort((a, b) => a.step - b.step);
           accStats.tasks.desktopApp = {
             name: "桌面应用每周专属任务",
             progress: dProgress,
@@ -326,7 +381,39 @@ export class TaskManager {
             icon: "🖥️",
             expiresText: info.desktopApp.expiresText || "",
             available: info.desktopApp.available !== false,
-            done: dProgress >= dMax
+            done: dProgress >= dMax,
+            stepLogs: updatedLogs
+          };
+        }
+
+        // 3.5 同步月度打孔卡进度（如十月必看五大亮点）与步数记录
+        if (info.monthlyQuest) {
+          const mProgress = Number(info.monthlyQuest.progress ?? 0);
+          const mMax = Number(info.monthlyQuest.max ?? 5) || 5;
+          const prevMonthly = accStats.tasks.monthlyQuest || {};
+          const prevLogs = Array.isArray(prevMonthly.stepLogs) ? prevMonthly.stepLogs : [];
+          const updatedLogs = [...prevLogs];
+          for (let s = 1; s <= mProgress; s++) {
+            if (!updatedLogs.some(l => l.step === s)) {
+              updatedLogs.push({
+                step: s,
+                at: Date.now() - (mProgress - s) * 86400000,
+                name: `第 ${s} 项`
+              });
+            }
+          }
+          updatedLogs.sort((a, b) => a.step - b.step);
+          accStats.tasks.monthlyQuest = {
+            name: info.monthlyQuest.title || "月度任务打孔卡",
+            progress: mProgress,
+            max: mMax,
+            points: mProgress >= mMax ? (info.monthlyQuest.points || 50) : 0,
+            unit: "个任务",
+            icon: "🎯",
+            expiresText: info.monthlyQuest.expiresText || "",
+            available: info.monthlyQuest.available !== false,
+            done: mProgress >= mMax,
+            stepLogs: updatedLogs
           };
         }
 
@@ -595,9 +682,34 @@ export class TaskManager {
   }
 
   /**
+   * 记录打孔卡完成步数历史 (精确记录时间戳与任务名)
+   */
+  recordPunchCardSteps(accountId, details = []) {
+    const accStats = this.ensureAccountStats(accountId);
+    if (!accStats.tasks) return;
+    for (const d of details) {
+      const isDesktop = (d.title || '').includes('桌面') || (d.questId || '').includes('RewardsApp');
+      const taskKey = isDesktop ? 'desktopApp' : 'monthlyQuest';
+      const task = accStats.tasks[taskKey];
+      if (task) {
+        if (!Array.isArray(task.stepLogs)) task.stepLogs = [];
+        const nextStep = (task.progress || 0) + 1;
+        task.stepLogs.push({
+          step: nextStep,
+          at: d.at || Date.now(),
+          name: d.stepName || `第 ${nextStep} 步`
+        });
+        task.progress = Math.min(task.max || nextStep, nextStep);
+        if (task.progress >= task.max) task.done = true;
+      }
+    }
+    this.saveStats();
+  }
+
+  /**
    * 为单个账号执行全套打卡任务
    */
-  async runSingleAccount(accCfg, globalCfg) {
+  async runSingleAccount(accCfg, globalCfg, options = {}) {
     const accountId = accCfg.id;
     const accountName = accCfg.name || accountId;
     this.runningAccountId = accountId;
@@ -925,26 +1037,41 @@ export class TaskManager {
     // 4.5 任务区打孔卡 (如「十月必看五大亮点」这类每天解锁一个的任务)
     //     旧版本完全没处理这类任务，导致官网上长期停在 0/5。
     if (globalCfg.tasks?.promos && this.running && browserManager.getExecutablePath()) {
-      // 打孔卡每天只解锁一个新任务，每个账号每天推进一次即可，
-      // 否则每次定时巡检都去开任务页既没意义也徒增风控暴露面。
       const cur = this.ensureAccountStats(accountId);
-      const todayKey = this.getTodayNum();
-      if (cur.questPunchCardDate === todayKey) {
-        // 今日已推进过，静默跳过
+      const isManual = options.manual === true;
+      const isMonthlyDone = cur.tasks?.monthlyQuest && cur.tasks.monthlyQuest.done;
+      const isDesktopDone = cur.tasks?.desktopApp && cur.tasks.desktopApp.done;
+      const isAllQuestsFinished = isMonthlyDone && isDesktopDone;
+
+      // 若全部打孔卡已经满额完成，自动巡检时不重复启动浏览器
+      if (isAllQuestsFinished && !isManual) {
+        // 全部已达成，静默跳过
       } else {
-        try {
-          const quests = await rewardsApi.getQuestPunchCards();
-          const pendingQuests = quests.filter(q => !q.done);
-          if (pendingQuests.length > 0) {
-            const questRes = await browserManager.runQuestPunchCards(accCfg, pendingQuests);
-            if (questRes.completed > 0) {
-              logger.addTimeline(accountName, `任务打孔卡推进 ${questRes.completed} 项`);
+        // 冷却判定：手动触发时无视冷却立刻检查；自动巡检时若 2 小时内刚检查过且无新解锁则等待
+        const lastCheck = cur.lastQuestCheckTime || 0;
+        const cooldownMs = 2 * 60 * 60 * 1000;
+        const inCooldown = !isManual && (Date.now() - lastCheck < cooldownMs);
+
+        if (!inCooldown) {
+          cur.lastQuestCheckTime = Date.now();
+          try {
+            const quests = await rewardsApi.getQuestPunchCards();
+            const pendingQuests = quests.filter(q => !q.done);
+            if (pendingQuests.length > 0) {
+              const questRes = await browserManager.runQuestPunchCards(accCfg, pendingQuests);
+              if (questRes.completed > 0) {
+                logger.addTimeline(accountName, `任务打孔卡推进 ${questRes.completed} 项`);
+                if (questRes.details && questRes.details.length > 0) {
+                  this.recordPunchCardSteps(accountId, questRes.details);
+                }
+                // 同步一次官网真实状态
+                await this.syncAccountOfficialStatus(accCfg, { owned: true });
+              }
             }
+            this.saveStats();
+          } catch (e) {
+            logger.log('🟡', `任务打孔卡处理异常: ${e.message}`, '', accountName);
           }
-          cur.questPunchCardDate = todayKey;
-          this.saveStats();
-        } catch (e) {
-          logger.log('🟡', `任务打孔卡处理异常: ${e.message}`, '', accountName);
         }
       }
     }
@@ -1079,7 +1206,7 @@ export class TaskManager {
       for (let i = 0; i < targetList.length && this.running; i++) {
         const acc = targetList[i];
         try {
-          await this.runSingleAccount(acc, globalCfg);
+          await this.runSingleAccount(acc, globalCfg, { manual });
         } catch (e) {
           failures.push({ name: acc.name || acc.id, error: e.message });
           logger.log('🔴', `账号 [${acc.name || acc.id}] 执行异常，已跳过并继续下一个账号: ${e.message}`, '', acc.name || acc.id);

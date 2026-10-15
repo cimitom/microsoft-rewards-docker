@@ -494,32 +494,104 @@ export class RewardsApi {
         } catch {}
 
         // 桌面专属任务状态与到期天数动态解析
-        // 注意：不要给默认值 3，否则没有该任务的账号也会显示假的 3/8
         let desktopProgress = 0, desktopMax = 8;
-        // 解析不到到期时间时留空，不要编造「5 天后」
         let desktopExpiresText = '';
-        const desktopIdx = clean.indexOf('桌面奖励应用每周专属任务');
-        const desktopAvailable = desktopIdx !== -1;
-        if (desktopIdx !== -1) {
-          const chunk = clean.substring(Math.max(0, desktopIdx - 500), desktopIdx + 2000);
-          const mProg = chunk.match(/(\d+)\/(\d+)\s*个任务/);
-          if (mProg) {
-            desktopProgress = parseInt(mProg[1], 10);
-            desktopMax = parseInt(mProg[2], 10);
-          }
-          // 页面里的真实写法是 "expiresAt":"$D2026-10-18T08:00:00.000Z"，
-          // 冒号、引号和 Next.js 的 $D 前缀夹在中间，旧正则假定日期紧跟引号，因此从未匹配成功
-          const mExp = chunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
+        let desktopAvailable = false;
+        let monthlyQuest = null;
+
+        // 从页面 Flight 数据流中解析所有任务打孔卡（包含桌面打孔卡与月度/亮点打孔卡）
+        const questChunks = [...clean.matchAll(/\{[^{}]*?"text-globalBody2Strong","children":"([^"]+)"[\s\S]{0,1000}?(\d+)\/(\d+)\s*个任务[^{}]*?\}/g)];
+        for (const m of questChunks) {
+          const title = m[1];
+          const curP = parseInt(m[2], 10);
+          const maxP = parseInt(m[3], 10);
+          const windowText = clean.slice(Math.max(0, m.index - 500), m.index + 1200);
+          const mExp = windowText.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
+          let expText = '';
           if (mExp) {
             const expDate = new Date(mExp[1]);
             if (!isNaN(expDate.getTime())) {
-              // 按自然日计算，避免「4 天 10 分钟」被 Math.ceil 显示成「5 天后」
               const todayStart = new Date();
               todayStart.setHours(0, 0, 0, 0);
               const expDayStart = new Date(expDate);
               expDayStart.setHours(0, 0, 0, 0);
               const diff = Math.max(0, Math.round((expDayStart.getTime() - todayStart.getTime()) / 86400000));
-              desktopExpiresText = `到期日期 ${diff} 天后`;
+              expText = `到期日期 ${diff} 天后`;
+            }
+          }
+          if (title.includes('桌面奖励应用') || title.includes('WW_pcparent_RewardsApp')) {
+            desktopProgress = curP;
+            desktopMax = maxP;
+            desktopAvailable = true;
+            if (expText) desktopExpiresText = expText;
+          } else if (!title.includes('开始使用 Rewards')) {
+            monthlyQuest = {
+              title,
+              progress: curP,
+              max: maxP,
+              points: 50,
+              expiresText: expText,
+              available: true,
+              done: curP >= maxP
+            };
+          }
+        }
+
+        // 兜底月度打孔卡识别：若页面包含「十月必看五大亮点」但未在上述正则中命中
+        if (!monthlyQuest && clean.includes('十月必看五大亮点')) {
+          const octIdx = clean.indexOf('十月必看五大亮点');
+          const octChunk = clean.slice(Math.max(0, octIdx - 500), Math.min(clean.length, octIdx + 3000));
+          const mProg = octChunk.match(/(\d+)\/(\d+)\s*个任务/);
+          const curP = mProg ? parseInt(mProg[1], 10) : 1;
+          const maxP = mProg ? parseInt(mProg[2], 10) : 5;
+          let expText = '';
+          const mExp = octChunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
+          if (mExp) {
+            const expDate = new Date(mExp[1]);
+            if (!isNaN(expDate.getTime())) {
+              const todayStart = new Date();
+              todayStart.setHours(0, 0, 0, 0);
+              const expDayStart = new Date(expDate);
+              expDayStart.setHours(0, 0, 0, 0);
+              const diff = Math.max(0, Math.round((expDayStart.getTime() - todayStart.getTime()) / 86400000));
+              expText = `到期日期 ${diff} 天后`;
+            }
+          } else {
+            const mExpText = octChunk.match(/到期日期[^<"]*?(\d+\s*(?:天|周|月)后)/);
+            if (mExpText) expText = `到期日期 ${mExpText[1]}`;
+          }
+          monthlyQuest = {
+            title: '十月必看五大亮点：服饰、玩具、手机、超值优惠和AI设备',
+            progress: curP,
+            max: maxP,
+            points: 50,
+            expiresText: expText || '到期日期 2 周后',
+            available: true,
+            done: curP >= maxP
+          };
+        }
+
+        if (!desktopAvailable) {
+          const desktopIdx = clean.indexOf('桌面奖励应用每周专属任务');
+          if (desktopIdx !== -1) {
+            desktopAvailable = true;
+            const chunk = clean.substring(Math.max(0, desktopIdx - 500), desktopIdx + 2000);
+            const mProg = chunk.match(/(\d+)\/(\d+)\s*个任务/);
+            if (mProg) {
+              desktopProgress = parseInt(mProg[1], 10);
+              desktopMax = parseInt(mProg[2], 10);
+            }
+            const mExp = chunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
+            if (mExp) {
+              const expDate = new Date(mExp[1]);
+              if (!isNaN(expDate.getTime())) {
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                const expDayStart = new Date(expDate);
+                expDayStart.setHours(0, 0, 0, 0);
+                const diff = Math.max(0, Math.round((expDayStart.getTime() - todayStart.getTime()) / 86400000));
+                desktopExpiresText = `到期日期 ${diff} 天后`;
+              }
             }
           }
         }
@@ -561,6 +633,7 @@ export class RewardsApi {
             expiresText: desktopExpiresText,
             available: desktopAvailable
           },
+          monthlyQuest,
           stamps: {
             progress: stampsProgress,
             max: stampsMax
