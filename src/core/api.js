@@ -132,6 +132,104 @@ export class RewardsApi {
     }
   }
 
+  /**
+   * 从 earn 与 dashboard 页面精准提取各 partner（bing / dailyset / bingapp）的连签模型。
+   * 通过括号平衡解析独立的 streak JSON 对象，彻底避免旧版窗口正则向前越界抓到其他 partner（如 edge 的 0/7）。
+   */
+  extractStreakModels(...texts) {
+    const result = {};
+    const parseOne = (text) => {
+      if (!text) return;
+      const marker = '"model":{"streak":{';
+      let pos = 0;
+      let foundAny = false;
+      while (true) {
+        const idx = text.indexOf(marker, pos);
+        if (idx === -1) break;
+        const start = idx + marker.length - 1;
+        let depth = 0;
+        let end = -1;
+        for (let i = start; i < text.length && i < start + 3000; i++) {
+          if (text[i] === '{') depth++;
+          else if (text[i] === '}') {
+            depth--;
+            if (depth === 0) { end = i + 1; break; }
+          }
+        }
+        if (end !== -1) {
+          const raw = text.slice(start, end).replace(/:\$undefined/g, ':null').replace(/:\$D[^",}]+/g, ':null');
+          try {
+            const obj = JSON.parse(raw);
+            if (obj.partner) {
+              result[obj.partner] = {
+                completedDays: Number(obj.completedDays ?? 0),
+                currentDay: Number(obj.currentDay ?? 0),
+                activitiesCompleted: Number(obj.activitiesCompleted ?? 0),
+                activitiesTotal: Number(obj.activitiesTotal ?? 0),
+                isCurrentDayCompleted: !!obj.isCurrentDayCompleted
+              };
+              foundAny = true;
+            }
+          } catch {
+            const mPartner = raw.match(/"partner":"([^"]+)"/);
+            if (mPartner) {
+              const p = mPartner[1];
+              const pick = (re) => { const m = raw.match(re); return m ? Number(m[1]) : 0; };
+              result[p] = {
+                completedDays: pick(/"completedDays":(\d+)/),
+                currentDay: pick(/"currentDay":(\d+)/),
+                activitiesCompleted: pick(/"activitiesCompleted":(\d+)/),
+                activitiesTotal: pick(/"activitiesTotal":(\d+)/),
+                isCurrentDayCompleted: /"isCurrentDayCompleted":true/.test(raw)
+              };
+              foundAny = true;
+            }
+          }
+        }
+        pos = (end !== -1) ? end : (idx + marker.length);
+      }
+
+      // 兜底（用于单测小片段）
+      if (!foundAny) {
+        for (const partner of ['bing', 'dailyset', 'bingapp']) {
+          if (result[partner]) continue;
+          const pKey = `"partner":"${partner}"`;
+          const idx = text.indexOf(pKey);
+          if (idx !== -1) {
+            const forward = text.slice(idx, idx + 500);
+            const backward = text.slice(Math.max(0, idx - 400), idx + 200);
+            const win = forward.includes('completedDays') ? forward : backward;
+            const pick = (re) => { const m = win.match(re); return m ? Number(m[1]) : 0; };
+            result[partner] = {
+              completedDays: pick(/"completedDays":(\d+)/),
+              currentDay: pick(/"currentDay":(\d+)/),
+              activitiesCompleted: pick(/"activitiesCompleted":(\d+)/),
+              activitiesTotal: pick(/"activitiesTotal":(\d+)/),
+              isCurrentDayCompleted: /"isCurrentDayCompleted":true/.test(win)
+            };
+          }
+        }
+        const mApp = text.match(/必应应用连续打卡[\s\S]{0,500}?签到:\s*(\d+)\s*\/\s*(\d+)/i)
+          || text.match(/移动应用[\s\S]{0,500}?签到:\s*(\d+)\s*\/\s*(\d+)/i);
+        if (mApp && !result['bingapp']) {
+          const done = parseInt(mApp[1], 10);
+          const total = parseInt(mApp[2], 10);
+          const mDays = text.match(/已完成连续打卡\s*(\d+)\s*天/);
+          result['bingapp'] = {
+            completedDays: mDays ? parseInt(mDays[1], 10) : done,
+            currentDay: done,
+            activitiesCompleted: done,
+            activitiesTotal: total,
+            isCurrentDayCompleted: done >= total
+          };
+        }
+      }
+    };
+
+    for (const t of texts) parseOne(t);
+    return result;
+  }
+
   setCurrentAccount(acc) {
     this.currentAccountId = acc?.id || 'acc_1';
     // 指定了账号就一定显式设定 Cookie 上下文：
@@ -444,69 +542,8 @@ export class RewardsApi {
         }
 
         // 连续打卡任务（必应搜索 / 每日活动 / 必应应用）的真实状态。
-        // 这三项是「升级活动」的完成条件，必须如实展示，避免把没做的事标成已完成。
-        const streaks = {};
-
-        // 优先从 dashboard 页面解析连签任务状态（微软改版后连签卡片以 dashboard 为准）
-        const appCheckMatch = cleanDash.match(/必应应用连续打卡[\s\S]*?签到:\s*(\d+)\/(\d+)/i)
-          || cleanDash.match(/移动应用[\s\S]*?签到:\s*(\d+)\/(\d+)/i);
-        if (appCheckMatch) {
-          const done = parseInt(appCheckMatch[1], 10);
-          const total = parseInt(appCheckMatch[2], 10);
-          const mDays = cleanDash.match(/已完成连续打卡\s*(\d+)\s*天/);
-          streaks['bingapp'] = {
-            completedDays: mDays ? parseInt(mDays[1], 10) : done,
-            currentDay: done,
-            activitiesCompleted: done,
-            activitiesTotal: total,
-            isCurrentDayCompleted: done >= total
-          };
-        }
-
-        const dsCheckMatch = cleanDash.match(/每日连续打卡活动[\s\S]*?活动:\s*(\d+)\/(\d+)/i)
-          || cleanDash.match(/每日活动[\s\S]*?活动:\s*(\d+)\/(\d+)/i);
-        if (dsCheckMatch) {
-          const done = parseInt(dsCheckMatch[1], 10);
-          const total = parseInt(dsCheckMatch[2], 10);
-          streaks['dailyset'] = {
-            activitiesCompleted: done,
-            activitiesTotal: total,
-            isCurrentDayCompleted: done >= total
-          };
-        }
-
-        const searchCheckMatch = cleanDash.match(/必应搜索连续打卡[\s\S]*?搜索:\s*(\d+)\/(\d+)/i);
-        if (searchCheckMatch) {
-          const done = parseInt(searchCheckMatch[1], 10);
-          const total = parseInt(searchCheckMatch[2], 10);
-          streaks['bing'] = {
-            activitiesCompleted: done,
-            activitiesTotal: total,
-            isCurrentDayCompleted: done >= total
-          };
-        }
-
-        // 如果 dashboard 没解析到，回退到 earn 页面解析 Flight 模型
-        for (const partner of ['bing', 'dailyset', 'bingapp']) {
-          if (streaks[partner]) continue;
-          const key = `"partner":"${partner}"`;
-          let idx = -1;
-          // partner 会出现两次：一次在埋点 data 里，一次在真正的 streak 模型里。
-          // 只有模型那段才带 completedDays，所以逐个出现去匹配。
-          while ((idx = clean.indexOf(key, idx + 1)) !== -1) {
-            const win = clean.slice(Math.max(0, idx - 1600), idx + 300);
-            if (!/"completedDays":\d+/.test(win)) continue;
-            const pick = (re) => { const m = win.match(re); return m ? Number(m[1]) : null; };
-            streaks[partner] = {
-              completedDays: pick(/"completedDays":(\d+)/),
-              currentDay: pick(/"currentDay":(\d+)/),
-              activitiesCompleted: pick(/"activitiesCompleted":(\d+)/),
-              activitiesTotal: pick(/"activitiesTotal":(\d+)/),
-              isCurrentDayCompleted: /"isCurrentDayCompleted":true/.test(win)
-            };
-            break;
-          }
-        }
+        // 精准提取独立 streak 对象，彻底杜绝向前切片窗口抓到 edge 导致 bingapp 被误判为 0/7 的 Bug。
+        const streaks = this.extractStreakModels(clean, cleanDash);
 
         return {
           balance,

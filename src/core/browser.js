@@ -669,25 +669,36 @@ class BrowserManager extends EventEmitter {
     try {
       const { context } = await this.launchBrowser(acc);
       const page = await this.createPage(context);
-      await page.goto('https://rewards.bing.com/dashboard', { waitUntil: 'domcontentloaded', timeout: 35000 });
-      await this.delay(2000);
+      await page.goto('https://rewards.bing.com/dashboard', { waitUntil: 'domcontentloaded', timeout: 45000 });
+      // 等待 React 页面水合完成
+      await this.delay(3500);
 
-      const claimBtn = page.locator('button:has-text("可领取"), div:has-text("可领取")').first();
-      if ((await claimBtn.count()) > 0) {
-        const text = await claimBtn.innerText().catch(() => '');
+      // 必须精确锁定 button，不能使用 div:has-text，否则会命中最外层的整个页面根 div 导致点击无效
+      const cardBtn = page.locator('button').filter({ hasText: '可领取' }).first();
+      if ((await cardBtn.count()) > 0) {
+        const text = await cardBtn.innerText().catch(() => '');
         const m = text.match(/可领取[\s\S]*?(\d+)/) || text.match(/(\d+)/);
         const pts = m ? parseInt(m[1], 10) : 0;
         if (pts > 0) {
           logger.log('🎁', `账号 [${accName}] 发现 ${pts} 点待领取积分，正在触发自动领取...`, '', accName);
-          await claimBtn.click({ timeout: 5000 }).catch(() => {});
-          await this.delay(1200);
+          await cardBtn.click({ timeout: 6000 });
+          await this.delay(2000);
 
-          const confirmBtn = page.locator('button:has-text("领取积分"), button:has-text("待领取")').first();
-          if ((await confirmBtn.count()) > 0) {
-            await confirmBtn.click({ timeout: 5000 }).catch(() => {});
-            await this.delay(2000);
-            claimed = pts;
-            logger.log('🎉', `账号 [${accName}] 成功领取待领积分 +${pts} 分！`, '', accName);
+          let hasMore = true;
+          let rounds = 0;
+          while (hasMore && rounds < 5) {
+            rounds++;
+            const confirmBtn = page.locator('div[role="dialog"] button, button').filter({ hasText: /领取积分/ }).first();
+            if ((await confirmBtn.count()) > 0 && await confirmBtn.isVisible().catch(() => false)) {
+              await confirmBtn.click({ timeout: 5000 }).catch(() => {});
+              await this.delay(2500);
+              claimed = pts;
+            } else {
+              hasMore = false;
+            }
+          }
+          if (claimed > 0) {
+            logger.log('🎉', `账号 [${accName}] 成功领取待领积分 +${claimed} 分！`, '', accName);
           }
         }
       }
