@@ -493,108 +493,15 @@ export class RewardsApi {
           }
         } catch {}
 
-        // 桌面专属任务状态与到期天数动态解析
-        let desktopProgress = 0, desktopMax = 8;
-        let desktopExpiresText = '';
-        let desktopAvailable = false;
-        let monthlyQuest = null;
-
-        // 从页面 Flight 数据流中解析所有任务打孔卡（包含桌面打孔卡与月度/亮点打孔卡）
-        const questChunks = [...clean.matchAll(/\{[^{}]*?"text-globalBody2Strong","children":"([^"]+)"[\s\S]{0,1000}?(\d+)\/(\d+)\s*个任务[^{}]*?\}/g)];
-        for (const m of questChunks) {
-          const title = m[1];
-          const curP = parseInt(m[2], 10);
-          const maxP = parseInt(m[3], 10);
-          const windowText = clean.slice(Math.max(0, m.index - 500), m.index + 1200);
-          const mExp = windowText.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
-          let expText = '';
-          if (mExp) {
-            const expDate = new Date(mExp[1]);
-            if (!isNaN(expDate.getTime())) {
-              const todayStart = new Date();
-              todayStart.setHours(0, 0, 0, 0);
-              const expDayStart = new Date(expDate);
-              expDayStart.setHours(0, 0, 0, 0);
-              const diff = Math.max(0, Math.round((expDayStart.getTime() - todayStart.getTime()) / 86400000));
-              expText = `到期日期 ${diff} 天后`;
-            }
-          }
-          if (title.includes('桌面奖励应用') || title.includes('WW_pcparent_RewardsApp')) {
-            desktopProgress = curP;
-            desktopMax = maxP;
-            desktopAvailable = true;
-            if (expText) desktopExpiresText = expText;
-          } else if (!title.includes('开始使用 Rewards')) {
-            monthlyQuest = {
-              title,
-              progress: curP,
-              max: maxP,
-              points: 50,
-              expiresText: expText,
-              available: true,
-              done: curP >= maxP
-            };
-          }
-        }
-
-        // 兜底月度打孔卡识别：若页面包含「十月必看五大亮点」但未在上述正则中命中
-        if (!monthlyQuest && clean.includes('十月必看五大亮点')) {
-          const octIdx = clean.indexOf('十月必看五大亮点');
-          const octChunk = clean.slice(Math.max(0, octIdx - 500), Math.min(clean.length, octIdx + 3000));
-          const mProg = octChunk.match(/(\d+)\/(\d+)\s*个任务/);
-          const curP = mProg ? parseInt(mProg[1], 10) : 1;
-          const maxP = mProg ? parseInt(mProg[2], 10) : 5;
-          let expText = '';
-          const mExp = octChunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
-          if (mExp) {
-            const expDate = new Date(mExp[1]);
-            if (!isNaN(expDate.getTime())) {
-              const todayStart = new Date();
-              todayStart.setHours(0, 0, 0, 0);
-              const expDayStart = new Date(expDate);
-              expDayStart.setHours(0, 0, 0, 0);
-              const diff = Math.max(0, Math.round((expDayStart.getTime() - todayStart.getTime()) / 86400000));
-              expText = `到期日期 ${diff} 天后`;
-            }
-          } else {
-            const mExpText = octChunk.match(/到期日期[^<"]*?(\d+\s*(?:天|周|月)后)/);
-            if (mExpText) expText = `到期日期 ${mExpText[1]}`;
-          }
-          monthlyQuest = {
-            title: '十月必看五大亮点：服饰、玩具、手机、超值优惠和AI设备',
-            progress: curP,
-            max: maxP,
-            points: 50,
-            expiresText: expText || '到期日期 2 周后',
-            available: true,
-            done: curP >= maxP
-          };
-        }
-
-        if (!desktopAvailable) {
-          const desktopIdx = clean.indexOf('桌面奖励应用每周专属任务');
-          if (desktopIdx !== -1) {
-            desktopAvailable = true;
-            const chunk = clean.substring(Math.max(0, desktopIdx - 500), desktopIdx + 2000);
-            const mProg = chunk.match(/(\d+)\/(\d+)\s*个任务/);
-            if (mProg) {
-              desktopProgress = parseInt(mProg[1], 10);
-              desktopMax = parseInt(mProg[2], 10);
-            }
-            const mExp = chunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^"\\]+)/);
-            if (mExp) {
-              const expDate = new Date(mExp[1]);
-              if (!isNaN(expDate.getTime())) {
-                const todayStart = new Date();
-                todayStart.setHours(0, 0, 0, 0);
-                const expDayStart = new Date(expDate);
-                expDayStart.setHours(0, 0, 0, 0);
-                const diff = Math.max(0, Math.round((expDayStart.getTime() - todayStart.getTime()) / 86400000));
-                desktopExpiresText = `到期日期 ${diff} 天后`;
-              }
-            }
-          }
-        }
+        // 动态解析官网「任务」区域全部打孔卡（自适应 1 个、2 个或多个）
+        const quests = this.extractQuests(clean);
+        const desktopApp = quests.find(q => q.title.includes('桌面') || q.title.includes('RewardsApp')) || {
+          progress: 0,
+          max: 8,
+          expiresText: '',
+          available: false
+        };
+        const monthlyQuest = quests.find(q => !q.title.includes('桌面') && !q.title.includes('RewardsApp')) || null;
 
         // 印章进度提取 (如 8/12)
         let stampsProgress = 0, stampsMax = 12;
@@ -627,13 +534,9 @@ export class RewardsApi {
           readMax,
           dailyOffer,
           todayDetails,
-          desktopApp: {
-            progress: desktopProgress,
-            max: desktopMax,
-            expiresText: desktopExpiresText,
-            available: desktopAvailable
-          },
+          desktopApp,
           monthlyQuest,
+          quests,
           stamps: {
             progress: stampsProgress,
             max: stampsMax
@@ -650,6 +553,79 @@ export class RewardsApi {
       }
     }
     return null;
+  }
+
+  /**
+   * 从 Flight 数据流或 HTML 中动态提取全部「任务」区打孔卡
+   */
+  extractQuests(cleanText) {
+    const quests = [];
+    const seenTitles = new Set();
+
+    const addQuest = (title, curP, maxP, chunk) => {
+      if (!title || seenTitles.has(title) || title.includes('开始使用 Rewards')) return;
+      seenTitles.add(title);
+      let expText = '';
+      const expM = chunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^\"]+)/);
+      if (expM) {
+        const d = new Date(expM[1]);
+        if (!isNaN(d.getTime())) {
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const exp = new Date(d); exp.setHours(0, 0, 0, 0);
+          const days = Math.max(0, Math.round((exp.getTime() - today.getTime()) / 86400000));
+          expText = `到期日期 ${days} 天后`;
+        }
+      } else {
+        const mExpText = chunk.match(/到期日期[^<\"{\\\\]*?(\d+\s*(?:天|周|月)后)/);
+        if (mExpText) expText = `到期日期 ${mExpText[1]}`;
+      }
+
+      const ptsM = chunk.match(/\[\"[\+\"]*\",\"?(\d+)\"?\]/) || chunk.match(/\+(\d+)/);
+      const isDesktop = title.includes('桌面') || title.includes('RewardsApp');
+      const pts = ptsM ? parseInt(ptsM[1], 10) : (isDesktop ? 20 : 50);
+
+      let icon = '🎯';
+      if (title.includes('Halloween') || title.includes('万圣节')) icon = '🎃';
+      else if (isDesktop) icon = '🖥️';
+      else if (title.includes('秋') || title.includes('亮点')) icon = '🍁';
+
+      quests.push({
+        title,
+        progress: curP,
+        max: maxP,
+        points: pts,
+        expiresText: expText,
+        available: true,
+        done: curP >= maxP,
+        icon
+      });
+    };
+
+    // 1. Flight stream 模式：标题 + 任务进度
+    const flightRegex = /\"text-globalBody2Strong\",\"children\":\"([^\"]+)\"[\s\S]{0,1500}?\"children\":\"(\d+)\/(\d+)\s*个任务\"/g;
+    let m;
+    while ((m = flightRegex.exec(cleanText)) !== null) {
+      addQuest(m[1], parseInt(m[2], 10), parseInt(m[3], 10), cleanText.slice(Math.max(0, m.index - 500), m.index + 1500));
+    }
+
+    // 2. HTML 标题标签备用模式 (h1 / h2 / h3)
+    if (quests.length === 0) {
+      const htmlRegex = /<h[1-3][^>]*>([^<]+)<\/h[1-3]>[\s\S]{0,1200}?(\d+)\/(\d+)\s*个任务/gi;
+      while ((m = htmlRegex.exec(cleanText)) !== null) {
+        addQuest(m[1].trim(), parseInt(m[2], 10), parseInt(m[3], 10), cleanText.slice(Math.max(0, m.index - 200), m.index + 1500));
+      }
+    }
+
+    // 3. 兜底常见打孔卡关键词识别
+    if (quests.length === 0 && cleanText.includes('十月必看五大亮点')) {
+      addQuest('十月必看五大亮点：服饰、玩具、手机、超值优惠和AI设备', 1, 5, cleanText.slice(cleanText.indexOf('十月必看五大亮点') - 200, cleanText.indexOf('十月必看五大亮点') + 1500));
+    }
+    if (!quests.some(q => q.title.includes('Halloween')) && cleanText.includes('Halloween')) {
+      const hIdx = cleanText.indexOf('Halloween');
+      addQuest('A 50-point Halloween treat', 0, 6, cleanText.slice(Math.max(0, hIdx - 300), hIdx + 1500));
+    }
+
+    return quests;
   }
 
   /**
@@ -904,18 +880,24 @@ export class RewardsApi {
 
       const clean = String(html).replace(/\\"/g, '"').replace(/\\u0026/g, '&');
       const seen = new Set();
-      // 只负责把「任务区」的打孔卡链接找出来。
-      // 进度和当天可做的具体任务由浏览器打开任务页后读取 —— Next.js 的
-      // Flight 数据把卡片标题/进度放在懒加载 chunk 里，纯文本解析并不可靠。
+      const allQuests = this.extractQuests(clean);
       const hrefRe = /"href":"\/earn\/quest\/([^"]+)"/g;
       let m;
       while ((m = hrefRe.exec(clean)) !== null) {
         const questId = m[1];
-        if (seen.has(questId)) continue;
+        if (seen.has(questId) || questId.includes('newuser_onboarding')) continue;
         seen.add(questId);
+        const matched = allQuests.find(q => {
+          if (questId.includes('Halloween') && q.title.includes('Halloween')) return true;
+          if (questId.includes('RewardsApp') && (q.title.includes('桌面') || q.title.includes('RewardsApp'))) return true;
+          if (questId.includes('FY27') && (q.title.includes('亮点') || q.title.includes('FY27'))) return true;
+          return false;
+        });
         quests.push({
           questId,
-          url: `https://rewards.bing.com/earn/quest/${questId}`
+          title: matched?.title || questId,
+          url: `https://rewards.bing.com/earn/quest/${questId}`,
+          done: matched ? matched.done : false
         });
       }
     } catch (e) {

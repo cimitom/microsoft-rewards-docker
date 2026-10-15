@@ -589,9 +589,10 @@ class BrowserManager extends EventEmitter {
             const links = [...document.querySelectorAll('a[href]')];
             for (const a of links) {
               const href = a.getAttribute('href') || '';
-              if (a.getAttribute('aria-disabled') === 'true') continue;
-              if (!/bing\.com\/search\?/i.test(href)) continue;
-              if (/\/account\/general|\/rewards\//i.test(href)) continue;
+              if (a.getAttribute('aria-disabled') === 'true' || a.getAttribute('data-disabled') === 'true') continue;
+              if (/\/account\/general|\/rewards\/about|\/rewards\/faq|\/rewards\/redeem/i.test(href)) continue;
+              if (a.closest('header') || a.closest('footer')) continue;
+              if (!(/bing\.com\/search\?/i.test(href) || /bing\.com\/|microsoft\.com\/|microsoftedgewelcome/i.test(href))) continue;
               a.setAttribute('data-msr-quest-cta', '1');
               return { href, text: (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) };
             }

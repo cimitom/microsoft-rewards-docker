@@ -1229,40 +1229,24 @@ function formatPunchCardTooltip(t) {
     let progressLabel = `进度: ${t.progress || 0} / ${t.max || 1} ${t.unit || ''}`;
     let progPercent = t.max > 0 ? Math.min(100, Math.round((t.progress / t.max) * 100)) : (isDone ? 100 : 0);
 
-    if (key === 'desktopApp') {
+    const isPunchCard = t.isPunchCard || key === 'desktopApp' || key === 'monthlyQuest' || key.startsWith('quest_');
+    if (isPunchCard) {
       const p = Number(t.progress || 0);
-      const m = Number(t.max || 8) || 8;
-      progPercent = Math.round((p / m) * 100);
-      if (t.available === false) {
-        // 该账号本周没有这个任务时不要伪造进度
-        subtext = '本周未检测到该任务 · 每周打孔卡';
-        progressLabel = `进度: 0 / ${m} 个任务`;
+      const m = Number(t.max || (key === 'desktopApp' ? 8 : (key === 'quest_halloween' ? 6 : 5))) || 1;
+      progPercent = Math.min(100, Math.round((p / m) * 100));
+      const typeLabel = t.name?.includes('每周') ? '每周打孔卡' : (t.name?.includes('月') ? '每月打孔卡' : '活动打孔卡');
+      if (isDone) {
+        subtext = `已全部达成 · ${typeLabel} (悬停查看记录)`;
+      } else if (t.available === false && p === 0) {
+        subtext = `未检测到该任务 · ${typeLabel}`;
         pointsBadge = '+0 积分';
       } else {
-        // 有到期时间才显示，没有就只显示任务类型，不编造「5 天后」
-        subtext = t.expiresText ? `${t.expiresText} · 每周打孔卡 (悬停查看记录)` : '每周打孔卡 (悬停查看记录)';
-        progressLabel = `进度: ${p} / ${m} 个任务`;
-        pointsBadge = `+${t.points || 20} 积分`;
-        card.setAttribute('data-tip', formatPunchCardTooltip(t));
-        card.style.cursor = 'help';
+        subtext = t.expiresText ? `${t.expiresText} · ${typeLabel} (悬停查看记录)` : `${typeLabel} (悬停查看记录)`;
       }
-    }
-
-    if (key === 'monthlyQuest') {
-      const p = Number(t.progress || 0);
-      const m = Number(t.max || 5) || 5;
-      progPercent = Math.round((p / m) * 100);
-      if (t.available === false && p === 0) {
-        subtext = '本月未检测到该任务 · 月度打孔卡';
-        progressLabel = `进度: 0 / ${m} 个任务`;
-        pointsBadge = '+0 积分';
-      } else {
-        subtext = t.expiresText ? `${t.expiresText} · 每月打孔卡 (悬停查看记录)` : '每月打孔卡 (悬停查看记录)';
-        progressLabel = `进度: ${p} / ${m} 个任务`;
-        pointsBadge = `+${t.points || 50} 积分`;
-        card.setAttribute('data-tip', formatPunchCardTooltip(t));
-        card.style.cursor = 'help';
-      }
+      progressLabel = `进度: ${p} / ${m} 个任务`;
+      pointsBadge = `+${t.points || (key === 'desktopApp' ? 20 : 50)} 积分`;
+      card.setAttribute('data-tip', formatPunchCardTooltip(t));
+      card.style.cursor = 'help';
     }
 
     if (key === 'sign') {

@@ -44,8 +44,7 @@ export class TaskManager {
         search: { name: "必应 PC 搜索任务", progress: 0, max: 60, points: 0, unit: "分", icon: "🔍", done: false },
         dailySet: { name: "每日活动集 (Daily Set)", progress: 0, max: 3, points: 0, unit: "个", icon: "📅", done: false },
         promos: { name: "活动卡片与 Quiz 问答", progress: 0, max: 1, points: 0, unit: "项", icon: "🧩", done: false },
-        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "", available: false, done: false, stepLogs: [] },
-        monthlyQuest: { name: "月度打孔卡任务", progress: 0, max: 5, points: 50, unit: "个任务", icon: "🎯", expiresText: "", available: false, done: false, stepLogs: [] }
+        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "", available: false, done: false, stepLogs: [], isPunchCard: true }
       }
     };
   }
@@ -91,17 +90,10 @@ export class TaskManager {
             if (!baseStats.accounts[accId]) {
               baseStats.accounts[accId] = this.createDefaultAccountStats(accId, oldAcc.name || accId);
             }
-            if (oldAcc.tasks?.desktopApp) {
-              baseStats.accounts[accId].tasks.desktopApp = {
-                ...baseStats.accounts[accId].tasks.desktopApp,
-                ...oldAcc.tasks.desktopApp
-              };
-            }
-            if (oldAcc.tasks?.monthlyQuest) {
-              baseStats.accounts[accId].tasks.monthlyQuest = {
-                ...baseStats.accounts[accId].tasks.monthlyQuest,
-                ...oldAcc.tasks.monthlyQuest
-              };
+            for (const [k, oldTask] of Object.entries(oldAcc.tasks || {})) {
+              if (oldTask && (oldTask.isPunchCard || k === 'desktopApp' || k === 'monthlyQuest' || k.startsWith('quest_'))) {
+                baseStats.accounts[accId].tasks[k] = { ...oldTask };
+              }
             }
           }
           return baseStats;
@@ -132,37 +124,13 @@ export class TaskManager {
       this.stats.accounts[id] = this.createDefaultAccountStats(id, name);
     } else {
       this.stats.accounts[id].name = name;
-      // 修正桌面任务展示字段
-      const dApp = this.stats.accounts[id].tasks?.desktopApp;
-      if (dApp) {
-        if (dApp.expiresText === undefined) dApp.expiresText = "";
-        // 注意：这里以前会把 progress 0 改写成 3，导致所有账号都显示假的 3/8
-        if (dApp.progress === undefined || dApp.progress === null) dApp.progress = 0;
-        if (dApp.points === undefined || dApp.points === null) dApp.points = 20;
-        dApp.unit = "个任务";
-        dApp.max = 8;
-        if (dApp.available === undefined) dApp.available = false;
-        if (!Array.isArray(dApp.stepLogs)) dApp.stepLogs = [];
-      }
-      const mQuest = this.stats.accounts[id].tasks?.monthlyQuest;
-      if (!mQuest) {
-        this.stats.accounts[id].tasks.monthlyQuest = {
-          name: "月度打孔卡任务",
-          progress: 0,
-          max: 5,
-          points: 50,
-          unit: "个任务",
-          icon: "🎯",
-          expiresText: "",
-          available: false,
-          done: false,
-          stepLogs: []
-        };
-      } else {
-        if (!Array.isArray(mQuest.stepLogs)) mQuest.stepLogs = [];
-        if (mQuest.max === undefined) mQuest.max = 5;
-        if (mQuest.unit === undefined) mQuest.unit = "个任务";
-        if (mQuest.icon === undefined) mQuest.icon = "🎯";
+      // 保证所有打孔卡任务的 stepLogs 与基础属性健全
+      for (const [k, t] of Object.entries(this.stats.accounts[id].tasks || {})) {
+        if (t && (t.isPunchCard || k === 'desktopApp' || k === 'monthlyQuest' || k.startsWith('quest_'))) {
+          t.isPunchCard = true;
+          if (!Array.isArray(t.stepLogs)) t.stepLogs = [];
+          if (!t.unit) t.unit = '个任务';
+        }
       }
       if (!this.stats.accounts[id].stamps) {
         this.stats.accounts[id].stamps = { progress: 0, max: 12 };
@@ -355,66 +323,70 @@ export class TaskManager {
           };
         }
 
-        // 3. 同步桌面专属任务进度（用真实值，不再用 3/8 兜底）
-        if (info.desktopApp) {
-          const dProgress = Number(info.desktopApp.progress ?? 0);
-          const dMax = Number(info.desktopApp.max ?? 8) || 8;
-          const prevDesktop = accStats.tasks.desktopApp || {};
-          const prevLogs = Array.isArray(prevDesktop.stepLogs) ? prevDesktop.stepLogs : [];
-          const updatedLogs = [...prevLogs];
-          for (let s = 1; s <= dProgress; s++) {
-            if (!updatedLogs.some(l => l.step === s)) {
-              updatedLogs.push({
-                step: s,
-                at: Date.now() - (dProgress - s) * 86400000,
-                name: `第 ${s} 任务`
-              });
-            }
-          }
-          updatedLogs.sort((a, b) => a.step - b.step);
-          accStats.tasks.desktopApp = {
-            name: "桌面应用每周专属任务",
-            progress: dProgress,
-            max: dMax,
-            points: dProgress >= dMax ? 20 : 0,
-            unit: "个任务",
-            icon: "🖥️",
-            expiresText: info.desktopApp.expiresText || "",
-            available: info.desktopApp.available !== false,
-            done: dProgress >= dMax,
-            stepLogs: updatedLogs
-          };
-        }
+        // 3. 动态同步官方「任务」区全部打孔卡（自适应 1 个、2 个或多个）
+        const questList = Array.isArray(info.quests) && info.quests.length > 0
+          ? info.quests
+          : [info.desktopApp, info.monthlyQuest].filter(Boolean);
 
-        // 3.5 同步月度打孔卡进度（如十月必看五大亮点）与步数记录
-        if (info.monthlyQuest) {
-          const mProgress = Number(info.monthlyQuest.progress ?? 0);
-          const mMax = Number(info.monthlyQuest.max ?? 5) || 5;
-          const prevMonthly = accStats.tasks.monthlyQuest || {};
-          const prevLogs = Array.isArray(prevMonthly.stepLogs) ? prevMonthly.stepLogs : [];
-          const updatedLogs = [...prevLogs];
-          for (let s = 1; s <= mProgress; s++) {
-            if (!updatedLogs.some(l => l.step === s)) {
-              updatedLogs.push({
-                step: s,
-                at: Date.now() - (mProgress - s) * 86400000,
-                name: `第 ${s} 项`
-              });
+        if (questList.length > 0) {
+          const currentQuestKeys = new Set();
+          questList.forEach((q, idx) => {
+            const title = q.title || q.name || '';
+            const isDesktop = title.includes('桌面') || title.includes('RewardsApp');
+            const isHalloween = title.includes('Halloween') || title.includes('万圣节');
+            const isMonthly = title.includes('亮点') || title.includes('FY27') || title.includes('Monthly');
+            
+            let questKey = isDesktop ? 'desktopApp' : (isHalloween ? 'quest_halloween' : (isMonthly ? 'monthlyQuest' : `quest_${idx}`));
+            currentQuestKeys.add(questKey);
+
+            const prevTask = accStats.tasks[questKey] || {};
+            const prevLogs = Array.isArray(prevTask.stepLogs) ? prevTask.stepLogs : [];
+            const updatedLogs = [...prevLogs];
+            const qProgress = Number(q.progress ?? 0);
+            const qMax = Number(q.max ?? (isDesktop ? 8 : (isHalloween ? 6 : 5))) || 1;
+
+            for (let s = 1; s <= qProgress; s++) {
+              if (!updatedLogs.some(l => l.step === s)) {
+                updatedLogs.push({
+                  step: s,
+                  at: Date.now() - (qProgress - s) * 86400000,
+                  name: `第 ${s} 项`
+                });
+              }
+            }
+            updatedLogs.sort((a, b) => a.step - b.step);
+
+            let icon = q.icon;
+            if (!icon) {
+              if (isHalloween) icon = '🎃';
+              else if (isDesktop) icon = '🖥️';
+              else if (isMonthly) icon = '🍁';
+              else icon = '🎯';
+            }
+
+            accStats.tasks[questKey] = {
+              name: title || (isDesktop ? '桌面应用每周专属任务' : '活动打孔卡'),
+              progress: qProgress,
+              max: qMax,
+              points: qProgress >= qMax ? (q.points || (isDesktop ? 20 : 50)) : 0,
+              unit: "个任务",
+              icon,
+              expiresText: q.expiresText || "",
+              available: q.available !== false,
+              done: qProgress >= qMax,
+              stepLogs: updatedLogs,
+              isPunchCard: true
+            };
+          });
+
+          // 移除已下线或不存在的多余打孔卡，保证与官网 100% 同步联动
+          for (const key of Object.keys(accStats.tasks)) {
+            if (key !== 'sign' && key !== 'read' && key !== 'search' && key !== 'dailySet' && key !== 'promos') {
+              if (!currentQuestKeys.has(key)) {
+                delete accStats.tasks[key];
+              }
             }
           }
-          updatedLogs.sort((a, b) => a.step - b.step);
-          accStats.tasks.monthlyQuest = {
-            name: info.monthlyQuest.title || "月度任务打孔卡",
-            progress: mProgress,
-            max: mMax,
-            points: mProgress >= mMax ? (info.monthlyQuest.points || 50) : 0,
-            unit: "个任务",
-            icon: "🎯",
-            expiresText: info.monthlyQuest.expiresText || "",
-            available: info.monthlyQuest.available !== false,
-            done: mProgress >= mMax,
-            stepLogs: updatedLogs
-          };
         }
 
         // 4. 同步印章与连签
@@ -688,9 +660,37 @@ export class TaskManager {
     const accStats = this.ensureAccountStats(accountId);
     if (!accStats.tasks) return;
     for (const d of details) {
-      const isDesktop = (d.title || '').includes('桌面') || (d.questId || '').includes('RewardsApp');
-      const taskKey = isDesktop ? 'desktopApp' : 'monthlyQuest';
-      const task = accStats.tasks[taskKey];
+      let targetTask = null;
+      for (const [key, t] of Object.entries(accStats.tasks)) {
+        if (t && (t.isPunchCard || key === 'desktopApp' || key === 'monthlyQuest' || key.startsWith('quest_'))) {
+          if (t.name === d.title || (d.title && t.name.includes(d.title)) || (d.title && d.title.includes(t.name))) {
+            targetTask = t;
+            break;
+          }
+        }
+      }
+      if (!targetTask) {
+        const isDesktop = (d.title || '').includes('桌面') || (d.questId || '').includes('RewardsApp');
+        const isHalloween = (d.title || '').includes('Halloween') || (d.questId || '').includes('Halloween');
+        const key = isDesktop ? 'desktopApp' : (isHalloween ? 'quest_halloween' : 'monthlyQuest');
+        if (!accStats.tasks[key]) {
+          accStats.tasks[key] = {
+            name: d.title || (isDesktop ? '桌面应用每周专属任务' : '活动打孔卡'),
+            progress: 0,
+            max: isDesktop ? 8 : (isHalloween ? 6 : 5),
+            points: isDesktop ? 20 : 50,
+            unit: '个任务',
+            icon: isHalloween ? '🎃' : (isDesktop ? '🖥️' : '🎯'),
+            expiresText: '',
+            available: true,
+            done: false,
+            stepLogs: [],
+            isPunchCard: true
+          };
+        }
+        targetTask = accStats.tasks[key];
+      }
+      const task = targetTask;
       if (task) {
         if (!Array.isArray(task.stepLogs)) task.stepLogs = [];
         const nextStep = (task.progress || 0) + 1;
@@ -1039,9 +1039,8 @@ export class TaskManager {
     if (globalCfg.tasks?.promos && this.running && browserManager.getExecutablePath()) {
       const cur = this.ensureAccountStats(accountId);
       const isManual = options.manual === true;
-      const isMonthlyDone = cur.tasks?.monthlyQuest && cur.tasks.monthlyQuest.done;
-      const isDesktopDone = cur.tasks?.desktopApp && cur.tasks.desktopApp.done;
-      const isAllQuestsFinished = isMonthlyDone && isDesktopDone;
+      const punchCards = Object.values(cur.tasks || {}).filter(t => t && t.isPunchCard);
+      const isAllQuestsFinished = punchCards.length > 0 && punchCards.every(t => t.done);
 
       // 若全部打孔卡已经满额完成，自动巡检时不重复启动浏览器
       if (isAllQuestsFinished && !isManual) {
