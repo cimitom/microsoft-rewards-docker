@@ -171,8 +171,8 @@ export class AuthManager {
         if (['invalid_grant', 'invalid_request'].includes(data.error)) {
           configManager.upsertAccount({
             id: acc.id,
-            accessToken: '',
-            refreshToken: '',
+            accessToken: null,
+            refreshToken: null,
             tokenTime: 0
           });
         }

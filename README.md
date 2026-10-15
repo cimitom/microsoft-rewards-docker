@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.6.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -59,6 +59,14 @@
   - **每个账号持久化浏览器会话**：Cookie 与 localStorage 跨次复用，不再是「一个全新浏览器里凭空出现登录态」。写回时剔除 `_U` 身份 Cookie，并绑定账号凭据指纹 —— 换账号或重新登录后旧会话自动作废，杜绝串号；
   - **搜索停滞保护**：连续 N 次搜索官网进度不涨就主动停手（默认 10 次，可在配置中心调整）。当天搜索额度已到顶时不再空跑，既省执行窗口，也减少风控暴露面；
   - **单元测试增至 41 个**（新增会话持久化与停滞保护回归）。
+- 💎 **排版全面重构与待领取积分直达 (全新 v1.6.3)**：
+  - **待领取额外积分直达**：第三张 Hero 卡片升级为「待领取额外积分」，支持实时统计并点击一键领取官网赠分；
+  - **多账号卡槽全宽自适应**：支持多账号自由折行，彻底消除电脑端横向滚动；
+  - **账号卡片操作项常驻**：移除悬停跳动遮罩，核心按钮常驻，低频操作收纳至更多操作菜单；
+  - **Epic 游戏排版重构**：电脑端 4 卡整齐并排陈列（2 款限时免费 + 2 款下周预告），接入官方原画海报与各账号在库悬停浮层（含领取时间）；
+  - **商店巡检节奏预设**：新增常规每周 (12h)、节日每日 (1h) 与极速 (30m) 一键切换；
+  - **关键缺陷修复**：修复凭据清空失效导致 Token 死循环报错、搜索词索引越界崩溃、多账号离散调度通知骚扰、调度计划跨实例恢复与 Epic 平台指纹对齐；
+  - **单元测试增至 44 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；

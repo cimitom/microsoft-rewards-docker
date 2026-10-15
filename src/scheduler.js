@@ -1,14 +1,41 @@
+import fs from 'fs';
+import path from 'path';
 import cron from 'node-cron';
 import configManager from './config.js';
 import logger from './logger.js';
 import taskManager from './core/taskManager.js';
 import epicManager from './core/epic.js';
+import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
+
+const PLAN_FILE = path.join(DATA_DIR, 'schedule_plan.json');
 
 class Scheduler {
   constructor() {
     this.job = null;
     this.epicJob = null;
     this.plannedDailyRuns = {};
+    this.loadPlans();
+  }
+
+  loadPlans() {
+    try {
+      if (fs.existsSync(PLAN_FILE)) {
+        const raw = fs.readFileSync(PLAN_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          this.plannedDailyRuns = parsed;
+        }
+      }
+    } catch {}
+  }
+
+  savePlans() {
+    try {
+      writeFileAtomic(PLAN_FILE, JSON.stringify(this.plannedDailyRuns, null, 2), {
+        encoding: 'utf-8',
+        mode: 0o600
+      });
+    } catch {}
   }
 
   getTodayNum() {
@@ -35,6 +62,7 @@ class Scheduler {
     for (const key of Object.keys(this.plannedDailyRuns)) {
       if (key < todayKey) delete this.plannedDailyRuns[key];
     }
+    this.savePlans();
   }
 
   /**
@@ -85,6 +113,7 @@ class Scheduler {
         executed: false
       };
     }
+    this.savePlans();
   }
 
   /** 日期编号（YYYYMMDD）偏移若干天 */
@@ -220,6 +249,7 @@ class Scheduler {
         const inWindow = nowOffset >= 0 && nowOffset < plan.windowLength;
         if (inWindow && nowOffset >= plan.offset) {
           plan.executed = true;
+          this.savePlans();
           const fmt = (m) => `${String(Math.floor((m % 1440) / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
           logger.log('⏰', `到达账号 [${acc.name}] 拟人作息窗口 (${fmt(plan.startMin)} - ${fmt(plan.endMin)}，今日随机命中 ${fmt(plan.startMin + plan.offset)})，启动打卡...`, '', acc.name);
           try {

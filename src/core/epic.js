@@ -4,7 +4,7 @@ import logger from '../logger.js';
 import networkClient from '../network.js';
 import browserManager from './browser.js';
 import { browserSlotLock } from './contextLock.js';
-import { PC_USER_AGENT, SEC_CH_UA, PLATFORM } from './fingerprint.js';
+import { PC_USER_AGENT, SEC_CH_UA, PLATFORM, createAlignedPage, applyWebGLFingerprint } from './fingerprint.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
@@ -75,7 +75,7 @@ export class EpicManager {
     };
     return {
       enabled: e.enabled !== false,
-      checkIntervalMin: clamp(e.checkIntervalMin, 5, 1440, 30),
+      checkIntervalMin: clamp(e.checkIntervalMin, 5, 10080, 720),
       retryCount: clamp(e.retryCount, 0, 5, 2),
       retryIntervalSec: clamp(e.retryIntervalSec, 10, 600, 60),
       accountGapSec: clamp(e.accountGapSec, 0, 600, 20)
@@ -174,17 +174,14 @@ export class EpicManager {
 
   /** 从 Epic 官方静态接口读取当前可领取的免费游戏（演示模式会追加示例游戏） */
   async fetchFreeGames() {
+    if (this.isDemo()) {
+      return this.demoGames();
+    }
     let games = [];
     try {
       games = await this.fetchFreeGamesFromApi();
     } catch (e) {
-      if (!this.isDemo()) throw e;
       logger.log('🟡', `Epic 免费游戏接口异常（演示模式继续）: ${e.message}`);
-    }
-    if (this.isDemo()) {
-      const demo = this.demoGames();
-      const existing = new Set(games.map(g => g.id));
-      games = [...games, ...demo.filter(g => !existing.has(g.id))];
     }
     return games;
   }
@@ -202,6 +199,9 @@ export class EpicManager {
 
     for (const el of elements) {
       const offerGroups = el.promotions?.promotionalOffers || [];
+      const upcomingGroups = el.promotions?.upcomingPromotionalOffers || [];
+
+      // 1. 当前免费中的游戏
       const current = offerGroups
         .flatMap(g => g?.promotionalOffers || [])
         .find(o => {
@@ -211,7 +211,18 @@ export class EpicManager {
           const end = Date.parse(o.endDate);
           return Number(pct) === 0 && start <= now && now < end;
         });
-      if (!current) continue;
+
+      // 2. 即将推出的下周预告免费游戏
+      const upcoming = upcomingGroups
+        .flatMap(g => g?.promotionalOffers || [])
+        .find(o => {
+          if (!o) return false;
+          const pct = o.discountSetting?.discountPercentage;
+          const start = Date.parse(o.startDate);
+          return Number(pct) === 0 && start > now;
+        });
+
+      if (!current && !upcoming) continue;
 
       // 注意：urlSlug 是十六进制 id，不能直接当页面 slug 用（会 404）。
       // 正确的商城页面地址在 catalogNs.mappings / offerMappings 的 pageSlug 里。
@@ -221,16 +232,27 @@ export class EpicManager {
         || el.urlSlug
         || '';
       const slug = String(rawSlug).replace(/\/home$/i, '').replace(/^\//, '');
+      const isFreeNow = !!current;
+      const activeOffer = current || upcoming;
+
       games.push({
         id: el.id,
         title: el.title || '未知游戏',
         slug,
         url: slug ? `${STORE_BASE}/p/${slug}` : null,
-        endDate: current.endDate,
+        isFreeNow,
+        isUpcoming: !isFreeNow,
+        status: isFreeNow ? 'free_now' : 'upcoming',
+        startDate: activeOffer?.startDate || null,
+        endDate: activeOffer?.endDate || null,
         image: el.keyImages?.find(i => i.type === 'OfferImageWide' || i.type === 'Thumbnail')?.url || null
       });
     }
-    return games;
+    return games.sort((a, b) => {
+      if (a.isFreeNow && !b.isFreeNow) return -1;
+      if (!a.isFreeNow && b.isFreeNow) return 1;
+      return 0;
+    });
   }
 
   // ===== 领取流程 =====
@@ -326,12 +348,59 @@ export class EpicManager {
 
   /** 演示模式的示例免费游戏 */
   demoGames() {
-    const end = new Date(Date.now() + 3 * 86400000).toISOString();
+    const now = Date.now();
+    const currentEnd = new Date(now + 1 * 86400000 + 14 * 3600000).toISOString();
+    const upcomingStart = currentEnd;
+    const upcomingEnd = new Date(now + 8 * 86400000).toISOString();
     return [
-      { id: 'demo_game_1', title: '星海远征', slug: 'demo-star-voyage', url: 'https://store.epicgames.com/zh-CN/p/demo-star-voyage', endDate: end, image: null },
-      { id: 'demo_game_2', title: '像素工坊', slug: 'demo-pixel-workshop', url: 'https://store.epicgames.com/zh-CN/p/demo-pixel-workshop', endDate: end, image: null },
-      { id: 'demo_game_3', title: '暗影回廊', slug: 'demo-shadow-corridor', url: 'https://store.epicgames.com/zh-CN/p/demo-shadow-corridor', endDate: end, image: null },
-      { id: 'demo_game_4', title: 'Rusty Rally', slug: 'demo-rusty-rally', url: 'https://store.epicgames.com/zh-CN/p/demo-rusty-rally', endDate: end, image: null }
+      {
+        id: 'demo_game_1',
+        title: '虎视眈眈 (Out of Sight)',
+        slug: 'out-of-sight-4d9ce6',
+        url: 'https://store.epicgames.com/zh-CN/p/out-of-sight-4d9ce6',
+        isFreeNow: true,
+        isUpcoming: false,
+        status: 'free_now',
+        startDate: new Date(now - 6 * 86400000).toISOString(),
+        endDate: currentEnd,
+        image: 'https://cdn1.epicgames.com/spt-assets/6e1bf54cfa6344c89d41e4e7af036ac9/out-of-sight-1l12n.jpg'
+      },
+      {
+        id: 'demo_game_2',
+        title: 'TerraScape',
+        slug: 'terrascape-fc0b29',
+        url: 'https://store.epicgames.com/zh-CN/p/terrascape-fc0b29',
+        isFreeNow: true,
+        isUpcoming: false,
+        status: 'free_now',
+        startDate: new Date(now - 6 * 86400000).toISOString(),
+        endDate: currentEnd,
+        image: 'https://cdn1.epicgames.com/spt-assets/a740a2eed807469f88b9dff17e7cd3a3/terrascape-j7p8d.png'
+      },
+      {
+        id: 'demo_game_3',
+        title: 'Bad Cheese',
+        slug: 'bad-cheese-d36004',
+        url: 'https://store.epicgames.com/zh-CN/p/bad-cheese-d36004',
+        isFreeNow: false,
+        isUpcoming: true,
+        status: 'upcoming',
+        startDate: upcomingStart,
+        endDate: upcomingEnd,
+        image: 'https://cdn1.epicgames.com/spt-assets/6cbb0e3805c4436bafd028cafff48307/bad-cheese-16hj0.png'
+      },
+      {
+        id: 'demo_game_4',
+        title: 'Agent A - 伪装游戏',
+        slug: 'agent-a-a-puzzle-in-disguise',
+        url: 'https://store.epicgames.com/zh-CN/p/agent-a-a-puzzle-in-disguise',
+        isFreeNow: false,
+        isUpcoming: true,
+        status: 'upcoming',
+        startDate: upcomingStart,
+        endDate: upcomingEnd,
+        image: 'https://cdn1.epicgames.com/spt-assets/45db4fbe68fe43f4b025dec2014d42e7/agent-a-a-puzzle-in-disguise-3cppl.png'
+      }
     ];
   }
 
@@ -467,7 +536,8 @@ export class EpicManager {
         userAgent: UA,
         extraHTTPHeaders: BROWSER_CLIENT_HINTS
       });
-      const page = await context.newPage();
+      await applyWebGLFingerprint(context);
+      const page = await createAlignedPage(context);
       await page.goto(STORE_HOME, { waitUntil: 'domcontentloaded', timeout: 45000 });
       await this.delay(3000);
       await this.dismissOverlays(page);
@@ -505,7 +575,7 @@ export class EpicManager {
 
     const allGames = prefetchedGames || await this.fetchFreeGames();
     const handled = acc.handledGames || {};
-    const pending = allGames.filter(g => !['claimed', 'owned'].includes(handled[g.id]?.status));
+    const pending = allGames.filter(g => g.isFreeNow !== false && !['claimed', 'owned'].includes(handled[g.id]?.status));
     logger.log('🎮', `发现 ${allGames.length} 个免费游戏，其中 ${pending.length} 个待处理`, '', acc.name);
 
     if (pending.length === 0) {
@@ -528,7 +598,7 @@ export class EpicManager {
         browser = await chromium.launch({
           executablePath: execPath,
           headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-blink-features=AutomationControlled']
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
         });
         context = await browser.newContext({
           storageState: { cookies: acc.storageState.cookies, origins: acc.storageState.origins || [] },
@@ -538,10 +608,8 @@ export class EpicManager {
           extraHTTPHeaders: BROWSER_CLIENT_HINTS,
           viewport: { width: 1366, height: 768 }
         });
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        });
-        page = await context.newPage();
+        await applyWebGLFingerprint(context);
+        page = await createAlignedPage(context);
       }
 
       const maxAttempts = settings.retryCount + 1;
@@ -644,7 +712,7 @@ export class EpicManager {
         this.updateState({ accountName: acc.name, status: 'checking', lastAction: `开始处理账号「${acc.name}」` });
 
         const handled = acc.handledGames || {};
-        const pending = allGames.filter(g => !['claimed', 'owned'].includes(handled[g.id]?.status));
+        const pending = allGames.filter(g => g.isFreeNow !== false && !['claimed', 'owned'].includes(handled[g.id]?.status));
         if (pending.length === 0) {
           allResults.push({ accountId: acc.id, accountName: acc.name, results: [] });
           continue;
@@ -719,7 +787,7 @@ export class EpicManager {
 
       const needClaim = accounts.some(acc => {
         const handled = acc.handledGames || {};
-        return games.some(g => !['claimed', 'owned'].includes(handled[g.id]?.status));
+        return games.some(g => g.isFreeNow !== false && !['claimed', 'owned'].includes(handled[g.id]?.status));
       });
 
       if (!needClaim) {

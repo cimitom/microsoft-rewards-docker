@@ -54,7 +54,7 @@ body {
   background-color: var(--bg-base);
   color: var(--text-main);
   min-height: 100vh;
-  padding: 32px 24px;
+  padding: 20px 24px;
   display: flex;
   justify-content: center;
   transition: background 0.3s ease, color 0.3s ease;
@@ -64,61 +64,60 @@ body {
   container-type: inline-size;
   container-name: app;
   width: 100%;
-  max-width: 1240px;
+  max-width: 1280px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
 .main-content {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 18px;
 }
 
 /* ===== 顶层功能选项卡（微软积分 / Epic 游戏 / 施工中）===== */
 .app-tabs {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  background: var(--card-bg);
-  backdrop-filter: blur(20px);
+  display: inline-flex;
+  align-items: center;
+  background: var(--card-inner);
   border: 1px solid var(--border-color);
-  border-radius: 14px;
-  padding: 6px;
+  border-radius: 10px;
+  padding: 3px;
+  gap: 3px;
+  flex-shrink: 0;
 }
 
 .app-tab {
-  flex: 1 1 auto;
-  min-width: 130px;
+  flex: 0 0 auto;
   border: none;
   background: transparent;
   color: var(--text-sub);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
-  padding: 9px 14px;
-  border-radius: 10px;
+  padding: 6px 16px;
+  border-radius: 7px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.18s ease, color 0.18s ease;
+  transition: all 0.18s ease;
 }
 
 .app-tab:hover {
-  background: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text-main);
 }
 
 .app-tab.active {
-  background: var(--accent);
+  background: var(--primary);
   color: #fff;
-  box-shadow: 0 2px 10px rgba(56, 189, 248, 0.28);
+  box-shadow: 0 2px 8px rgba(0, 120, 212, 0.35);
 }
 
 /* 选项卡面板：同一时刻只显示一个，切换时整页内容完全不同 */
 .tab-panel {
   display: none;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
 .tab-panel.active {
@@ -188,9 +187,9 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 15px 16px;
+  padding: 12px 14px;
   border: 1px solid var(--border-color);
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--card-bg);
   backdrop-filter: blur(20px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
@@ -209,7 +208,7 @@ body {
 .epic-stat-icon {
   width: 38px;
   height: 38px;
-  border-radius: 12px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -246,17 +245,20 @@ body {
   white-space: nowrap;
 }
 
+.epic-games-container,
 .epic-games-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
 }
 
 .epic-game-card {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
   border: 1px solid var(--border-color);
   border-radius: 15px;
   background: var(--card-inner);
@@ -269,10 +271,91 @@ body {
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
 }
 
+.epic-game-card.card-upcoming {
+  opacity: 0.92;
+  border-style: dashed;
+}
+
+/* 卡片悬停各账号在库详情 Tooltip */
+.epic-game-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: var(--modal-bg);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 10px 14px;
+  min-width: 250px;
+  max-width: 320px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(24px);
+  z-index: 120;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.epic-game-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px;
+  border-style: solid;
+  border-color: var(--border-light) transparent transparent transparent;
+}
+
+.epic-game-card:hover .epic-game-tooltip,
+.epic-game-card:focus-within .epic-game-tooltip {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+.epic-tooltip-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 5px;
+}
+
+.epic-tooltip-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  padding: 5px 0;
+}
+
+.epic-tooltip-row:not(:last-child) {
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.epic-tooltip-acc {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.epic-tooltip-acc.claimed { color: #34D399; }
+.epic-tooltip-acc.owned { color: #38BDF8; }
+.epic-tooltip-acc.pending { color: #F59E0B; }
+
+.epic-tooltip-time {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .epic-game-cover {
   position: relative;
   aspect-ratio: 16 / 9;
   overflow: hidden;
+  border-radius: 14px 14px 0 0;
   background: linear-gradient(135deg, hsl(var(--cover-h, 205) 65% 40%), hsl(calc(var(--cover-h, 205) + 42) 70% 25%));
 }
 
@@ -318,6 +401,16 @@ body {
   font-size: 10px;
   font-weight: 800;
   backdrop-filter: blur(8px);
+}
+
+.epic-game-free-tag.tag-now {
+  background: rgba(16, 185, 129, 0.85);
+  color: #fff;
+}
+
+.epic-game-free-tag.tag-upcoming {
+  background: rgba(245, 158, 11, 0.88);
+  color: #fff;
 }
 
 .epic-game-card-body {
@@ -372,6 +465,115 @@ body {
 .epic-game-card-footer .btn {
   font-size: 11px;
   padding: 5px 8px;
+}
+
+/* Epic 周期预设按钮与游戏分组 */
+.epic-games-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.epic-cycle-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+  padding: 3px 6px;
+  border-radius: 999px;
+}
+
+.epic-cycle-label {
+  font-size: 11px;
+  color: var(--text-sub);
+  margin-left: 4px;
+}
+
+.cycle-pill {
+  background: transparent;
+  border: none;
+  color: var(--text-sub);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.cycle-pill:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.cycle-pill.active {
+  background: var(--primary);
+  color: #FFFFFF;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 120, 212, 0.35);
+}
+
+.epic-games-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.epic-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+}
+
+.group-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+.group-badge.free-now {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34D399;
+}
+
+.group-badge.upcoming {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #FBBF24;
+}
+
+.group-count {
+  font-size: 11.5px;
+  color: var(--text-sub);
+}
+
+.epic-cards-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  width: 100%;
+}
+
+@media (max-width: 1100px) {
+  .epic-cards-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+}
+
+@media (max-width: 580px) {
+  .epic-cards-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
 }
 
 .epic-layout {
@@ -710,31 +912,51 @@ body {
   .epic-setting-input input { flex: 1; width: auto; }
 }
 
-/* ===== 微软积分操作工具条（原顶部按钮） ===== */
+/* ===== 微软积分多账号切换栏 (自动换行，无需左右滑动) ===== */
+.account-selector-section {
+  width: 100%;
+}
+
+.account-selector-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap !important;
+  width: 100%;
+  padding: 2px 0;
+}
+
+/* ===== 微软积分操作工具条 ===== */
 .ms-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
   background: var(--card-bg);
   border: 1px solid var(--border-color);
-  border-radius: 14px;
-  padding: 10px 16px;
+  border-radius: 12px;
+  padding: 8px 14px;
   backdrop-filter: blur(20px);
 }
 
-.ms-toolbar-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-main);
-  white-space: nowrap;
+.ms-toolbar-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
 }
 
 .ms-toolbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
   flex-wrap: wrap;
 }
 
@@ -778,8 +1000,8 @@ body {
   background: var(--card-bg);
   backdrop-filter: blur(20px);
   border: 1px solid var(--border-color);
-  border-radius: 20px;
-  padding: 14px 20px;
+  border-radius: 14px;
+  padding: 10px 18px;
   box-shadow: var(--shadow-main);
 }
 
@@ -787,41 +1009,41 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   width: 100%;
 }
 
 .header-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
 .header-right-group {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .logo-icon {
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   background: linear-gradient(135deg, #0284C7, #0369A1);
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 20px;
   box-shadow: 0 4px 14px rgba(2, 132, 199, 0.4);
 }
 
@@ -832,7 +1054,7 @@ body {
 }
 
 .title {
-  font-size: 19px;
+  font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.3px;
 }
@@ -1148,64 +1370,64 @@ body {
 .account-selector-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 2px;
-  /* 桌面端自动换行：账号多时不用横向滚动也能看全 */
-  flex-wrap: wrap;
-  overflow-x: visible;
+  gap: 8px;
+  padding: 2px 0;
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
   scrollbar-width: none;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .account-selector-bar::-webkit-scrollbar {
   display: none;
 }
 
 .account-chip {
-  background: var(--card-bg);
-  backdrop-filter: blur(16px);
+  background: var(--card-inner);
   border: 1px solid var(--border-color);
-  border-radius: 999px;
-  padding: 8px 16px;
+  border-radius: 8px;
+  padding: 6px 12px;
   color: var(--text-main);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: 6px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+  transition: all 0.16s ease;
 }
 
 .account-chip:hover {
+  background: var(--card-hover);
   border-color: var(--border-light);
-  transform: translateY(-1px);
 }
 
 .account-chip.active {
-  background: linear-gradient(135deg, #0284C7, #0078D4);
-  border-color: transparent;
-  color: #FFFFFF !important;
-  box-shadow: 0 4px 16px rgba(0, 120, 212, 0.35);
+  background: rgba(0, 120, 212, 0.18);
+  border-color: rgba(0, 120, 212, 0.5);
+  color: var(--accent) !important;
+  box-shadow: 0 2px 8px rgba(0, 120, 212, 0.2);
 }
 
 .account-chip.active .chip-badge {
-  background: rgba(255, 255, 255, 0.22);
-  color: #FFFFFF !important;
+  background: rgba(0, 120, 212, 0.25);
+  color: var(--accent) !important;
 }
 
 .account-chip.active .chip-sub {
-  color: rgba(255, 255, 255, 0.85) !important;
+  color: var(--accent) !important;
 }
 
 .chip-icon {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .chip-badge {
-  font-size: 10.5px;
-  padding: 2px 7px;
-  border-radius: 999px;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 6px;
   background: rgba(56, 189, 248, 0.15);
   color: var(--accent);
 }
@@ -1213,13 +1435,15 @@ body {
 .chip-sub {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: monospace;
+  font-family: "JetBrains Mono", Consolas, monospace;
 }
 
 .chip-add {
   background: transparent;
   border: 1px dashed var(--border-light);
   color: var(--accent);
+  border-radius: 8px;
+  padding: 6px 12px;
 }
 
 .chip-add:hover {
@@ -1236,11 +1460,11 @@ body {
 .account-overview-card {
   background: var(--card-inner);
   border: 1px solid var(--border-color);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 12px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 11px;
   transition: all 0.2s;
   cursor: pointer;
 }
@@ -1359,32 +1583,99 @@ body {
 }
 
 .acc-card-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  align-items: center;
   gap: 6px;
-  /* 默认收起，鼠标悬停卡片时整块展开 */
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  margin-top: -14px; /* 收起时抵消父级 gap，卡片保持紧凑 */
-  transition: max-height 0.28s cubic-bezier(0.16, 1, 0.3, 1),
-              opacity 0.2s ease,
-              margin-top 0.28s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.account-overview-card:hover .acc-card-actions,
-.account-overview-card:focus-within .acc-card-actions {
-  max-height: 140px;
-  opacity: 1;
-  margin-top: 0;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
 }
 
 .acc-card-actions .btn {
-  width: 100%;
   justify-content: center;
   white-space: nowrap;
   font-size: 11.5px;
   padding: 6px 8px;
+}
+
+.acc-card-actions .btn-run-single {
+  flex: 1.2;
+}
+
+.acc-card-actions .btn-sync-single,
+.acc-card-actions .btn-view-acc {
+  flex: 1;
+}
+
+.acc-more-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.btn-more-actions {
+  padding: 6px 8px !important;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.acc-more-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  background: var(--modal-bg);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 6px;
+  min-width: 175px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(20px);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.acc-more-dropdown.show {
+  display: flex;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+  width: 100%;
+  text-align: left;
+}
+
+.dropdown-item:hover {
+  background: var(--card-hover);
+  color: var(--accent);
+}
+
+.dropdown-sep {
+  height: 1px;
+  background: var(--border-color);
+  margin: 3px 0;
+}
+
+.btn-danger-soft {
+  background: rgba(239, 68, 68, 0.15);
+  color: #F87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.btn-danger-soft:hover {
+  background: rgba(239, 68, 68, 0.28);
+  color: #FCA5A5;
 }
 
 /* 触屏设备没有 hover，按钮常驻展开 */
@@ -1399,8 +1690,83 @@ body {
 /* Hero Grid */
 .hero-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 185px), 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+/* 待领取额外积分卡片 (点击可领) */
+.hero-claimable-card {
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.hero-claimable-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 8px 24px rgba(56, 189, 248, 0.2);
+}
+
+.hero-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.hero-claim-action {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(56, 189, 248, 0.12);
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.hero-claimable-card:hover .hero-claim-action {
+  background: var(--primary);
+  color: #fff;
+}
+
+.hero-claimable {
+  color: #38BDF8;
+}
+
+.hero-streak-card .hero-streak-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hero-streak-stamps {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #F59E0B;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.stamps-mini-bar {
+  width: 100%;
+  height: 4px;
+  background: var(--card-inner);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 2px 0 2px 0;
+}
+
+.stamps-mini-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #F59E0B, #FBBF24);
+  border-radius: 999px;
+  transition: width 0.4s ease;
 }
 
 .hero-card {
@@ -2561,7 +2927,7 @@ body {
 
 /* Modern CSS Container Queries (Fluid Resizing for App Container) */
 @container app (max-width: 900px) {
-  .hero-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) !important; }
+  .hero-grid { grid-template-columns: repeat(2, 1fr) !important; }
   .task-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important; }
   .bottom-grid { grid-template-columns: 1fr !important; }
   .browser-metric-row { grid-template-columns: repeat(3, 1fr) !important; }
@@ -2569,10 +2935,9 @@ body {
 
 @container app (max-width: 768px) {
   .header { padding: 14px 16px !important; border-radius: 16px !important; gap: 10px !important; }
-  .header-top-bar, .header-toolbar { flex-direction: column !important; align-items: flex-start !important; gap: 10px !important; }
-  .header-actions, .header-telemetry-group { width: 100% !important; justify-content: flex-start !important; flex-wrap: wrap !important; }
+  .header-top-bar { flex-direction: column !important; align-items: flex-start !important; gap: 10px !important; }
+  .header-right-group { width: 100% !important; justify-content: flex-start !important; flex-wrap: wrap !important; }
   .hero-grid { grid-template-columns: repeat(2, 1fr) !important; }
-  .hero-card:last-child { grid-column: span 2 !important; }
   .task-grid { grid-template-columns: 1fr !important; }
   .browser-metric-row { grid-template-columns: repeat(2, 1fr) !important; }
 }
@@ -2591,7 +2956,6 @@ body {
   .account-selector-bar { width: 100% !important; padding-bottom: 2px !important; flex-wrap: nowrap !important; overflow-x: auto !important; }
   .account-chip { font-size: 11.5px !important; padding: 6px 11px !important; }
 
-  .header-telemetry-group { gap: 5px !important; }
   .sys-metrics-pill { font-size: 10px !important; padding: 4px 8px !important; gap: 5px !important; }
   .refresh-countdown { font-size: 10px !important; padding: 4px 8px !important; }
 
@@ -2631,14 +2995,19 @@ body {
 
 /* Universal Responsive Adaptation (Desktop to iPhone 375px) */
 @media (max-width: 1140px) {
-  .header-top-bar { flex-wrap: wrap; }
-  .header-actions { width: 100%; justify-content: flex-end; }
-  .header-toolbar { flex-wrap: wrap; }
-  .header-telemetry-group { width: 100%; justify-content: flex-end; }
+  .header-top-bar { flex-wrap: nowrap; gap: 10px; }
+  .header-right-group { flex-shrink: 0; flex-wrap: nowrap; gap: 8px; }
+}
+
+@media (max-width: 860px) {
+  .header-top-bar { flex-wrap: wrap; gap: 10px; }
+  .header-right-group { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
+  .ms-context-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .ms-toolbar-actions { width: 100%; justify-content: flex-end; }
 }
 
 @media (max-width: 900px) {
-  .hero-grid { grid-template-columns: repeat(3, 1fr); }
+  .hero-grid { grid-template-columns: repeat(2, 1fr); }
   .task-grid { grid-template-columns: repeat(2, 1fr); }
   .bottom-grid { grid-template-columns: 1fr; }
   .browser-metric-row { grid-template-columns: repeat(3, 1fr); }
@@ -2648,11 +3017,10 @@ body {
   body { padding: 16px 14px; }
   .app-container, .main-content { gap: 20px; }
   .header { padding: 14px 16px; border-radius: 16px; gap: 10px; }
-  .header-top-bar, .header-toolbar { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .header-actions, .header-telemetry-group { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .header-top-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .header-right-group { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .account-selector-bar { flex-wrap: nowrap; overflow-x: auto; }
   .hero-grid { grid-template-columns: repeat(2, 1fr); }
-  .hero-card:last-child { grid-column: span 2; }
   .task-grid { grid-template-columns: 1fr; }
   .browser-metric-row { grid-template-columns: repeat(2, 1fr); }
 }
@@ -2672,7 +3040,6 @@ body {
   .account-selector-bar { width: 100%; padding-bottom: 2px; flex-wrap: nowrap; overflow-x: auto; }
   .account-chip { font-size: 11.5px; padding: 6px 11px; }
 
-  .header-telemetry-group { gap: 5px; }
   .sys-metrics-pill { font-size: 10px; padding: 4px 8px; gap: 5px; }
   .refresh-countdown { font-size: 10px; padding: 4px 8px; }
 

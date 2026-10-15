@@ -656,6 +656,49 @@ class BrowserManager extends EventEmitter {
 
     return { attempted, completed };
   }
+
+  /**
+   * 打开 rewards.bing.com/dashboard 领取待领取的额外积分
+   */
+  async claimDashboardPoints(acc) {
+    const accName = acc?.name || '当前账号';
+    const execPath = this.getExecutablePath();
+    if (!execPath) return 0;
+
+    let claimed = 0;
+    try {
+      const { context } = await this.launchBrowser(acc);
+      const page = await this.createPage(context);
+      await page.goto('https://rewards.bing.com/dashboard', { waitUntil: 'domcontentloaded', timeout: 35000 });
+      await this.delay(2000);
+
+      const claimBtn = page.locator('button:has-text("可领取"), div:has-text("可领取")').first();
+      if ((await claimBtn.count()) > 0) {
+        const text = await claimBtn.innerText().catch(() => '');
+        const m = text.match(/可领取[\s\S]*?(\d+)/) || text.match(/(\d+)/);
+        const pts = m ? parseInt(m[1], 10) : 0;
+        if (pts > 0) {
+          logger.log('🎁', `账号 [${accName}] 发现 ${pts} 点待领取积分，正在触发自动领取...`, '', accName);
+          await claimBtn.click({ timeout: 5000 }).catch(() => {});
+          await this.delay(1200);
+
+          const confirmBtn = page.locator('button:has-text("领取积分"), button:has-text("待领取")').first();
+          if ((await confirmBtn.count()) > 0) {
+            await confirmBtn.click({ timeout: 5000 }).catch(() => {});
+            await this.delay(2000);
+            claimed = pts;
+            logger.log('🎉', `账号 [${accName}] 成功领取待领积分 +${pts} 分！`, '', accName);
+          }
+        }
+      }
+      await this.commitBrowserSession();
+      await this.closeBrowser();
+    } catch (e) {
+      logger.log('🟡', `账号 [${accName}] 领取待领积分异常: ${e.message}`, '', accName);
+      await this.closeBrowser();
+    }
+    return claimed;
+  }
 }
 
 export const browserManager = new BrowserManager();

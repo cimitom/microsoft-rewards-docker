@@ -17,6 +17,7 @@ export class TaskManager {
   constructor() {
     this.running = false;
     this.runningAccountId = null;
+    this.lastUnifiedReportDate = 0;
     this.stats = this.loadStats();
   }
 
@@ -33,6 +34,7 @@ export class TaskManager {
       balance: 0,
       startBalance: 0,
       earned: 0,
+      claimablePoints: 0,
       streakDays: 0,
       stamps: { progress: 0, max: 12 },
       lastUpdate: Date.now(),
@@ -426,6 +428,7 @@ export class TaskManager {
     const accountsCfg = configManager.getAccounts();
     let totalEarned = 0;
     let totalBalance = 0;
+    let totalClaimable = 0;
     let maxStreak = 0;
     let totalTasksCount = 0;
     let doneTasksCount = 0;
@@ -436,6 +439,7 @@ export class TaskManager {
       const st = this.ensureAccountStats(cfgAcc.id);
       totalEarned += Number(st.earned || 0);
       totalBalance += Number(st.balance || 0);
+      totalClaimable += Number(st.claimablePoints || 0);
       if ((st.streakDays || 0) > maxStreak) maxStreak = st.streakDays;
       if ((st.stamps?.progress || 0) > stampsProgress) {
         stampsProgress = st.stamps.progress;
@@ -457,6 +461,7 @@ export class TaskManager {
         authDiagnosis: cfgAcc.authDiagnosis || null,
         balance: st.balance || 0,
         earned: st.earned || 0,
+        claimablePoints: Number(st.claimablePoints || 0),
         streakDays: st.streakDays || 0,
         stamps: st.stamps || { progress: 0, max: 12 },
         doneTasks: tDone,
@@ -473,6 +478,7 @@ export class TaskManager {
       totalAccounts: accountsList.length,
       totalEarned,
       totalBalance,
+      totalClaimable,
       maxStreak,
       stamps: { progress: stampsProgress || 0, max: stampsMax || 12 },
       doneTasksCount,
@@ -532,6 +538,29 @@ export class TaskManager {
       this.runningAccountId = null;
     }
     browserManager.stop();
+  }
+
+  /**
+   * 领取 Dashboard 待领取额外积分
+   */
+  async claimPendingPoints(targetAccountId = 'all') {
+    const accounts = configManager.getAccounts().filter(a => a.enabled !== false && a.cookie);
+    const targets = targetAccountId === 'all' ? accounts : accounts.filter(a => a.id === targetAccountId);
+    let totalClaimed = 0;
+    for (const acc of targets) {
+      try {
+        rewardsApi.setCurrentAccount(acc);
+        const pts = await browserManager.claimDashboardPoints(acc);
+        if (pts > 0) {
+          totalClaimed += pts;
+          const st = this.ensureAccountStats(acc.id);
+          st.balance = (st.balance || 0) + pts;
+          st.claimablePoints = 0;
+          this.saveStats();
+        }
+      } catch {}
+    }
+    return totalClaimed;
   }
 
   /**
@@ -1047,6 +1076,13 @@ export class TaskManager {
         } catch (e) {
           failures.push({ name: acc.name || acc.id, error: e.message });
           logger.log('🔴', `账号 [${acc.name || acc.id}] 执行异常，已跳过并继续下一个账号: ${e.message}`, '', acc.name || acc.id);
+          // 失败立刻推送
+          try {
+            await notifier.send(
+              `微软积分打卡异常 [${acc.name || acc.id}]`,
+              `账号 [${acc.name || acc.id}] 自动化打卡任务执行异常：\n❌ ${e.message}\n时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`
+            );
+          } catch {}
         }
 
         // 多账号之间安全随机延时隔离防风控
@@ -1061,11 +1097,25 @@ export class TaskManager {
       const summary = this.computeSummary();
       const reportLines = summary.accountsList.map(a => `• ${a.name}: 今日 +${a.earned} | 余额 ${a.balance} | 连签 ${a.streakDays}天`);
       const failLines = failures.map(f => `• ${f.name}: ❌ ${f.error}`);
-      const summaryMsg = `🎉 全部任务执行完毕！用时 ${elapsed} 秒\n总计今日新增: +${summary.totalEarned} 积分\n总积分余额: ${summary.totalBalance}\n\n${reportLines.join('\n')}`
+      const isSingleRun = !!targetAccountId && targetAccountId !== 'all';
+      const summaryTitle = isSingleRun ? `账号 [${targetList[0]?.name || targetAccountId}] 任务执行完毕` : '全部任务执行完毕';
+      const summaryMsg = `🎉 ${summaryTitle}！用时 ${elapsed} 秒\n总计今日新增: +${summary.totalEarned} 积分\n总积分余额: ${summary.totalBalance}\n\n${reportLines.join('\n')}`
         + (failLines.length > 0 ? `\n\n异常账号 (${failLines.length}):\n${failLines.join('\n')}` : '');
       logger.log('🎉', summaryMsg);
 
-      await notifier.send('微软积分多账号打卡报告', summaryMsg);
+      // 推送规则：失败立刻推送（上面 catch 已发）；成功统一推送（全部账号满额后统一推一次总览，或手动全跑时推）
+      const todayKey = this.getTodayNum();
+      const allFinishedToday = allAccounts.length > 0 && allAccounts.every(acc => {
+        const st = this.ensureAccountStats(acc.id);
+        const tVals = Object.values(st.tasks || {});
+        return tVals.length > 0 && tVals.every(t => t.done || (t.max > 0 && t.progress >= t.max));
+      });
+
+      const shouldSendUnifiedReport = (!isSingleRun && manual) || (allFinishedToday && this.lastUnifiedReportDate !== todayKey);
+      if (shouldSendUnifiedReport) {
+        this.lastUnifiedReportDate = todayKey;
+        await notifier.send('微软积分每日打卡总览报告', summaryMsg);
+      }
       return true;
     } catch (e) {
       logger.log('🔴', `任务执行过程发生异常: ${e.message}`);

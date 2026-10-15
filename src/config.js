@@ -7,6 +7,7 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 // GET /api/config 不再向前端下发凭据明文；前端保存时回传该占位符表示「保持不变」
 export const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
+export const SECRET_CLEAR = '__MSR_SECRET_CLEAR__';
 const SECRET_ACCOUNT_FIELDS = ['cookie', 'authCodeUrl', 'refreshToken', 'accessToken'];
 
 const DEFAULT_CONFIG = {
@@ -317,7 +318,9 @@ class ConfigManager {
       const order = accountData.order !== undefined ? Number(accountData.order) : (existing.order || idx + 1);
       const mergedSecrets = { ...accountData };
       for (const field of SECRET_ACCOUNT_FIELDS) {
-        if (mergedSecrets[field] === SECRET_PLACEHOLDER || mergedSecrets[field] === '') {
+        if (mergedSecrets[field] === SECRET_CLEAR || mergedSecrets[field] === null) {
+          mergedSecrets[field] = '';
+        } else if (mergedSecrets[field] === SECRET_PLACEHOLDER || mergedSecrets[field] === '') {
           mergedSecrets[field] = existing[field] || '';
         }
         delete mergedSecrets[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`];
@@ -477,8 +480,10 @@ class ConfigManager {
           const existing = this.config.accounts.find(a => a.id === acc.id) || this.config.accounts[idx] || {};
           const merged = { ...acc };
           for (const field of SECRET_ACCOUNT_FIELDS) {
-            // 占位符或空值都视为「未改动」：前端不会拿到明文，也就不可能回传明文
-            if (merged[field] === SECRET_PLACEHOLDER || merged[field] === '') {
+            if (merged[field] === SECRET_CLEAR || merged[field] === null) {
+              merged[field] = '';
+            } else if (merged[field] === SECRET_PLACEHOLDER || merged[field] === '') {
+              // 占位符或空值都视为「未改动」：前端不会拿到明文，也就不可能回传明文
               merged[field] = existing[field] || '';
             }
             // 去掉 getPublicConfig() 附加的 hasXxx 派生标记，避免污染落盘配置

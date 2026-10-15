@@ -117,3 +117,45 @@ export function pcXhrHeaders(extra = {}) {
     ...extra
   };
 }
+
+/**
+ * 为无头浏览器 Context 注入 WebGL 常见核显指纹，消除 SwiftShader 软件渲染特征。
+ */
+export async function applyWebGLFingerprint(context) {
+  if (!context?.addInitScript) return;
+  await context.addInitScript(() => {
+    const VENDOR = 'Google Inc. (Intel)';
+    const RENDERER = 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+    const patch = (proto) => {
+      if (!proto || !proto.getParameter) return;
+      const orig = proto.getParameter;
+      proto.getParameter = function (p) {
+        if (p === 37445) return VENDOR;
+        if (p === 37446) return RENDERER;
+        return orig.call(this, p);
+      };
+      proto.getParameter.toString = () => orig.toString();
+    };
+    try {
+      patch(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+      patch(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+    } catch {}
+  });
+}
+
+/**
+ * 创建新页面并使用 CDP Emulation.setUserAgentOverride 一次性对齐指纹
+ */
+export async function createAlignedPage(context) {
+  const page = await context.newPage();
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: PC_USER_AGENT,
+      acceptLanguage: 'zh-CN,zh',
+      platform: PLATFORM.navigator,
+      userAgentMetadata: buildUserAgentMetadata()
+    });
+  } catch {}
+  return page;
+}

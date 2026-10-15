@@ -20,13 +20,19 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.6.2</span>
+            <span class="version-label" id="version-label">v1.6.3</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
             </span>
           </div>
         </div>
+
+        <!-- 顶层功能选项卡（紧凑分段式控制，居中陈列） -->
+        <nav class="app-tabs" id="app-tabs">
+          <button type="button" class="app-tab active" data-tab="ms">🎁 微软积分</button>
+          <button type="button" class="app-tab" data-tab="epic">🎮 Epic 免费游戏</button>
+        </nav>
 
         <div class="header-right-group">
           <!-- 实时硬件监控 (可点击立即刷新) -->
@@ -60,19 +66,19 @@
       </div>
     </header>
 
-    <!-- 顶层功能选项卡：微软积分 / Epic 游戏 / 施工中 -->
-    <nav class="app-tabs" id="app-tabs">
-      <button type="button" class="app-tab active" data-tab="ms">🎁 微软积分</button>
-      <button type="button" class="app-tab" data-tab="epic">🎮 Epic 游戏领取</button>
-      <button type="button" class="app-tab" data-tab="wip">🚧 施工中</button>
-    </nav>
-
     <!-- ===== 选项卡面板：微软积分 ===== -->
     <div class="tab-panel active" id="tab-panel-ms">
 
-    <!-- 微软积分操作工具条（原顶部按钮挪到这里） -->
-    <section class="ms-toolbar">
-      <div class="ms-toolbar-title">🎁 微软积分</div>
+    <!-- 独立专属的多账号切换栏 (支持多账号自动换行，电脑端无需左右滑动) -->
+    <section class="account-selector-section" id="account-selector-section">
+      <div class="account-selector-bar" id="account-selector-bar">
+        <!-- 动态渲染多账号切换卡槽 -->
+      </div>
+    </section>
+
+    <!-- 微软积分操作工具条 (钉在账号栏下方，操作整齐对齐) -->
+    <section class="ms-toolbar" id="ms-toolbar">
+      <div class="ms-toolbar-scope-badge" id="ms-toolbar-scope">👥 全部账号汇总</div>
       <div class="ms-toolbar-actions">
         <button id="btn-sync-status" class="btn btn-secondary btn-sm" title="从微软官网同步今日真实任务完成度">
           <span>🔄</span> 官网同步
@@ -89,16 +95,9 @@
       </div>
     </section>
 
-    <!-- 独立专属的多账号切换卡槽部分 (防止账号多了显示不全，全屏宽度自由横滑) -->
-    <section class="account-selector-section" id="account-selector-section">
-      <div class="account-selector-bar" id="account-selector-bar">
-        <!-- 动态渲染多账号切换卡槽 -->
-      </div>
-    </section>
-
     <!-- 主仪表大屏 -->
     <main class="main-content">
-      <!-- 5 大核心数据卡片 -->
+      <!-- 4 大核心数据卡片 (平衡对称 4 列 / 2x2 网格) -->
       <section class="hero-grid">
         <div class="hero-card">
           <div class="hero-label">今日已增加积分</div>
@@ -110,19 +109,26 @@
           <div class="hero-val" id="stat-balance">--</div>
           <div class="hero-desc">同步微软平台账户积分</div>
         </div>
-        <div class="hero-card">
-          <div class="hero-label">今日任务达成率</div>
-          <div class="hero-val hero-accent" id="stat-percent">0%</div>
-          <div class="hero-desc" id="stat-done-count">0 / 6 项任务完成</div>
+        <div class="hero-card hero-claimable-card" id="hero-claimable-card" role="button" tabindex="0">
+          <div class="hero-label-row">
+            <span class="hero-label">待领取额外积分</span>
+            <span class="hero-claim-action" id="hero-claim-btn-text">立即领取 ➜</span>
+          </div>
+          <div class="hero-val hero-claimable" id="stat-claimable">0 分</div>
+          <div class="hero-desc" id="stat-claimable-desc">点击一键领取平台额外赠分</div>
         </div>
-        <div class="hero-card">
-          <div class="hero-label">连续签到天数</div>
-          <div class="hero-val hero-gold" id="stat-streak">-- 天</div>
-          <div class="hero-desc">全自动打卡连签保护中</div>
-        </div>
-        <div class="hero-card">
-          <div class="hero-label">连签奖励印章进度</div>
-          <div class="hero-val" style="color: #F59E0B;" id="stat-stamps">8 / 12</div>
+        <div class="hero-card hero-streak-card">
+          <div class="hero-label">连续签到与印章</div>
+          <div class="hero-streak-row">
+            <div class="hero-val hero-gold" id="stat-streak">-- 天</div>
+            <div class="hero-streak-stamps" id="stat-stamps-pill" title="连签奖励印章进度">
+              <span class="stamps-icon">🎖️</span>
+              <span class="stamps-text" id="stat-stamps">8 / 12</span>
+            </div>
+          </div>
+          <div class="stamps-mini-bar" title="印章收集进度">
+            <div class="stamps-mini-fill" id="stat-stamps-fill" style="width: 66.6%;"></div>
+          </div>
           <div class="hero-desc" id="stat-stamps-desc">差 4 个集满 1,000 分大奖</div>
         </div>
       </section>
@@ -316,15 +322,21 @@
       <section class="section-card epic-games-section">
         <div class="section-header">
           <div>
-            <div class="section-title"><span>🎮</span> 当前免费游戏</div>
+            <div class="section-title"><span>🎮</span> 官方商城免费游戏</div>
             <div class="section-sub" id="epic-games-updated">等待获取免费游戏列表</div>
           </div>
-          <div class="accounts-header-actions">
+          <div class="epic-games-header-actions">
+            <div class="epic-cycle-pills" id="epic-cycle-pills" title="调整自动巡检商店的周期间隔">
+              <span class="epic-cycle-label">巡检节奏:</span>
+              <button type="button" class="cycle-pill active" data-min="720" title="常规每周一组：每 12 小时检测一次">📅 每周常规 (12h)</button>
+              <button type="button" class="cycle-pill" data-min="60" title="节日大促每天一组：每 1 小时检测一次">🎄 节日每日 (1h)</button>
+              <button type="button" class="cycle-pill" data-min="30" title="极速检测：每 30 分钟检测一次">⚡ 极速 (30m)</button>
+            </div>
             <button class="btn btn-secondary btn-sm" id="btn-epic-refresh-games" title="重新获取 Epic 当前免费游戏">🔄 刷新列表</button>
             <button class="btn btn-primary btn-sm" id="btn-epic-claim-all" title="立即为全部启用账号领取待处理游戏">▶️ 立即领取全部</button>
           </div>
         </div>
-        <div class="epic-games-grid" id="epic-games-list">
+        <div class="epic-games-container" id="epic-games-list">
           <div class="epic-empty">正在准备免费游戏列表...</div>
         </div>
       </section>
@@ -417,15 +429,6 @@
         <div class="epic-records" id="epic-records">
           <div class="epic-empty">暂无领取记录</div>
         </div>
-      </section>
-    </div>
-
-    <!-- ===== 选项卡面板：施工中 ===== -->
-    <div class="tab-panel" id="tab-panel-wip">
-      <section class="section-card wip-card">
-        <div class="wip-icon">🚧</div>
-        <div class="wip-title">施工中</div>
-        <div class="wip-desc">预留位：后续接入其他签到模块</div>
       </section>
     </div>
 
@@ -620,11 +623,16 @@
 
           <div class="form-group">
             <label class="form-label">必应网页端 Cookie (针对当前选中的账号)</label>
-            <div class="secret-field">
-              <input type="password" id="cfg-cookie" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴浏览器 rewards.bing.com 的完整 Cookie">
-              <button type="button" class="secret-toggle" data-target="cfg-cookie" title="显示 / 隐藏 Cookie">👁</button>
+            <div class="input-with-btn">
+              <div class="secret-field">
+                <input type="password" id="cfg-cookie" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴浏览器 rewards.bing.com 的完整 Cookie">
+                <button type="button" class="secret-toggle" data-target="cfg-cookie" title="显示 / 隐藏 Cookie">👁</button>
+              </div>
+              <button type="button" id="btn-test-modal-cookie" class="btn btn-secondary btn-sm" title="测试该 Cookie 有效性与余额">测试有效性</button>
+              <button type="button" id="btn-clear-modal-cookie" class="btn btn-danger-soft btn-sm" title="清空该账号保存的 Cookie">清空</button>
             </div>
             <small class="form-hint" id="cfg-cookie-hint">PC 搜索、每日活动集与桌面任务必备；内容默认隐藏，不会明文展示</small>
+            <div id="cfg-cookie-test-result" style="margin-top: 6px; font-size: 12px;"></div>
           </div>
 
           <div class="form-group">
@@ -634,8 +642,10 @@
                 <input type="password" id="cfg-authcode" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴包含 code= 的完整跳转链接">
                 <button type="button" class="secret-toggle" data-target="cfg-authcode" title="显示 / 隐藏授权码">👁</button>
               </div>
-              <button id="btn-exchange-token" class="btn btn-secondary btn-sm">换取 Token</button>
+              <button type="button" id="btn-exchange-token" class="btn btn-secondary btn-sm">换取 Token</button>
+              <button type="button" id="btn-clear-modal-auth" class="btn btn-danger-soft btn-sm" title="清空该账号保存的授权码与 Token">清空凭据</button>
             </div>
+            <div id="cfg-auth-test-result" style="margin-top: 6px; font-size: 12px;"></div>
           </div>
 
           <div class="form-group">

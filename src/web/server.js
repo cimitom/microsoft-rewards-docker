@@ -18,7 +18,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.6.2';
+const CURRENT_VERSION = '1.6.3';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -477,9 +477,22 @@ export function createServer() {
 
   app.post('/api/accounts', (req, res) => {
     try {
-      const saved = configManager.upsertAccount(req.body);
+      let saved = configManager.upsertAccount(req.body);
       taskManager.ensureAccountStats(saved.id);
-      res.json({ success: true, data: saved });
+      let tokenExchanged = false;
+      if (req.body?.authCodeUrl && String(req.body.authCodeUrl).includes('code=')) {
+        try {
+          authManager.exchangeCodeForToken(req.body.authCodeUrl, saved.id, {
+            name: saved.name,
+            order: saved.order
+          });
+          saved = configManager.getAccount(saved.id) || saved;
+          tokenExchanged = true;
+        } catch (eToken) {
+          logger.log('🟡', `新建账号 [${saved.name}] 自动换取 Token 提示: ${eToken.message}`);
+        }
+      }
+      res.json({ success: true, data: saved, tokenExchanged });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
     }
@@ -536,6 +549,45 @@ export function createServer() {
       const accountId = req.body?.accountId || null;
       const result = await taskManager.runSingleTestSearch(accountId);
       res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  // 领取 Dashboard 额外待领积分 (点击卡片触发)
+  app.post('/api/tasks/claim-points', async (req, res) => {
+    try {
+      const accountId = req.body?.accountId || 'all';
+      if (process.env.EPIC_DEMO === '1' || process.env.MSR_DEMO === '1') {
+        let totalClaimed = 0;
+        const accounts = configManager.getAccounts();
+        const targets = accountId === 'all' ? accounts : accounts.filter(a => a.id === accountId);
+        for (const a of targets) {
+          const st = taskManager.ensureAccountStats(a.id);
+          const pts = Number(st.claimablePoints || 0);
+          if (pts > 0) {
+            totalClaimed += pts;
+            st.balance = (st.balance || 0) + pts;
+            st.earned = (st.earned || 0) + pts;
+            st.claimablePoints = 0;
+            logger.log('🎁', `成功领取账号 [${a.name}] 待领积分 +${pts} 分！`, '', a.name);
+            logger.addTimeline(a.name, `领取额外待领积分 +${pts} 分`);
+          }
+        }
+        taskManager.saveStats();
+        return res.json({
+          success: true,
+          claimed: totalClaimed,
+          message: totalClaimed > 0 ? `成功领取 ${totalClaimed} 点额外积分！` : '当前没有待领取的额外积分'
+        });
+      }
+
+      const claimed = await taskManager.claimPendingPoints(accountId);
+      res.json({
+        success: true,
+        claimed,
+        message: claimed > 0 ? `成功领取 ${claimed} 点额外积分！` : '当前没有待领取的额外积分'
+      });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }
@@ -797,6 +849,7 @@ export function createServer() {
         hasEpicSession: summary.hasEpicSession,
         sessionValid: a.sessionValid ?? null,
         handledGameIds: Object.keys(a.handledGames || {}),
+        handledGames: a.handledGames || {},
         lastVerifyAt: a.lastVerifyAt || 0,
         lastVerifyMessage: a.lastVerifyMessage || '',
         lastClaimAt: a.lastClaimAt || 0,

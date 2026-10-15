@@ -160,7 +160,10 @@ export class Notifier {
 
   async sendTelegram(botToken, chatId, title, text) {
     const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    const message = `*${title}*\n\n${text}`;
+    // Telegram 基础 Markdown 模式下，未配对的下划线 _ 会导致 400 实体解析异常
+    const safeTitle = String(title || '').replace(/(?<!\\)_/g, '\\_');
+    const safeText = String(text || '').replace(/(?<!\\)_/g, '\\_');
+    const message = `*${safeTitle}*\n\n${safeText}`;
     try {
       await networkClient.request({
         url,

@@ -1117,7 +1117,7 @@ export class RewardsApi {
     const mode = cfg.tasks?.searchApi || 'baidu.official';
     const baseWord = SEARCH_POOL[this.randomRange(0, SEARCH_POOL.length - 1)];
     const randomSuffix = Math.random().toString(36).slice(2, 6);
-    let sentence = `${baseWord} ${randomSuffix}`;
+    const fallbackSentence = `${baseWord} ${randomSuffix}`;
 
     if (mode !== 'offline') {
       try {
@@ -1128,15 +1128,17 @@ export class RewardsApi {
             this.hotWordIndex = 0;
           }
         }
-        if (this.hotWordList.length > 0) {
-          sentence = this.hotWordList[this.hotWordIndex++];
-          return sentence.slice(0, 30);
+        if (this.hotWordList.length > 0 && this.hotWordIndex < this.hotWordList.length) {
+          const word = this.hotWordList[this.hotWordIndex++];
+          if (typeof word === 'string' && word.trim()) {
+            return word.trim().slice(0, 30);
+          }
         }
       } catch (e) {
         logger.log('🟡', `热搜词获取接口异常: ${e.message}，切换到离线词池`, '', logger.getAccountContext());
       }
     }
-    return sentence;
+    return fallbackSentence;
   }
 
   /**

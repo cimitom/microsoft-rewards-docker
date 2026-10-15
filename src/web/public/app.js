@@ -487,7 +487,12 @@ function initUIEvents() {
   // 配置中心：一键换取/刷新 Token
   document.getElementById('btn-exchange-token')?.addEventListener('click', async () => {
     const input = document.getElementById('cfg-authcode').value.trim();
-    if (!input) return alert('请先填入包含 code 的链接或授权码');
+    const resDiv = document.getElementById('cfg-auth-test-result');
+    if (!input) {
+      if (resDiv) resDiv.innerHTML = '<span style="color:#EF4444;">请先在输入框中粘贴包含 code= 的跳转链接</span>';
+      return alert('请先填入包含 code 的链接或授权码');
+    }
+    if (resDiv) resDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在向微软官方请求兑换 OAuth Token...</span>';
     const targetId = editingAccountIdInModal || 'acc_1';
     const res = await fetch('/api/auth/exchange-code', {
       method: 'POST',
@@ -495,11 +500,88 @@ function initUIEvents() {
       body: JSON.stringify({ urlOrCode: input, accountId: targetId })
     }).then(r => r.json());
     if (res.success) {
-      alert('Token 换取并保存成功！');
+      if (resDiv) resDiv.innerHTML = '<span style="color:#34D399;">✅ Token 换取并自动保存成功！</span>';
+      document.getElementById('cfg-refresh-token').value = '********';
+      document.getElementById('cfg-authcode').placeholder = '已配置授权码（内容已隐藏）';
+      document.getElementById('cfg-authcode').value = '';
       fetchConfig();
       fetchStatus();
     } else {
-      alert(`换取失败: ${res.message}`);
+      if (resDiv) resDiv.innerHTML = `<span style="color:#EF4444;">❌ 换取失败: ${escapeHtml(res.message)}</span>`;
+    }
+  });
+
+  // 配置中心：单独测试已输入或已配置的 Cookie
+  document.getElementById('btn-test-modal-cookie')?.addEventListener('click', async () => {
+    const input = document.getElementById('cfg-cookie').value.trim();
+    const resDiv = document.getElementById('cfg-cookie-test-result');
+    const targetId = editingAccountIdInModal || 'acc_1';
+    if (resDiv) resDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在请求微软官网验证 Cookie 有效性...</span>';
+    try {
+      const testRes = await fetch('/api/auth/test-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie: input || SECRET_PLACEHOLDER, accountId: targetId })
+      }).then(r => r.json());
+      if (testRes.success && testRes.data?.valid) {
+        if (resDiv) resDiv.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(testRes.data.message)}</span>`;
+      } else {
+        if (resDiv) resDiv.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(testRes.data?.message || testRes.message || 'Cookie 检测无效')}</span>`;
+      }
+    } catch (e) {
+      if (resDiv) resDiv.innerHTML = `<span style="color:#EF4444;">❌ 检测异常: ${escapeHtml(e.message)}</span>`;
+    }
+  });
+
+  // 配置中心：清空该账号保存的 Cookie
+  document.getElementById('btn-clear-modal-cookie')?.addEventListener('click', () => {
+    if (confirm('确定要清空该账号保存的 Cookie 吗？保存配置后生效。')) {
+      const input = document.getElementById('cfg-cookie');
+      input.value = '__MSR_SECRET_CLEAR__';
+      input.placeholder = '已标记清空（点击下方保存配置后生效）';
+      const resDiv = document.getElementById('cfg-cookie-test-result');
+      if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
+    }
+  });
+
+  // 配置中心：清空该账号保存的授权码与 Token
+  document.getElementById('btn-clear-modal-auth')?.addEventListener('click', () => {
+    if (confirm('确定要清空该账号保存的移动端授权码与 Token 吗？保存配置后生效。')) {
+      const input = document.getElementById('cfg-authcode');
+      input.value = '__MSR_SECRET_CLEAR__';
+      input.placeholder = '已标记清空（点击下方保存配置后生效）';
+      document.getElementById('cfg-refresh-token').value = '';
+      const resDiv = document.getElementById('cfg-auth-test-result');
+      if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
+    }
+  });
+
+  // 全局点击关闭卡片操作菜单
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.acc-more-dropdown.show').forEach(m => m.classList.remove('show'));
+  });
+
+  // 点击待领积分卡片一键触发领取
+  document.getElementById('hero-claimable-card')?.addEventListener('click', async () => {
+    const claimBtn = document.getElementById('hero-claim-btn-text');
+    const origText = claimBtn ? claimBtn.innerText : '';
+    if (claimBtn) claimBtn.innerText = '⏳ 领取中...';
+    try {
+      const res = await fetch('/api/tasks/claim-points', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: selectedAccountId })
+      }).then(r => r.json());
+      if (res.success) {
+        alert(`🎉 ${res.message}`);
+        fetchStatus();
+      } else {
+        alert(`领取失败: ${res.message}`);
+      }
+    } catch (e) {
+      alert(`请求异常: ${e.message}`);
+    } finally {
+      if (claimBtn) claimBtn.innerText = origText;
     }
   });
 
@@ -706,7 +788,8 @@ async function handleQuickAddAccount() {
   }).then(r => r.json());
 
   if (res.success) {
-    alert('账号添加成功！');
+    const msg = res.tokenExchanged ? '账号添加成功，且移动端 Token 已自动换取就绪！' : '账号添加成功！';
+    alert(msg);
     closeModal('account-quick-add-modal');
     // 清空表单
     document.getElementById('quick-add-name').value = '';
@@ -798,7 +881,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.6.1';
+  const current = updateInfo?.currentVersion || '1.6.3';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -838,7 +921,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.6.1'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.6.3'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -992,31 +1075,58 @@ function renderDashboard(data) {
   // 3. Hero 5 大卡片数据渲染
   const displayEarned = isAllMode ? (summary?.totalEarned || 0) : (stats.earned || 0);
   const displayBalance = isAllMode ? (summary?.totalBalance || 0) : (stats.balance || 0);
+  const displayClaimable = isAllMode ? Number(summary?.totalClaimable || 0) : Number(stats.claimablePoints || 0);
   const displayStreak = isAllMode ? (summary?.maxStreak || 0) : (stats.streakDays || 0);
-  const displayPercent = isAllMode ? (summary?.overallPercent || 0) : Math.round((Object.values(stats.tasks || {}).filter(t => t.done || (t.max > 0 && t.progress >= t.max)).length / Math.max(1, Object.keys(stats.tasks || {}).length)) * 100);
   const stamps = isAllMode ? (summary?.stamps || { progress: 0, max: 12 }) : (stats.stamps || { progress: 0, max: 12 });
-
-  const doneTasksCount = isAllMode
-    ? (summary?.doneTasksCount || 0)
-    : Object.values(stats.tasks || {}).filter(t => t.done || (t.max > 0 && t.progress >= t.max)).length;
-  const totalTasksCount = isAllMode
-    ? (summary?.totalTasksCount || 6)
-    : Math.max(1, Object.keys(stats.tasks || {}).length);
 
   document.getElementById('stat-earned').innerText = `+${displayEarned}`;
   document.getElementById('stat-balance').innerText = displayBalance.toLocaleString();
-  document.getElementById('stat-percent').innerText = `${displayPercent}%`;
-  document.getElementById('stat-done-count').innerText = `${doneTasksCount} / ${totalTasksCount} 项任务完成`;
+
+  // 卡片 3：待领取额外积分
+  const statClaimable = document.getElementById('stat-claimable');
+  const statClaimableDesc = document.getElementById('stat-claimable-desc');
+  const heroClaimBtn = document.getElementById('hero-claim-btn-text');
+  if (statClaimable) {
+    statClaimable.innerText = `${displayClaimable} 分`;
+    statClaimable.style.color = displayClaimable > 0 ? '#38BDF8' : 'var(--text-muted)';
+  }
+  if (statClaimableDesc) {
+    statClaimableDesc.innerText = displayClaimable > 0
+      ? (isAllMode ? `共 ${displayClaimable} 点待领，点击一键领取` : `当前账号有 ${displayClaimable} 点待领，点击领取`)
+      : '平台额外赠分均已领取完毕';
+  }
+  if (heroClaimBtn) {
+    heroClaimBtn.innerText = displayClaimable > 0 ? '立即领取 ➜' : '已领完';
+    heroClaimBtn.style.opacity = displayClaimable > 0 ? '1' : '0.5';
+  }
+
   document.getElementById('stat-streak').innerText = `${displayStreak} 天`;
 
   const statStamps = document.getElementById('stat-stamps');
   const statStampsDesc = document.getElementById('stat-stamps-desc');
+  const statStampsFill = document.getElementById('stat-stamps-fill');
   if (statStamps) {
     statStamps.innerText = `${stamps.progress || 0} / ${stamps.max || 12}`;
+  }
+  if (statStampsFill) {
+    const sMax = Number(stamps.max || 12) || 12;
+    const sProg = Number(stamps.progress || 0) || 0;
+    const sPct = Math.min(100, Math.max(0, Math.round((sProg / sMax) * 100)));
+    statStampsFill.style.width = `${sPct}%`;
   }
   if (statStampsDesc) {
     const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 0));
     statStampsDesc.innerText = diff > 0 ? `差 ${diff} 个集满 1,000 分大奖` : '1,000 奖励印章已集满！';
+  }
+
+  // 顶部工具条面包屑/范围更新
+  const scopeBadge = document.getElementById('ms-toolbar-scope');
+  if (scopeBadge) {
+    if (isAllMode) {
+      scopeBadge.innerHTML = '👥 全部账号汇总';
+    } else {
+      scopeBadge.innerHTML = `👤 当前账号：${escapeHtml(stats.name || selectedAccountId)}`;
+    }
   }
 
   // 运行按钮提示
@@ -1037,18 +1147,23 @@ function renderDashboard(data) {
   }
 
   if (isAllMode) {
-    // 显示各账号概览卡片矩阵
+    // 汇总模式：显示全账号概览卡片矩阵，隐藏单任务清单（避免在汇总下显示误导的任务列表）
     if (overviewCard) {
       overviewCard.style.display = 'flex';
       renderAccountsOverviewGrid(summary?.accountsList || [], { running, runningAccountId, schedule: data.schedule || {} });
     }
-    if (taskListTitle) {
-      taskListTitle.innerText = `今日全账号综合任务明细`;
+    const taskListSection = document.getElementById('task-list-section');
+    if (taskListSection) {
+      taskListSection.style.display = 'none';
     }
   } else {
-    // 隐藏多账号概览矩阵，聚焦单账号详细任务
+    // 单账号模式：隐藏全账号矩阵，聚焦当前选中账号的专属任务清单
     if (overviewCard) {
       overviewCard.style.display = 'none';
+    }
+    const taskListSection = document.getElementById('task-list-section');
+    if (taskListSection) {
+      taskListSection.style.display = 'block';
     }
     if (taskListTitle) {
       taskListTitle.innerText = `账号 [${escapeHtml(stats.name || '')}] 今日自动化任务进度清单`;
@@ -1285,14 +1400,28 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
       <div class="acc-card-actions">
         <button class="btn btn-primary btn-sm btn-run-single" title="立即运行此账号打卡">▶️ 运行</button>
         <button class="btn btn-secondary btn-sm btn-sync-single" title="从微软官网同步该账号今日真实进度">🔄 刷新</button>
-        <button class="btn btn-secondary btn-sm btn-toggle-single" title="${acc.enabled ? '暂停此账号自动巡检' : '继续此账号自动巡检'}">
-          ${acc.enabled ? '⏸️ 暂停' : '▶️ 继续'}
-        </button>
-        <button class="btn btn-secondary btn-sm btn-test-single-search" title="单独搜索一次 (拟人键盘输入，安全验证)">🔍 单次测搜</button>
-        <button class="btn btn-secondary btn-sm btn-test-single" title="测试该账号登录状态">📋 诊断</button>
-        <button class="btn btn-secondary btn-sm btn-view-acc">详情 ➜</button>
+        <button class="btn btn-secondary btn-sm btn-view-acc" title="进入该账号明细大屏">明细 ➜</button>
+        <div class="acc-more-wrap">
+          <button class="btn btn-secondary btn-sm btn-more-actions" title="更多账号操作">•••</button>
+          <div class="acc-more-dropdown">
+            <button class="dropdown-item btn-test-single-search" title="单独搜索一次 (拟人键盘输入，安全验证)">🔍 单次安全测搜</button>
+            <button class="dropdown-item btn-test-single" title="测试该账号登录状态">📋 账号状态体检</button>
+            <div class="dropdown-sep"></div>
+            <button class="dropdown-item btn-toggle-single">${acc.enabled ? '⏸️ 暂停自动巡检' : '▶️ 恢复自动巡检'}</button>
+          </div>
+        </div>
       </div>
     `;
+
+    const moreBtn = card.querySelector('.btn-more-actions');
+    const moreMenu = card.querySelector('.acc-more-dropdown');
+    moreBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.acc-more-dropdown.show').forEach(m => {
+        if (m !== moreMenu) m.classList.remove('show');
+      });
+      moreMenu?.classList.toggle('show');
+    });
 
     // 绑定卡片上的各快捷按钮
     card.querySelector('.btn-sync-single')?.addEventListener('click', async (e) => {
@@ -1665,6 +1794,10 @@ function loadAccountIntoForm(accId) {
   updateCookieHint(hasCookie);
 
   document.getElementById('cfg-refresh-token').value = acc.refreshToken ? '********' : '';
+  const cookieRes = document.getElementById('cfg-cookie-test-result');
+  if (cookieRes) cookieRes.innerHTML = '';
+  const authRes = document.getElementById('cfg-auth-test-result');
+  if (authRes) authRes.innerHTML = '';
 
   // 拟人化错峰时段
   const slot = acc.timeSlot || { startHour: 9, endHour: 13, randomDelayMin: 60, durationHours: 2 };
@@ -2108,29 +2241,22 @@ async function runAllAccountDiagnosis() {
     return;
   }
 
-  const results = [];
-  for (let i = 0; i < accounts.length; i++) {
-    const acc = accounts[i];
-    setDiagLoading(true, `正在体检账号 [${acc.name || acc.id}] (${i + 1}/${accounts.length})，请稍候...`);
-    try {
-      const res = await fetch('/api/auth/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: acc.id })
-      }).then(r => r.json());
-      if (res.success && res.data) {
-        results.push(res.data);
-      } else {
-        results.push({ accountId: acc.id, accountName: acc.name, error: res.message || '诊断接口异常' });
-      }
-    } catch (e) {
-      results.push({ accountId: acc.id, accountName: acc.name, error: e.message });
+  setDiagLoading(true, '正在批量体检所有账号，请稍候...');
+  try {
+    const res = await fetch('/api/auth/test-all', { method: 'POST' }).then(r => r.json());
+    if (res.success && res.data?.results) {
+      renderAllAccountDiagnosisResults(res.data.results);
+    } else {
+      throw new Error(res.message || '体检接口异常');
     }
+  } catch (e) {
+    const summaryBox = document.getElementById('diag-all-summary');
+    summaryBox.style.display = 'block';
+    summaryBox.innerHTML = `<span style="color:#EF4444;">体检失败: ${escapeHtml(e.message)}</span>`;
+  } finally {
+    setDiagLoading(false);
+    fetchStatus();
   }
-
-  renderAllAccountDiagnosisResults(results);
-  setDiagLoading(false);
-  fetchStatus();
 }
 
 function renderAllAccountDiagnosisResults(results) {
@@ -2357,11 +2483,29 @@ function formatEpicDeadline(value) {
   return `${text} · 剩 ${days} 天`;
 }
 
+function formatEpicUpcomingDeadline(startDate) {
+  if (!startDate) return '即将推出';
+  const d = new Date(startDate);
+  if (Number.isNaN(d.getTime())) return '即将推出';
+  const m = d.getMonth() + 1;
+  const day = d.getDate();
+  const h = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${m}月${day}日 ${h}:${min} 解锁免费`;
+}
+
 function getEpicGameProgress(game) {
+  if (game.isUpcoming) {
+    return { cls: 'pending', text: '预告待开放' };
+  }
   const enabledAccounts = epicAccountCache.filter(a => a.enabled !== false);
-  const handled = enabledAccounts.filter(a => (a.handledGameIds || []).includes(game.id)).length;
+  const handled = enabledAccounts.filter(a => {
+    if ((a.handledGameIds || []).includes(game.id)) return true;
+    if (a.handledGames && (a.handledGames[game.id] || Object.values(a.handledGames).some(v => v.title === game.title))) return true;
+    return false;
+  }).length;
   if (enabledAccounts.length > 0 && handled >= enabledAccounts.length) {
-    return { cls: 'complete', text: `已处理 ${handled}/${enabledAccounts.length}` };
+    return { cls: 'complete', text: `已全入库 (${handled}/${enabledAccounts.length})` };
   }
   if (handled > 0) return { cls: 'partial', text: `已处理 ${handled}/${enabledAccounts.length}` };
   return { cls: 'pending', text: enabledAccounts.length > 0 ? '待领取' : '等待添加账号' };
@@ -2409,6 +2553,28 @@ function initEpicUI() {
   document.getElementById('btn-epic-refresh-games')?.addEventListener('click', () => fetchEpicFreeGames(true));
   document.getElementById('btn-epic-save-settings')?.addEventListener('click', saveEpicSettings);
 
+  // 商店检测周期预设（常规每周 vs 节日每日）
+  document.querySelectorAll('.cycle-pill').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const min = Number(btn.getAttribute('data-min'));
+      document.querySelectorAll('.cycle-pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const intervalInput = document.getElementById('epic-set-interval');
+      if (intervalInput) intervalInput.value = min;
+      try {
+        const res = await fetch('/api/epic/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ checkIntervalMin: min })
+        }).then(r => r.json());
+        if (res.success) {
+          epicSettingsCache = res.data;
+          renderEpicStats();
+        }
+      } catch {}
+    });
+  });
+
   // Epic 页激活时轮询浏览器状态，方便判断是否卡死
   setInterval(() => {
     if (document.getElementById('tab-panel-epic')?.classList.contains('active')) {
@@ -2432,6 +2598,7 @@ async function fetchEpicAccounts() {
     if (res.success) {
       epicAccountCache = res.data || [];
       renderEpicAccounts(epicAccountCache);
+      if (epicGamesCache && epicGamesCache.length > 0) renderEpicGames(epicGamesCache);
     }
   } catch {}
 }
@@ -2514,36 +2681,95 @@ function renderEpicGames(games) {
   const updated = document.getElementById('epic-games-updated');
   if (!list) return;
   epicGamesCache = Array.isArray(games) ? games : [];
-  if (updated) updated.innerText = `更新于 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} · 共 ${epicGamesCache.length} 个`;
+  if (updated) updated.innerText = `更新于 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })} · 共 ${epicGamesCache.length} 款游戏`;
   if (!games || games.length === 0) {
     list.innerHTML = '<div class="epic-empty">当前没有可领取的免费游戏</div>';
     renderEpicStats();
     return;
   }
-  list.innerHTML = games.map(g => {
+
+  const nowFree = epicGamesCache.filter(g => g.isFreeNow !== false && !g.isUpcoming);
+  const upcoming = epicGamesCache.filter(g => g.isUpcoming || g.isFreeNow === false);
+
+  const renderCard = (g) => {
+    const isUpcoming = !!g.isUpcoming;
     const progress = getEpicGameProgress(g);
     const cover = g.image
       ? `<img src="${escapeHtml(g.image)}" alt="${escapeHtml(g.title)}" loading="lazy">`
-      : `<div class="epic-game-cover-fallback"><span>${escapeHtml(getEpicInitial(g.title))}</span><small>FREE GAME</small></div>`;
+      : `<div class="epic-game-cover-fallback"><span>${escapeHtml(getEpicInitial(g.title))}</span><small>${isUpcoming ? 'COMING SOON' : 'FREE GAME'}</small></div>`;
     const link = g.url
-      ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(g.url)}" target="_blank" rel="noopener">打开商店</a>`
+      ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(g.url)}" target="_blank" rel="noopener">${isUpcoming ? '预告页面' : '打开商店'}</a>`
       : '';
+
+    // 悬停各账号在库详情与领取时间
+    const accountRows = (epicAccountCache || []).map(a => {
+      const rec = a.handledGames?.[g.id]
+        || (a.handledGames && Object.values(a.handledGames).find(v => v.title === g.title));
+      let statusCls = 'pending';
+      let label = '⏳ 尚未入库 / 待领取';
+      let timeText = '';
+      if (isUpcoming) {
+        label = '⏳ 尚未解锁 (开放后自动领取)';
+      } else if (rec) {
+        if (rec.status === 'claimed') {
+          statusCls = 'claimed';
+          label = '✅ 自动化已领取';
+          const at = rec.at ? new Date(rec.at).toLocaleString('zh-CN', { hour12: false }) : '';
+          timeText = at ? `领取时间: ${at}` : '';
+        } else if (rec.status === 'owned') {
+          statusCls = 'owned';
+          label = '📦 原已在库中';
+          const at = rec.at ? new Date(rec.at).toLocaleDateString('zh-CN') : '';
+          timeText = at ? `核验于: ${at}` : '';
+        }
+      }
+      return `
+        <div class="epic-tooltip-row">
+          <div class="epic-tooltip-acc ${statusCls}">
+            <span>👤 ${escapeHtml(a.name || a.id)}</span>
+            <span>${escapeHtml(label)}</span>
+          </div>
+          ${timeText ? `<span class="epic-tooltip-time">${escapeHtml(timeText)}</span>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    const deadlineText = isUpcoming
+      ? `<span>⏳</span> ${escapeHtml(formatEpicUpcomingDeadline(g.startDate, g.endDate))}`
+      : `<span>⏳</span> ${escapeHtml(formatEpicDeadline(g.endDate))}`;
+
+    const freeTagCls = isUpcoming ? 'epic-game-free-tag tag-upcoming' : 'epic-game-free-tag tag-now';
+    const freeTagText = isUpcoming ? '即将推出' : '限时免费';
+
     return `
-      <article class="epic-game-card">
+      <article class="epic-game-card${isUpcoming ? ' card-upcoming' : ''}">
+        <div class="epic-game-tooltip">
+          <div class="epic-tooltip-title">${escapeHtml(g.title)} · 各账号在库状态</div>
+          <div class="epic-tooltip-list">
+            ${accountRows || '<div class="epic-tooltip-row"><span class="epic-tooltip-time">暂未配置任何 Epic 账号</span></div>'}
+          </div>
+        </div>
         <div class="epic-game-cover" style="--cover-h: ${getEpicCoverHue(g.title)};">
           ${cover}
-          <span class="epic-game-free-tag">免费领取</span>
+          <span class="${freeTagCls}">${freeTagText}</span>
         </div>
         <div class="epic-game-card-body">
           <div class="epic-game-card-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</div>
-          <div class="epic-game-card-deadline"><span>⏳</span> ${escapeHtml(formatEpicDeadline(g.endDate))}</div>
+          <div class="epic-game-card-deadline">${deadlineText}</div>
         </div>
         <div class="epic-game-card-footer">
           <span class="epic-game-status ${progress.cls}">● ${escapeHtml(progress.text)}</span>
           ${link}
         </div>
       </article>`;
-  }).join('');
+  };
+
+  // 4 款游戏一行陈列（桌面端 4 列紧凑排布，移动端响应式折行）
+  list.innerHTML = `
+    <div class="epic-cards-row">
+      ${epicGamesCache.map(renderCard).join('')}
+    </div>
+  `;
   renderEpicStats();
 }
 
@@ -2705,14 +2931,17 @@ async function claimEpic(accountId) {
 
 async function refreshEpicTab() {
   const list = document.getElementById('epic-games-list');
-  const loadGames = !list?.dataset.loaded ? fetchEpicFreeGames(false) : Promise.resolve();
   await Promise.all([
     loadEpicSettings(),
     fetchEpicAccounts(),
-    fetchEpicStatus(),
-    loadGames
+    fetchEpicStatus()
   ]);
-  if (list) list.dataset.loaded = '1';
+  if (!list?.dataset.loaded) {
+    await fetchEpicFreeGames(false);
+    if (list) list.dataset.loaded = '1';
+  } else if (epicGamesCache && epicGamesCache.length > 0) {
+    renderEpicGames(epicGamesCache);
+  }
   renderEpicStats();
 }
 
@@ -2732,6 +2961,14 @@ async function loadEpicSettings() {
     set('epic-set-retry', s.retryCount ?? 2);
     set('epic-set-retry-interval', s.retryIntervalSec ?? 60);
     set('epic-set-account-gap', s.accountGapSec ?? 20);
+
+    const curMin = Number(s.checkIntervalMin ?? 720);
+    document.querySelectorAll('.cycle-pill').forEach(btn => {
+      const bMin = Number(btn.getAttribute('data-min'));
+      if (bMin === curMin) btn.classList.add('active');
+      else btn.classList.remove('active');
+    });
+
     epicSettingsCache = s;
     renderEpicStats();
   } catch {}
