@@ -297,7 +297,7 @@ function initUIEvents() {
       stopMicrosoftActionPolling();
       if (res.success) {
         updateEpicActionModal({
-          activeIndex: 4,
+          activeIndex: 5,
           progress: 100,
           badge: { text: '测试成功', cls: 'ok' },
           message: '单次测试搜索已完成',
@@ -915,11 +915,13 @@ function openEpicActionModal(title, message, steps = [], activeIndex = 0, showSt
   document.getElementById('epic-action-result').innerText = '';
   const stopBtn = document.getElementById('btn-epic-action-stop');
   if (stopBtn) stopBtn.style.display = showStop ? 'inline-flex' : 'none';
+  const backgroundBtn = document.getElementById('btn-epic-action-background');
+  if (backgroundBtn) backgroundBtn.style.display = 'inline-flex';
   setActionSteps(steps, activeIndex);
   openModal('epic-action-modal');
 }
 
-function updateEpicActionModal({ title, badge, message, progress, activeIndex, result } = {}) {
+function updateEpicActionModal({ title, badge, message, progress, activeIndex, result, final } = {}) {
   if (title) document.getElementById('epic-action-title').innerText = title;
   if (badge) {
     const badgeEl = document.getElementById('epic-action-badge');
@@ -944,6 +946,12 @@ function updateEpicActionModal({ title, badge, message, progress, activeIndex, r
     resultEl.style.display = 'block';
     resultEl.innerText = result;
   }
+  if (final === true || progress === 100) {
+    const stopBtn = document.getElementById('btn-epic-action-stop');
+    const backgroundBtn = document.getElementById('btn-epic-action-background');
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (backgroundBtn) backgroundBtn.style.display = 'none';
+  }
 }
 
 function closeEpicActionModal() {
@@ -952,6 +960,8 @@ function closeEpicActionModal() {
   stopActionProgressTicker();
   const stopBtn = document.getElementById('btn-epic-action-stop');
   if (stopBtn) stopBtn.style.display = 'none';
+  const backgroundBtn = document.getElementById('btn-epic-action-background');
+  if (backgroundBtn) backgroundBtn.style.display = 'inline-flex';
   closeModal('epic-action-modal');
 }
 
@@ -1995,7 +2005,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
         stopMicrosoftActionPolling();
         if (res.success) {
           updateEpicActionModal({
-            activeIndex: 4,
+            activeIndex: 5,
             progress: 100,
             badge: { text: '测试成功', cls: 'ok' },
             message: `账号 [${acc.name}] 单次测试搜索成功`,
@@ -3484,7 +3494,7 @@ async function verifyEpicSession(accountId) {
       const d = res.data || {};
       if (d.valid) {
         updateEpicActionModal({
-          activeIndex: 4,
+          activeIndex: 5,
           progress: 100,
           badge: { text: '会话有效', cls: 'ok' },
           message: '✅ 校验通过：会话有效且处于已登录状态！',
@@ -3615,7 +3625,7 @@ async function claimEpic(accountId) {
     }
 
     updateEpicActionModal({
-      activeIndex: 5,
+      activeIndex: 6,
       progress: 100,
       badge: { text: '领取结束', cls: 'ok' },
       message: '本轮免费游戏领取已全部处理完毕',
