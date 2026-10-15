@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.6.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.6-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -82,6 +82,12 @@
   - **Safari 格式 Cookie 自动规整**：兼容 Safari 复制的换行、制表符及带引号格式，防止 HTTP 请求格式报错；
   - **搜索前登录态守卫**：无头浏览器启动检索前实时校验必应页面登录身份，游客状态主动告警；
   - **单元测试增至 51 个**。
+- 🛡️ **Epic 持久化无头浏览器与交互体验升级 (全新 v1.6.6)**：
+  - **Epic 浏览器会话持久化**：采用 Chromium 持久化 Profile 隔离每个 Epic 账号，保留 Cloudflare 信任指纹与 Cookie，告别无头浏览器冷启动风控；
+  - **人机验证覆盖层自适应状态机**：智能识别 Cloudflare 挑战与验证遮罩，自动处理覆盖层并在必要时优雅跳过，杜绝盲目超时与重复卡顿；
+  - **校验与更新进度弹窗**：彻底替换系统阻塞式弹窗，新增平滑网页对话框与分阶段动态进度条，直观追踪「初始化-打开商城-验证会话-核销订单」完整链路；
+  - **全账号编辑入口与凭据维护**：微软账号卡片、顶部操作栏与任务网格均配备「✏️ 编辑账号」按钮，Cookie 失效时一键覆盖或清空，修改无缝即时生效；
+  - **单元测试增至 55 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；

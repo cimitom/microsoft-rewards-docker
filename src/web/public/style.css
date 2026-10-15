@@ -2302,6 +2302,72 @@ body {
   gap: 10px;
 }
 
+.action-status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.action-progress-track {
+  width: 100%;
+  height: 8px;
+  margin-top: 16px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.action-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0ea5e9, #22c55e);
+  transition: width 0.35s ease;
+}
+
+.action-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.action-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--card-inner);
+  border: 1px solid var(--border-color);
+  color: var(--text-sub);
+  font-size: 12px;
+}
+
+.action-step.active {
+  color: var(--text-main);
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(2, 132, 199, 0.12);
+}
+
+.action-step.done {
+  color: #34D399;
+}
+
+.action-result {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid var(--border-color);
+  white-space: pre-wrap;
+}
+
 /* Tabs & Steps */
 .tabs-nav, .steps-nav {
   display: flex;

@@ -6,6 +6,9 @@ let currentHistoryDays = 7;
 let currentTheme = localStorage.getItem('ms_rewards_theme') || 'auto';
 let selectedAccountId = 'all'; // 'all' 或具体账号 id (如 'acc_1')
 let editingAccountIdInModal = null;
+let editingAccountIdInQuickModal = null;
+let webConfirmResolver = null;
+let epicActionPollTimer = null;
 // 前端日志视图的起始时间：点击「清空」后只显示此后的新日志（后端日志不受影响）
 let logViewSince = 0;
 // 最近一次系统指标（容器 CPU/内存），供浏览器监控卡片复用
@@ -334,15 +337,50 @@ function initUIEvents() {
   document.getElementById('btn-close-words-modal-btn')?.addEventListener('click', () => closeModal('search-words-modal'));
 
   // 新建账号弹窗相关
-  document.getElementById('btn-add-account-card')?.addEventListener('click', () => openModal('account-quick-add-modal'));
+  document.getElementById('btn-add-account-card')?.addEventListener('click', () => openQuickAddAccountModal());
   document.getElementById('btn-close-quick-add')?.addEventListener('click', () => closeModal('account-quick-add-modal'));
   document.getElementById('btn-cancel-quick-add')?.addEventListener('click', () => closeModal('account-quick-add-modal'));
   document.getElementById('btn-save-quick-add')?.addEventListener('click', handleQuickAddAccount);
+
+  // 通用网页确认框
+  document.getElementById('btn-web-confirm-ok')?.addEventListener('click', () => resolveWebConfirm(true));
+  document.getElementById('btn-web-confirm-cancel')?.addEventListener('click', () => resolveWebConfirm(false));
+  document.getElementById('btn-web-confirm-close')?.addEventListener('click', () => resolveWebConfirm(false));
+
+  // Epic 操作进度弹窗
+  document.getElementById('btn-epic-action-close')?.addEventListener('click', closeEpicActionModal);
+  document.getElementById('btn-close-epic-action')?.addEventListener('click', closeEpicActionModal);
+  document.getElementById('btn-epic-action-background')?.addEventListener('click', () => {
+    stopEpicActionPolling();
+    closeModal('epic-action-modal');
+  });
 
   // 向导 Modal (默认创建全新账号，绝不覆盖已有账号)
   document.getElementById('btn-guide').addEventListener('click', openGuideModal);
   document.getElementById('btn-close-guide').addEventListener('click', () => closeModal('guide-modal'));
   document.getElementById('btn-finish-guide').addEventListener('click', () => closeModal('guide-modal'));
+
+  // 顶部与任务清单栏的快捷编辑当前账号按钮
+  document.getElementById('btn-edit-active-account')?.addEventListener('click', () => {
+    const targetId = selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || null);
+    if (targetId) openQuickAddAccountModal(targetId);
+  });
+  document.getElementById('btn-edit-current-account-header')?.addEventListener('click', () => {
+    const targetId = selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || null);
+    if (targetId) openQuickAddAccountModal(targetId);
+  });
+  document.getElementById('btn-quick-clear-cookie')?.addEventListener('click', async () => {
+    const ok = await showWebConfirm('确定要清空该账号保存的 Cookie 吗？保存后生效。', '清空 Cookie 确认');
+    if (!ok) return;
+    quickAddCookieCleared = true;
+    const cookieInput = document.getElementById('quick-add-cookie');
+    if (cookieInput) {
+      cookieInput.value = '（已标记清空，保存后生效）';
+      cookieInput.disabled = true;
+    }
+    const clearBtn = document.getElementById('btn-quick-clear-cookie');
+    if (clearBtn) clearBtn.style.display = 'none';
+  });
 
   // 任务列表标题旁的刷新当前账号进度按钮
   document.getElementById('btn-sync-current-account')?.addEventListener('click', async () => {
@@ -384,7 +422,7 @@ function initUIEvents() {
   });
   document.getElementById('btn-modal-add-acc')?.addEventListener('click', () => {
     closeModal('settings-modal');
-    openModal('account-quick-add-modal');
+    openQuickAddAccountModal();
   });
   document.getElementById('btn-modal-del-acc')?.addEventListener('click', handleDeleteCurrentAccountInModal);
 
@@ -740,6 +778,176 @@ function closeModal(id) {
   document.getElementById(id)?.classList.remove('show');
 }
 
+function showWebConfirm(message, title = '请确认') {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('web-confirm-modal');
+    if (!modal) {
+      resolve(window.confirm(message));
+      return;
+    }
+    document.getElementById('web-confirm-title').innerText = title;
+    document.getElementById('web-confirm-message').innerText = message;
+    webConfirmResolver = resolve;
+    openModal('web-confirm-modal');
+  });
+}
+
+function resolveWebConfirm(value) {
+  closeModal('web-confirm-modal');
+  if (webConfirmResolver) {
+    const resolve = webConfirmResolver;
+    webConfirmResolver = null;
+    resolve(!!value);
+  }
+}
+
+function setActionSteps(steps, activeIndex = 0) {
+  const box = document.getElementById('epic-action-steps');
+  if (!box) return;
+  box.innerHTML = steps.map((step, idx) => {
+    const cls = idx < activeIndex ? 'done' : (idx === activeIndex ? 'active' : '');
+    const icon = idx < activeIndex ? '✓' : (idx === activeIndex ? '●' : '○');
+    return `<div class="action-step ${cls}"><span>${icon}</span><span>${escapeHtml(step)}</span></div>`;
+  }).join('');
+}
+
+function openEpicActionModal(title, message, steps = [], activeIndex = 0) {
+  document.getElementById('epic-action-title').innerText = title;
+  document.getElementById('epic-action-message').innerText = message;
+  document.getElementById('epic-action-badge').className = 'epic-badge idle';
+  document.getElementById('epic-action-badge').innerText = '准备中';
+  document.getElementById('epic-action-progress').style.width = '0%';
+  document.getElementById('epic-action-result').style.display = 'none';
+  document.getElementById('epic-action-result').innerText = '';
+  setActionSteps(steps, activeIndex);
+  openModal('epic-action-modal');
+}
+
+function updateEpicActionModal({ title, badge, message, progress, activeIndex, result } = {}) {
+  if (title) document.getElementById('epic-action-title').innerText = title;
+  if (badge) {
+    const badgeEl = document.getElementById('epic-action-badge');
+    badgeEl.innerText = badge.text || badge;
+    badgeEl.className = `epic-badge ${badge.cls || 'idle'}`;
+  }
+  if (message) document.getElementById('epic-action-message').innerText = message;
+  if (typeof progress === 'number') {
+    document.getElementById('epic-action-progress').style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  }
+  if (typeof activeIndex === 'number') {
+    const steps = [...document.querySelectorAll('#epic-action-steps .action-step')];
+    steps.forEach((el, idx) => {
+      el.classList.toggle('active', idx === activeIndex);
+      el.classList.toggle('done', idx < activeIndex);
+      const icon = el.querySelector('span');
+      if (icon) icon.innerText = idx < activeIndex ? '✓' : (idx === activeIndex ? '●' : '○');
+    });
+  }
+  if (result !== undefined) {
+    const resultEl = document.getElementById('epic-action-result');
+    resultEl.style.display = 'block';
+    resultEl.innerText = result;
+  }
+}
+
+function closeEpicActionModal() {
+  stopEpicActionPolling();
+  closeModal('epic-action-modal');
+}
+
+function stopEpicActionPolling() {
+  if (epicActionPollTimer) {
+    clearInterval(epicActionPollTimer);
+    epicActionPollTimer = null;
+  }
+}
+
+function startEpicActionPolling() {
+  stopEpicActionPolling();
+  const poll = async () => {
+    try {
+      const res = await fetch('/api/epic/status').then(r => r.json());
+      if (!res.success) return;
+      const data = res.data || {};
+      const st = data.state || {};
+      const activeStatuses = ['checking', 'navigating', 'challenge', 'clicking', 'ordering', 'waiting', 'retrying', 'verifying'];
+      const active = !!data.running || !!data.verifying || activeStatuses.includes(st.status);
+      const badgeCls = st.status === 'challenge' ? 'warn' : (active ? 'ok' : 'idle');
+      updateEpicActionModal({
+        badge: { text: EPIC_STATUS_TEXT[st.status] || '执行中', cls: badgeCls },
+        message: st.lastAction || '正在执行...',
+        progress: typeof st.progress === 'number' ? st.progress : undefined
+      });
+    } catch {}
+  };
+  poll();
+  epicActionPollTimer = setInterval(poll, 1000);
+}
+
+let quickAddCookieCleared = false;
+
+function openQuickAddAccountModal(accountId = null) {
+  editingAccountIdInQuickModal = accountId;
+  quickAddCookieCleared = false;
+  const modalTitle = document.getElementById('quick-add-modal-title');
+  const saveBtn = document.getElementById('btn-save-quick-add');
+  const nameInput = document.getElementById('quick-add-name');
+  const orderInput = document.getElementById('quick-add-order');
+  const cookieInput = document.getElementById('quick-add-cookie');
+  const authInput = document.getElementById('quick-add-authcode');
+  const enabledInput = document.getElementById('quick-add-enabled');
+  const cookieHint = document.getElementById('quick-add-cookie-hint');
+  const clearCookieBtn = document.getElementById('btn-quick-clear-cookie');
+
+  if (clearCookieBtn) {
+    clearCookieBtn.style.display = 'none';
+    clearCookieBtn.innerText = '清空已有 Cookie';
+  }
+  if (cookieInput) cookieInput.disabled = false;
+
+  if (accountId) {
+    const acc = currentConfig?.accounts?.find(a => a.id === accountId);
+    if (modalTitle) modalTitle.innerText = `编辑微软账号：${acc?.name || accountId}`;
+    if (saveBtn) saveBtn.innerText = '保存修改';
+    if (nameInput) nameInput.value = acc?.name || '';
+    if (orderInput) orderInput.value = acc?.order !== undefined ? acc.order : 1;
+    if (enabledInput) enabledInput.checked = acc?.enabled !== false;
+    if (cookieInput) {
+      cookieInput.value = '';
+      cookieInput.placeholder = acc?.hasCookie
+        ? '已配置 Cookie（内容已隐藏，留空保持不变，可直接粘贴新 Cookie 覆盖）'
+        : '粘贴该账号 rewards.bing.com 的 Cookie';
+    }
+    if (authInput) {
+      authInput.value = '';
+      authInput.placeholder = acc?.hasAuthCodeUrl || acc?.hasToken
+        ? '已配置移动端凭据（留空保持不变，可粘贴包含 code= 的新跳转链接）'
+        : '粘贴包含 code= 的跳转链接（可选）';
+    }
+    if (cookieHint) cookieHint.innerText = '💡 编辑已有账号时：Cookie 与授权码留空均表示保持原配置不变。';
+    if (clearCookieBtn && acc?.hasCookie) {
+      clearCookieBtn.style.display = 'inline-block';
+    }
+  } else {
+    const nextOrder = (currentConfig?.accounts?.length || 1) + 1;
+    if (modalTitle) modalTitle.innerText = '添加新微软账号';
+    if (saveBtn) saveBtn.innerText = '确认创建并添加';
+    if (nameInput) nameInput.value = `账号 ${nextOrder}`;
+    if (orderInput) orderInput.value = nextOrder;
+    if (enabledInput) enabledInput.checked = true;
+    if (cookieInput) {
+      cookieInput.value = '';
+      cookieInput.placeholder = '粘贴该账号 rewards.bing.com 的 Cookie';
+    }
+    if (authInput) {
+      authInput.value = '';
+      authInput.placeholder = '粘贴包含 code= 的跳转链接（可选）';
+    }
+    if (cookieHint) cookieHint.innerText = '可选填 Cookie 或授权码，稍后也可随时点击「编辑」补充。';
+  }
+  openModal('account-quick-add-modal');
+}
+
 function openGuideModal() {
   const nextOrder = (currentConfig?.accounts?.length || 1) + 1;
   guideDraftAccount = {
@@ -766,42 +974,71 @@ function openGuideModal() {
 
 // 快速新建账号提交
 async function handleQuickAddAccount() {
+  const isEditing = !!editingAccountIdInQuickModal;
   const name = document.getElementById('quick-add-name')?.value.trim();
-  const order = parseInt(document.getElementById('quick-add-order')?.value, 10) || ((currentConfig?.accounts?.length || 1) + 1);
-  const cookie = document.getElementById('quick-add-cookie')?.value.trim();
+  const order = parseInt(document.getElementById('quick-add-order')?.value, 10) || 1;
+  const cookieInput = document.getElementById('quick-add-cookie');
+  const cookieVal = cookieInput?.value.trim();
   const authCodeUrl = document.getElementById('quick-add-authcode')?.value.trim();
+  const enabled = document.getElementById('quick-add-enabled')?.checked !== false;
 
-  if (!name && !cookie) {
+  if (!isEditing && !name && !cookieVal) {
     return alert('请至少填写账号备注名称或粘贴 Cookie');
   }
 
-  const res = await fetch('/api/accounts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: name || '新账号',
-      order,
-      cookie,
-      authCodeUrl,
-      enabled: true
-    })
-  }).then(r => r.json());
+  const payload = {
+    name: name || (isEditing ? '账号' : '新账号'),
+    order,
+    enabled
+  };
+  if (isEditing) {
+    payload.id = editingAccountIdInQuickModal;
+  }
+  if (quickAddCookieCleared) {
+    payload.cookie = '__MSR_SECRET_CLEAR__';
+  } else if (cookieVal && !cookieVal.startsWith('（已标记清空')) {
+    payload.cookie = cookieVal;
+  } else if (!isEditing) {
+    payload.cookie = '';
+  }
 
-  if (res.success) {
-    const msg = res.tokenExchanged ? '账号添加成功，且移动端 Token 已自动换取就绪！' : '账号添加成功！';
-    alert(msg);
-    closeModal('account-quick-add-modal');
-    // 清空表单
-    document.getElementById('quick-add-name').value = '';
-    document.getElementById('quick-add-order').value = '';
-    document.getElementById('quick-add-cookie').value = '';
-    document.getElementById('quick-add-authcode').value = '';
-    // 自动切到新添加的账号
-    selectedAccountId = res.data.id;
-    fetchStatus();
-    fetchConfig();
-  } else {
-    alert(`创建失败: ${res.message}`);
+  if (authCodeUrl) {
+    payload.authCodeUrl = authCodeUrl;
+  } else if (!isEditing) {
+    payload.authCodeUrl = '';
+  }
+
+  try {
+    const res = await fetch('/api/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(r => r.json());
+
+    if (res.success) {
+      const msg = isEditing
+        ? '账号配置已成功更新！'
+        : (res.tokenExchanged ? '账号添加成功，且移动端 Token 已自动换取就绪！' : '账号添加成功！');
+      alert(msg);
+      closeModal('account-quick-add-modal');
+      // 清空表单
+      document.getElementById('quick-add-name').value = '';
+      document.getElementById('quick-add-order').value = '';
+      document.getElementById('quick-add-cookie').value = '';
+      if (document.getElementById('quick-add-cookie')) {
+        document.getElementById('quick-add-cookie').disabled = false;
+      }
+      document.getElementById('quick-add-authcode').value = '';
+      editingAccountIdInQuickModal = null;
+      quickAddCookieCleared = false;
+      selectedAccountId = res.data?.id || (isEditing ? payload.id : 'all');
+      fetchStatus();
+      fetchConfig();
+    } else {
+      alert(`保存失败: ${res.message}`);
+    }
+  } catch (err) {
+    alert(`请求出错: ${err.message}`);
   }
 }
 
@@ -881,7 +1118,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.6.5';
+  const current = updateInfo?.currentVersion || '1.6.6';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -921,7 +1158,7 @@ function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
-    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.6.5'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
+    alert(`✅ 当前运行版本 (v${updateInfo?.currentVersion || '1.6.6'}) 已是最新版本！\n系统后台定时与无头浏览器引擎就绪中。`);
   }
 }
 
@@ -1127,6 +1364,11 @@ function renderDashboard(data) {
     } else {
       scopeBadge.innerHTML = `👤 当前账号：${escapeHtml(stats.name || selectedAccountId)}`;
     }
+  }
+
+  const btnEditActive = document.getElementById('btn-edit-active-account');
+  if (btnEditActive) {
+    btnEditActive.style.display = isAllMode ? 'none' : 'inline-flex';
   }
 
   // 运行按钮提示
@@ -1439,6 +1681,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
         <div class="acc-more-wrap">
           <button class="btn btn-secondary btn-sm btn-more-actions" title="更多账号操作">•••</button>
           <div class="acc-more-dropdown">
+            <button class="dropdown-item btn-edit-account" title="编辑账号信息与 Cookie 凭据">✏️ 编辑账号 / 更新凭据</button>
             <button class="dropdown-item btn-test-single-search" title="单独搜索一次 (拟人键盘输入，安全验证)">🔍 单次安全测搜</button>
             <button class="dropdown-item btn-test-single" title="测试该账号登录状态">📋 账号状态体检</button>
             <div class="dropdown-sep"></div>
@@ -1456,6 +1699,12 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
         if (m !== moreMenu) m.classList.remove('show');
       });
       moreMenu?.classList.toggle('show');
+    });
+
+    card.querySelector('.btn-edit-account')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.acc-more-dropdown.show').forEach(m => m.classList.remove('show'));
+      openQuickAddAccountModal(acc.id);
     });
 
     // 绑定卡片上的各快捷按钮
@@ -2694,7 +2943,7 @@ function renderEpicAccounts(accounts) {
         <div class="epic-account-actions">
           <button class="btn btn-primary btn-sm epic-claim" data-id="${a.id}" title="为这个账号领取">▶️ 领取</button>
           <button class="btn btn-secondary btn-sm epic-verify" data-id="${a.id}" title="校验浏览器会话">🔍 校验</button>
-          <button class="btn btn-secondary btn-sm epic-import" data-id="${a.id}" title="更新浏览器会话">📋 更新</button>
+          <button class="btn btn-secondary btn-sm epic-import" data-id="${a.id}" title="编辑账号名称或更新浏览器会话 Cookie">✏️ 编辑</button>
           <button class="btn btn-secondary btn-sm epic-toggle" data-id="${a.id}" title="${a.enabled ? '停用此账号' : '启用此账号'}">${a.enabled ? '⏸️ 停用' : '▶️ 启用'}</button>
           <button class="btn btn-danger btn-sm epic-delete" data-id="${a.id}" title="删除此账号">🗑️ 删除</button>
         </div>
@@ -2862,7 +3111,13 @@ function openEpicModal(accountId) {
   document.getElementById('epic-modal-title').innerText = acc ? `编辑 Epic 账号：${acc.name}` : '添加 Epic 账号';
   document.getElementById('epic-account-name').value = acc ? acc.name : '';
   document.getElementById('epic-account-name').dataset.accountId = acc ? acc.id : '';
-  document.getElementById('epic-session-input').value = '';
+  const sessionInput = document.getElementById('epic-session-input');
+  if (sessionInput) {
+    sessionInput.value = '';
+    sessionInput.placeholder = acc?.hasSession
+      ? '已配置会话 Cookie（内容已隐藏，留空保持不变，可直接粘贴新 JSON 或 Cookie 覆盖）'
+      : '粘贴 Cookie-Editor 导出的 JSON、Playwright storageState，或 a=1; b=2 形式的 Cookie 串';
+  }
   openModal('epic-account-modal');
 }
 
@@ -2895,7 +3150,17 @@ async function saveEpicAccount() {
 
     closeModal('epic-account-modal');
     await fetchEpicAccounts();
-    alert('Epic 账号已保存');
+    openEpicActionModal(
+      'Epic 账号已保存',
+      session ? '账号备注已更新，并成功导入新会话 Cookie！' : '账号备注名称已成功更新！',
+      ['保存账号信息', session ? '解析并导入 Cookie' : '保留已有会话', '刷新账号列表'],
+      2
+    );
+    updateEpicActionModal({
+      progress: 100,
+      badge: { text: '已保存', cls: 'ok' },
+      result: `账号 [${name || accountId}] 已就绪。\n${session ? '提示：建议点击卡片上的「🔍 校验」按钮通过网页进度弹窗确认会话连通性。' : ''}`
+    });
   } catch (e) {
     alert(`保存失败：${e.message}`);
   }
@@ -2903,13 +3168,69 @@ async function saveEpicAccount() {
 
 async function verifyEpicSession(accountId) {
   const acc = epicAccountCache.find(a => a.id === accountId);
-  if (!confirm(`校验 Epic 账号「${acc?.name || accountId}」的会话是否有效？（会启动一次无头浏览器，约 10 秒）`)) return;
+  const ok = await showWebConfirm(
+    `确定要校验 Epic 账号「${acc?.name || accountId}」的会话吗？\n将启动持久化无头浏览器访问 Epic 官网并实时返回检测进度。`,
+    '校验 Epic 会话'
+  );
+  if (!ok) return;
+
+  openEpicActionModal(
+    `校验 Epic 账号 · ${acc?.name || accountId}`,
+    '正在启动持久化浏览器并检测商城会话...',
+    ['初始化持久化配置', '打开 Epic 商城首页', '检测人机验证与覆盖层', '核验登录状态', '同步更新凭据'],
+    0
+  );
+  startEpicActionPolling();
+
   try {
+    updateEpicActionModal({ activeIndex: 1, message: '正在加载 Epic 商城首页...', progress: 25 });
     const res = await fetch(`/api/epic/accounts/${accountId}/verify`, { method: 'POST' }).then(r => r.json());
-    alert(res.success ? (res.data.valid ? '✅ 会话有效（已登录）' : `❌ ${res.data.message}`) : `校验失败：${res.message}`);
+    stopEpicActionPolling();
+    if (res.success) {
+      const d = res.data || {};
+      if (d.valid) {
+        updateEpicActionModal({
+          activeIndex: 4,
+          progress: 100,
+          badge: { text: '会话有效', cls: 'ok' },
+          message: '✅ 校验通过：会话有效且处于已登录状态！',
+          result: `账号 [${acc?.name || accountId}] 校验成功！\n状态：${d.message}\n已自动保留持久化指纹与 Cookie，可正常执行自动化领取。`
+        });
+      } else if (d.blocked) {
+        updateEpicActionModal({
+          activeIndex: 2,
+          progress: 80,
+          badge: { text: '人机验证拦截', cls: 'warn' },
+          message: '⚠️ 触发 Epic 商店人机验证',
+          result: `提示：${d.message}\n持久化配置文件已保留。如果当前网络环境风险较高，可稍后再试，或通过电脑端将最新有效会话重新导入。`
+        });
+      } else {
+        updateEpicActionModal({
+          activeIndex: 3,
+          progress: 100,
+          badge: { text: '会话失效', cls: 'err' },
+          message: '❌ 会话已失效或未登录',
+          result: `提示：${d.message}\n请在电脑浏览器中登录 store.epicgames.com 后重新导出并粘贴最新 Cookie。`
+        });
+      }
+    } else {
+      updateEpicActionModal({
+        progress: 100,
+        badge: { text: '校验失败', cls: 'err' },
+        message: res.message || '校验失败',
+        result: `失败原因：${res.message || '未知错误'}`
+      });
+    }
     await fetchEpicAccounts();
+    await fetchEpicStatus();
   } catch (e) {
-    alert(`校验异常：${e.message}`);
+    stopEpicActionPolling();
+    updateEpicActionModal({
+      progress: 100,
+      badge: { text: '校验异常', cls: 'err' },
+      message: e.message,
+      result: `请求异常：${e.message}`
+    });
   }
 }
 
@@ -2930,7 +3251,8 @@ async function toggleEpicAccount(accountId) {
 
 async function deleteEpicAccount(accountId) {
   const acc = epicAccountCache.find(a => a.id === accountId);
-  if (!confirm(`确定删除 Epic 账号「${acc?.name || accountId}」吗？`)) return;
+  const ok = await showWebConfirm(`确定删除 Epic 账号「${acc?.name || accountId}」吗？\n该账号的会话与持久化浏览器数据将被一并清理。`, '删除 Epic 账号');
+  if (!ok) return;
   try {
     const res = await fetch(`/api/epic/accounts/${accountId}`, { method: 'DELETE' }).then(r => r.json());
     if (!res.success) alert(res.message || '删除失败');
@@ -2944,21 +3266,71 @@ async function claimEpic(accountId) {
   const label = accountId
     ? `Epic 账号「${epicAccountCache.find(a => a.id === accountId)?.name || accountId}」`
     : '全部已启用的 Epic 账号';
-  if (!confirm(`立即为${label}领取当前免费游戏？会启动无头浏览器，可能持续 1~2 分钟。`)) return;
+  const ok = await showWebConfirm(
+    `立即为${label}领取当前免费游戏？\n系统将启动持久化无头浏览器自动完成订单，弹窗将实时跟踪当前步数。`,
+    '领取 Epic 免费游戏'
+  );
+  if (!ok) return;
+
   const btn = accountId ? null : document.getElementById('btn-epic-claim-all');
   const orig = btn ? btn.innerHTML : '';
   if (btn) btn.innerHTML = '⏳ 领取中...';
+
+  openEpicActionModal(
+    `免费游戏自动领取 · ${label}`,
+    '正在检查免费游戏列表与各账号在库状态...',
+    ['检查本周免费游戏', '启动持久化浏览器', '进入游戏商品页', '处理人机验证覆盖层', '确认并提交订单', '核销入库结果'],
+    0
+  );
+  startEpicActionPolling();
+
   try {
     const res = await fetch('/api/epic/claim', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(accountId ? { accountId } : {})
     }).then(r => r.json());
+    stopEpicActionPolling();
+
     if (!res.success) throw new Error(res.message || '领取失败');
+
+    const data = res.data || {};
+    let resultText = '';
+    const results = data.results || [];
+    if (results.length > 0) {
+      const blocks = [];
+      results.forEach(group => {
+        const title = group.accountName ? `【账号: ${group.accountName}】` : '';
+        const items = (group.results || []).map(r => {
+          const icon = r.ok ? '✅' : (r.status === 'blocked' ? '🛡️' : '❌');
+          return `  ${icon} ${r.title}：${r.message || (r.ok ? '成功' : '失败')}`;
+        });
+        if (group.error) items.push(`  ⚠️ 异常：${group.error}`);
+        blocks.push(`${title}\n${items.join('\n') || '  (无需处理的游戏)'}`);
+      });
+      resultText = blocks.join('\n\n');
+    } else {
+      resultText = '本轮执行完毕，所有游戏均无需重复领取。';
+    }
+
+    updateEpicActionModal({
+      activeIndex: 5,
+      progress: 100,
+      badge: { text: '领取结束', cls: 'ok' },
+      message: '本轮免费游戏领取已全部处理完毕',
+      result: resultText
+    });
+
     await fetchEpicAccounts();
     await fetchEpicStatus();
   } catch (e) {
-    alert(`领取异常：${e.message}`);
+    stopEpicActionPolling();
+    updateEpicActionModal({
+      progress: 100,
+      badge: { text: '领取异常', cls: 'err' },
+      message: e.message,
+      result: `领取异常：${e.message}`
+    });
   } finally {
     if (btn) btn.innerHTML = orig;
   }

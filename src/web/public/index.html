@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.6.5</span>
+            <span class="version-label" id="version-label">v1.6.6</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -85,6 +85,9 @@
         </button>
         <button id="btn-check-account" class="btn btn-secondary btn-sm" title="体检当前选中的账号">
           <span>🔍</span> 账号体检
+        </button>
+        <button id="btn-edit-active-account" class="btn btn-secondary btn-sm" title="编辑当前选中的账号信息与 Cookie 凭据" style="display: none;">
+          <span>✏️</span> 编辑账号
         </button>
         <button id="btn-guide" class="btn btn-secondary btn-sm" title="添加新账号配置向导">
           <span>💡</span> 配置向导
@@ -171,6 +174,9 @@
             </button>
             <button class="btn btn-secondary btn-sm" id="btn-sync-current-account" title="从微软官网同步当前账号今日真实任务进度">
               <span>🔄</span> 刷新此账号进度
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btn-edit-current-account-header" title="修改此账号的备注名称或重新粘贴 Cookie">
+              <span>✏️</span> 编辑此账号
             </button>
             <div class="section-sub" id="last-update-time">
               最后更新：--
@@ -940,11 +946,11 @@
     </div>
   </div>
 
-  <!-- 快速添加新账号弹窗 (Modal) -->
+  <!-- 快速添加 / 编辑微软账号弹窗 (Modal) -->
   <div class="modal-backdrop" id="account-quick-add-modal">
     <div class="modal-box" style="max-width: 520px;">
       <div class="modal-header">
-        <div class="modal-title"><span>➕</span> 添加新微软账号</div>
+        <div class="modal-title"><span>➕</span> <span id="quick-add-modal-title">添加新微软账号</span></div>
         <button class="btn-close" id="btn-close-quick-add">&times;</button>
       </div>
       <div class="modal-body">
@@ -959,17 +965,68 @@
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">必应网页端 Cookie (可选，可稍后填写)</label>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="form-label" style="margin-bottom: 0;">必应网页端 Cookie (可选)</label>
+            <button type="button" class="btn btn-danger-soft btn-sm" id="btn-quick-clear-cookie" style="display: none; padding: 2px 8px; font-size: 11px;">清空已有 Cookie</button>
+          </div>
           <textarea id="quick-add-cookie" class="form-textarea" rows="3" placeholder="粘贴该账号 rewards.bing.com 的 Cookie"></textarea>
+          <small class="form-hint" id="quick-add-cookie-hint">编辑账号时留空表示保留原 Cookie。</small>
         </div>
         <div class="form-group">
           <label class="form-label">移动端授权码链接 / Code (可选)</label>
           <input type="text" id="quick-add-authcode" class="form-input" placeholder="粘贴该账号登录后跳转的包含 code= 链接">
         </div>
+        <div class="form-group">
+          <label class="form-label checkbox-label">
+            <input type="checkbox" id="quick-add-enabled" checked> 启用该账号自动打卡与巡检
+          </label>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-cancel-quick-add">取消</button>
         <button class="btn btn-primary" id="btn-save-quick-add">确认创建并添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用操作进度弹窗 (Modal) -->
+  <div class="modal-backdrop" id="epic-action-modal">
+    <div class="modal-box" style="max-width: 560px;">
+      <div class="modal-header">
+        <div class="modal-title"><span>⏳</span> <span id="epic-action-title">正在执行</span></div>
+        <button class="btn-close" id="btn-close-epic-action">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="action-status-row">
+          <span class="epic-badge idle" id="epic-action-badge">准备中</span>
+          <span id="epic-action-message">正在准备...</span>
+        </div>
+        <div class="action-progress-track">
+          <div class="action-progress-fill" id="epic-action-progress" style="width: 0%;"></div>
+        </div>
+        <div class="action-steps" id="epic-action-steps"></div>
+        <div class="action-result" id="epic-action-result" style="display: none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-epic-action-background">后台运行</button>
+        <button class="btn btn-primary" id="btn-epic-action-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用网页确认弹窗 (替代 window.confirm) -->
+  <div class="modal-backdrop" id="web-confirm-modal">
+    <div class="modal-box" style="max-width: 480px;">
+      <div class="modal-header">
+        <div class="modal-title"><span>❓</span> <span id="web-confirm-title">请确认</span></div>
+        <button class="btn-close" id="btn-web-confirm-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="web-confirm-message" style="font-size: 13px; line-height: 1.75;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-web-confirm-cancel">取消</button>
+        <button class="btn btn-primary" id="btn-web-confirm-ok">确定</button>
       </div>
     </div>
   </div>
