@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.6.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.6.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -75,6 +75,13 @@
   - **打孔卡推进历史悬停浮层**：为每周桌面专属任务与月度打孔卡新增悬停浮层，清晰呈现每一步的完成时间戳（如 `10/14 18:34 已完成 · 服装季来了`），支持同天多步与跨天状态无损继承；
   - **移除打孔卡全天硬锁**：优化打孔卡触发机制与重试冷却，支持满 24 小时后智能续接打卡；
   - **单元测试增至 47 个**。
+- 🎃 **打孔卡多子任务连环执行与 Cookie 跨浏览器兼容 (全新 v1.6.5)**：
+  - **打孔卡站内激活自适应**：支持无 URL 跳转的站内活动激活（如万圣节 `Activate quest`），精准识别激活状态并推进打卡；
+  - **多子任务连环执行**：单次进入打孔卡页面后，自动遍历并执行所有已解锁且立即可做的子任务（如壁纸下载、AI 工具探索、专题服装搜索、装饰搜索等），避免卡死在长周期未满任务上；
+  - **防丢卡防闪退加固**：网络偶发抖动或未返回 Flight 流时严格保留已有打孔卡，杜绝刷新时卡片闪烁消失；
+  - **Safari 格式 Cookie 自动规整**：兼容 Safari 复制的换行、制表符及带引号格式，防止 HTTP 请求格式报错；
+  - **搜索前登录态守卫**：无头浏览器启动检索前实时校验必应页面登录身份，游客状态主动告警；
+  - **单元测试增至 51 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright 无头浏览器驱动网页完成；

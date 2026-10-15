@@ -429,6 +429,7 @@ export class RewardsApi {
             mobMax = pts.mobile?.max ?? 0;
             mobCur = pts.mobile?.progress ?? 0;
             dailyOffer = pts.dailyOffer ?? 0;
+            searchQuotaFound = true;
           } catch {}
         }
 
@@ -496,6 +497,7 @@ export class RewardsApi {
         // 动态解析官网「任务」区域全部打孔卡（自适应 1 个、2 个或多个）
         const quests = this.extractQuests(clean);
         const desktopApp = quests.find(q => q.title.includes('桌面') || q.title.includes('RewardsApp')) || {
+          title: "桌面奖励应用每周专属任务",
           progress: 0,
           max: 8,
           expiresText: '',
@@ -528,8 +530,8 @@ export class RewardsApi {
           balance,
           todayPoints,
           claimablePoints,
-          pc: { progress: pcCur, max: pcMax },
-          mobile: { progress: mobCur, max: mobMax },
+          pc: searchQuotaFound ? { progress: pcCur, max: pcMax } : null,
+          mobile: searchQuotaFound ? { progress: mobCur, max: mobMax } : null,
           readProgress,
           readMax,
           dailyOffer,

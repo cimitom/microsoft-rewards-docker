@@ -324,7 +324,8 @@ export class TaskManager {
         }
 
         // 3. 动态同步官方「任务」区全部打孔卡（自适应 1 个、2 个或多个）
-        const questList = Array.isArray(info.quests) && info.quests.length > 0
+        const hasOfficialQuests = Array.isArray(info.quests) && info.quests.length > 0;
+        const questList = hasOfficialQuests
           ? info.quests
           : [info.desktopApp, info.monthlyQuest].filter(Boolean);
 
@@ -379,11 +380,13 @@ export class TaskManager {
             };
           });
 
-          // 移除已下线或不存在的多余打孔卡，保证与官网 100% 同步联动
-          for (const key of Object.keys(accStats.tasks)) {
-            if (key !== 'sign' && key !== 'read' && key !== 'search' && key !== 'dailySet' && key !== 'promos') {
-              if (!currentQuestKeys.has(key)) {
-                delete accStats.tasks[key];
+          // 仅在明确获取到了官方确切的任务列表时，才移除下线活动；若未拿到列表则完整保留已有卡片
+          if (hasOfficialQuests) {
+            for (const key of Object.keys(accStats.tasks)) {
+              if (key !== 'sign' && key !== 'read' && key !== 'search' && key !== 'dailySet' && key !== 'promos') {
+                if (!currentQuestKeys.has(key)) {
+                  delete accStats.tasks[key];
+                }
               }
             }
           }

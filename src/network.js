@@ -28,6 +28,29 @@ function isMicrosoftHost(url) {
   }
 }
 
+/**
+ * 规整化 Cookie 字符串，兼容 Safari / Chrome / Edge 不同的复制格式。
+ * 移除多余换行符、制表符与重复分号，防止 Node.js http 抛出 Invalid character in header。
+ */
+export function normalizeCookieString(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  return raw
+    .split(/[\r\n]+/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      // 兼容 Safari 表格复制格式：name \t value
+      if (line.includes('\t') && !line.includes('=')) {
+        const cols = line.split('\t');
+        return `${cols[0].trim()}=${cols[1].trim()}`;
+      }
+      return line;
+    })
+    .join('; ')
+    .replace(/;\s*;/g, ';')
+    .trim();
+}
+
 class NetworkClient {
   constructor() {
     this.cookieJar = new Map();
@@ -36,10 +59,9 @@ class NetworkClient {
   }
 
   setActiveCookie(cookieStr) {
-    // null = 未指定账号（回退到默认账号）；空字符串 = 该账号确实没有 Cookie。
-    // 之前用 `cookieStr || null` 会把空 Cookie 变成 null，导致「没有 Cookie 的账号」
-    // 悄悄拿第一个账号的 Cookie 去操作，等于跑错号。
-    this.activeCookie = (cookieStr === undefined || cookieStr === null) ? null : String(cookieStr);
+    this.activeCookie = (cookieStr === undefined || cookieStr === null)
+      ? null
+      : normalizeCookieString(String(cookieStr));
   }
 
   /** 读取当前生效的账号 Cookie（null 表示「未指定账号，走默认账号回退」） */
@@ -57,7 +79,8 @@ class NetworkClient {
 
   parseAndStoreCookies(cookieStr, domain = 'bing.com') {
     if (!cookieStr || typeof cookieStr !== 'string') return;
-    const parts = cookieStr.split(';');
+    const normalized = normalizeCookieString(cookieStr);
+    const parts = normalized.split(';');
     for (const part of parts) {
       const trimmed = part.trim();
       if (!trimmed) continue;

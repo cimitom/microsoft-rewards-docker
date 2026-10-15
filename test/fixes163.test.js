@@ -10,7 +10,8 @@ process.env.MSR_DATA_DIR = tmpDir;
 const { default: configManager, SECRET_PLACEHOLDER, SECRET_CLEAR } = await import('../src/config.js');
 const { default: rewardsApi } = await import('../src/core/api.js');
 const { default: scheduler } = await import('../src/scheduler.js');
-const { default: networkClient } = await import('../src/network.js');
+const { default: networkClient, normalizeCookieString } = await import('../src/network.js');
+const { default: browserManager } = await import('../src/core/browser.js');
 const { TaskManager } = await import('../src/core/taskManager.js');
 
 test('SECRET_CLEAR 和 null 可以彻底清空凭据，而不是被旧值复原', () => {
@@ -227,4 +228,57 @@ test('TaskManager 根据官网动态增删打孔卡卡片', () => {
     rewardsApi.getRewardsInfo = origGetRewards;
     rewardsApi.checkStreak = origStreak;
   });
+});
+
+test('Safari 格式 Cookie 自动规整化与解析测试', () => {
+  // 模拟 Safari 换行与表格制表符复制
+  const safariRaw = `
+    MUID\t36AE7B3059EA689620DD6E8158C269DF
+    _U\t"1XDZ_Sample_Auth_Cookie"
+    _RwBf\trc=180&rb=180
+  `;
+  const normalized = normalizeCookieString(safariRaw);
+  assert.ok(!normalized.includes('\n'), '规整化后不得包含换行符');
+  assert.match(normalized, /MUID=36AE7B3059EA689620DD6E8158C269DF/);
+  assert.match(normalized, /_U="1XDZ_Sample_Auth_Cookie"/);
+
+  const parsed = browserManager.parseCookies(safariRaw);
+  assert.equal(parsed.length, 3);
+  assert.equal(parsed[0].name, 'MUID');
+  assert.equal(parsed[1].name, '_U');
+  assert.equal(parsed[1].value, '1XDZ_Sample_Auth_Cookie', '双引号应被自动剥离');
+});
+
+test('官网打孔卡列表瞬时为空时，不得误删已有打孔卡（防闪烁防丢卡）', async () => {
+  const tm = new TaskManager();
+  const accId = 'acc_preserve_test';
+  const accCfg = { id: accId, name: '防闪烁测试账号', cookie: 'MOCK_COOKIE' };
+  tm.ensureAccountStats(accId);
+
+  const mockInfo = {
+    todayPoints: 50,
+    quests: [
+      { title: '桌面奖励应用每周专属任务', progress: 4, max: 8, points: 20 },
+      { title: '十月必看五大亮点', progress: 2, max: 5, points: 50 },
+      { title: 'A 50-point Halloween treat', progress: 1, max: 6, points: 50 }
+    ]
+  };
+
+  const origGetRewards = rewardsApi.getRewardsInfo;
+  rewardsApi.getRewardsInfo = async () => mockInfo;
+
+  try {
+    await tm.syncAccountOfficialStatus(accCfg, { owned: true });
+    const st1 = tm.ensureAccountStats(accId);
+    assert.ok(st1.tasks.quest_halloween, '初始应包含万圣节卡片');
+
+    // 模拟下一次网络拉取由于未加载完 Flight 流导致 quests 为空
+    mockInfo.quests = [];
+    await tm.syncAccountOfficialStatus(accCfg, { owned: true });
+    const st2 = tm.ensureAccountStats(accId);
+    assert.ok(st2.tasks.quest_halloween, '瞬时空响应严禁清空万圣节卡片');
+    assert.ok(st2.tasks.monthlyQuest, '瞬时空响应严禁清空月度打孔卡');
+  } finally {
+    rewardsApi.getRewardsInfo = origGetRewards;
+  }
 });
