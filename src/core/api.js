@@ -300,11 +300,18 @@ export class RewardsApi {
   async getRewardsInfo(maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const html = await networkClient.request({
-          url: 'https://rewards.bing.com/earn',
-          headers: pcPageHeaders()
-        });
-        const clean = String(html).replace(/\\"/g, '"');
+        const [html, dashHtml] = await Promise.all([
+          networkClient.request({
+            url: 'https://rewards.bing.com/earn',
+            headers: pcPageHeaders()
+          }),
+          networkClient.request({
+            url: 'https://rewards.bing.com/dashboard',
+            headers: pcPageHeaders()
+          }).catch(() => '')
+        ]);
+        const clean = String(html || '').replace(/\\"/g, '"');
+        const cleanDash = String(dashHtml || '').replace(/\\"/g, '"');
         let balance = 0;
         let pcMax = 60, pcCur = 0, mobMax = 0, mobCur = 0;
         let dailyOffer = 0;
@@ -428,10 +435,60 @@ export class RewardsApi {
           stampsProgress = parseInt(stampMatch[2], 10) || 8;
         }
 
+        // 平台待领取额外积分提取（位于 /dashboard 顶部卡片）
+        let claimablePoints = 0;
+        const claimableMatch = cleanDash.match(/可领取<\/p>[\s\S]*?class="text-pageHeader">(\d[\d,]*)</i)
+          || cleanDash.match(/alt="可领取"[^>]*>[\s\S]*?(\d[\d,]*)/i);
+        if (claimableMatch) {
+          claimablePoints = parseInt(claimableMatch[1].replace(/,/g, ''), 10) || 0;
+        }
+
         // 连续打卡任务（必应搜索 / 每日活动 / 必应应用）的真实状态。
         // 这三项是「升级活动」的完成条件，必须如实展示，避免把没做的事标成已完成。
         const streaks = {};
+
+        // 优先从 dashboard 页面解析连签任务状态（微软改版后连签卡片以 dashboard 为准）
+        const appCheckMatch = cleanDash.match(/必应应用连续打卡[\s\S]*?签到:\s*(\d+)\/(\d+)/i)
+          || cleanDash.match(/移动应用[\s\S]*?签到:\s*(\d+)\/(\d+)/i);
+        if (appCheckMatch) {
+          const done = parseInt(appCheckMatch[1], 10);
+          const total = parseInt(appCheckMatch[2], 10);
+          const mDays = cleanDash.match(/已完成连续打卡\s*(\d+)\s*天/);
+          streaks['bingapp'] = {
+            completedDays: mDays ? parseInt(mDays[1], 10) : done,
+            currentDay: done,
+            activitiesCompleted: done,
+            activitiesTotal: total,
+            isCurrentDayCompleted: done >= total
+          };
+        }
+
+        const dsCheckMatch = cleanDash.match(/每日连续打卡活动[\s\S]*?活动:\s*(\d+)\/(\d+)/i)
+          || cleanDash.match(/每日活动[\s\S]*?活动:\s*(\d+)\/(\d+)/i);
+        if (dsCheckMatch) {
+          const done = parseInt(dsCheckMatch[1], 10);
+          const total = parseInt(dsCheckMatch[2], 10);
+          streaks['dailyset'] = {
+            activitiesCompleted: done,
+            activitiesTotal: total,
+            isCurrentDayCompleted: done >= total
+          };
+        }
+
+        const searchCheckMatch = cleanDash.match(/必应搜索连续打卡[\s\S]*?搜索:\s*(\d+)\/(\d+)/i);
+        if (searchCheckMatch) {
+          const done = parseInt(searchCheckMatch[1], 10);
+          const total = parseInt(searchCheckMatch[2], 10);
+          streaks['bing'] = {
+            activitiesCompleted: done,
+            activitiesTotal: total,
+            isCurrentDayCompleted: done >= total
+          };
+        }
+
+        // 如果 dashboard 没解析到，回退到 earn 页面解析 Flight 模型
         for (const partner of ['bing', 'dailyset', 'bingapp']) {
+          if (streaks[partner]) continue;
           const key = `"partner":"${partner}"`;
           let idx = -1;
           // partner 会出现两次：一次在埋点 data 里，一次在真正的 streak 模型里。
@@ -454,6 +511,7 @@ export class RewardsApi {
         return {
           balance,
           todayPoints,
+          claimablePoints,
           pc: { progress: pcCur, max: pcMax },
           mobile: { progress: mobCur, max: mobMax },
           readProgress,

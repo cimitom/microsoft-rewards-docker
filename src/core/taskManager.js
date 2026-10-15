@@ -335,6 +335,11 @@ export class TaskManager {
           accStats.stamps = info.stamps;
         }
 
+        // 同步官网待领取额外积分
+        if (info.claimablePoints !== undefined) {
+          accStats.claimablePoints = Number(info.claimablePoints || 0);
+        }
+
         // 同步连签任务（必应搜索 / 每日活动 / 必应应用）真实状态。
         // 「必应应用连续打卡」是官网独立展示的一项，脚本 UI 之前完全没有体现，
         // 导致明明没签成功也看不出来，这里如实记录并在未完成时给出提示。
@@ -343,6 +348,8 @@ export class TaskManager {
           const appStreak = info.streaks.bingapp;
           if (appStreak && appStreak.isCurrentDayCompleted === false) {
             logger.log('📱', `必应应用连续打卡今日未完成 (已完成 ${appStreak.completedDays || 0}/7 天)，执行任务时会自动补签`);
+          } else if (appStreak && appStreak.isCurrentDayCompleted === true) {
+            logger.log('📱', `必应应用连续打卡今日已完成 (连签第 ${appStreak.completedDays || 1} 天)`);
           }
         }
 

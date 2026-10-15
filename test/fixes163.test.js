@@ -10,6 +10,7 @@ process.env.MSR_DATA_DIR = tmpDir;
 const { default: configManager, SECRET_PLACEHOLDER, SECRET_CLEAR } = await import('../src/config.js');
 const { default: rewardsApi } = await import('../src/core/api.js');
 const { default: scheduler } = await import('../src/scheduler.js');
+const { default: networkClient } = await import('../src/network.js');
 
 test('SECRET_CLEAR 和 null 可以彻底清空凭据，而不是被旧值复原', () => {
   configManager.upsertAccount({
@@ -74,5 +75,34 @@ test('scheduler 计划落盘与跨实例恢复：已执行状态不丢失', () =
     scheduler.plannedDailyRuns = {};
     scheduler.loadPlans();
     assert.equal(scheduler.plannedDailyRuns[String(today)]?.acc_1?.executed, true, '重启后已执行状态必须保持 true');
+  }
+});
+
+test('getRewardsInfo 解析 dashboard 待领取额外积分与必应应用连签真实状态', async () => {
+  const dashHtml = `
+    <div>
+      <p class="text-labelControl">可领取</p>
+      <img alt="可领取" src="icon.svg">
+      <div class="flex"><p class="text-pageHeader">12</p></div>
+      <p class="text-metadata">领取</p>
+    </div>
+    <button>
+      <p class="text-globalBody2Strong">必应应用连续打卡</p>
+      <div class="sr-only"><div>已完成连续打卡 3 天，共 7 天。</div></div>
+      <div class="line-clamp-2">签到: 1/1</div>
+    </button>
+  `;
+  const origRequest = networkClient.request;
+  networkClient.request = async (opt) => {
+    if (opt.url.includes('/dashboard')) return dashHtml;
+    return '<script>self.__next_f.push([1,"x:\\"pointsCounters\\":{\\"pc\\":{\\"max\\":60,\\"progress\\":60}}"])</script>';
+  };
+  try {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.equal(info.claimablePoints, 12, '待领取额外积分应解析为 12');
+    assert.equal(info.streaks.bingapp.isCurrentDayCompleted, true, '签到 1/1 应判定为当日已完成');
+    assert.equal(info.streaks.bingapp.completedDays, 3);
+  } finally {
+    networkClient.request = origRequest;
   }
 });
