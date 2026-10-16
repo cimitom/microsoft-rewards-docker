@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -97,18 +97,26 @@
   - **单元测试增至 57 个**。
 - 🚀 **Epic Firefox 引擎、任务卡片执行与全网页交互 (全新 v1.7.0)**：
   - **Epic 切换 Playwright Firefox**：微软继续使用 Chromium + Patchright，Epic 使用 Firefox + 持久化 profile + stealth，两个引擎可独立并行；
-  - **Firefox 可见浏览器与 noVNC**：默认在 Xvfb 虚拟显示中运行可见 Firefox，遇到人机验证时可通过 `6080` 端口进入可见浏览器手动完成；
+  - **Firefox 可见浏览器与 noVNC**：默认在 Xvfb 虚拟显示中运行可见 Firefox，遇到人机验证时可在 WebUI 内嵌小窗中手动完成；
   - **Epic 实时操作日志**：校验与领取弹窗新增实时日志窗口，持续显示打开商城、检测验证、等待结账、点击添加到库等当前动作；
   - **微软任务卡片点击执行**：点击双端签入、新闻阅读、搜索或打孔卡卡片，会立即执行一次对应动作并返回前后进度；
   - **所有系统弹窗网页化**：全量移除 `alert/confirm/prompt`，统一使用网页确认框、进度框与结果明细；
   - **单元测试增至 58 个**。
+- 🪟 **noVNC 内嵌小窗与内置 Firefox 登录 (v1.7.1)**：
+  - noVNC 通过现有 `5308` 端口反向代理，不再依赖宿主机额外映射 `6080`；
+  - Epic 可见浏览器改为 WebUI 内嵌小窗，无需跳转新页面；
+  - Epic 账号登录改为在内置可见 Firefox 中完成，登录后直接保存 storageState 与持久化 profile，不再要求复制 Cookie；
+  - 保存登录凭据后自动关闭登录窗口并刷新账号状态；
+  - 登录窗口打开期间会占用该账号的 Firefox profile，领取与校验自动让路，避免并发打开同一个 profile；
+  - 登录窗口超过 `EPIC_LOGIN_TIMEOUT_MIN`（默认 30 分钟）未保存会自动关闭并释放资源，设为 `0` 可关闭该保护；
+  - noVNC 静态资源与 WebSocket 升级握手都走与 WebUI 相同的 `server.authPassword`，不会绕过密码。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；
   - 支持多账号，每个账号导入一次浏览器会话即可长期自动领取，并保留最近领取记录。
 - 🦊 **Epic Firefox 可见浏览器与并行运行 (v1.7.0)**：
   - Epic 使用 Firefox + stealth，微软使用 Chromium + Patchright，两个浏览器引擎使用独立资源锁，可并行执行；
-  - Docker 默认启用 Xvfb 可见 Firefox；遇到验证码时打开 `http://<NAS-IP>:6080/vnc.html` 手动处理；
+  - Docker 默认启用 Xvfb 可见 Firefox；遇到验证码时打开 `http://<NAS-IP>:5308/novnc/vnc.html` 手动处理，或直接在 WebUI 中打开内嵌小窗；
   - 可通过 `EPIC_VISIBLE=0` 切回纯无头模式，通过 `NOVNC_PASSWORD` 为可见浏览器设置访问密码。
 - 🖥️ **完全脱离电脑与浏览器**：基于轻量 Docker 容器后台静默常驻，7×24 小时自动巡检。
 - 📊 **现代化 Fluent 毛玻璃 Web 控制台**：

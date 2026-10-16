@@ -895,6 +895,35 @@ function closeModal(id) {
   document.getElementById(id)?.classList.remove('show');
 }
 
+function openNovncModal(title = 'Epic 可见浏览器', { showSave = false } = {}) {
+  const titleEl = document.getElementById('novnc-modal-title');
+  if (titleEl) titleEl.innerText = title;
+  const saveBtn = document.getElementById('btn-novnc-save-login');
+  if (saveBtn) saveBtn.style.display = showSave ? 'inline-flex' : 'none';
+  const frame = document.getElementById('novnc-frame');
+  if (frame) {
+    const base = `${location.origin}/novnc/vnc.html`;
+    frame.src = `${base}?autoconnect=1&resize=scale&path=websockify&reconnect=1&reconnect_delay=1000&t=${Date.now()}`;
+  }
+  openModal('novnc-modal');
+}
+
+function refreshNovncModal() {
+  const frame = document.getElementById('novnc-frame');
+  if (!frame) return;
+  const current = frame.src || `${location.origin}/novnc/vnc.html`;
+  const base = current.split('?')[0];
+  frame.src = `${base}?autoconnect=1&resize=scale&path=websockify&reconnect=1&reconnect_delay=1000&t=${Date.now()}`;
+}
+
+function closeNovncModal() {
+  const frame = document.getElementById('novnc-frame');
+  if (frame) frame.src = 'about:blank';
+  const saveBtn = document.getElementById('btn-novnc-save-login');
+  if (saveBtn) saveBtn.style.display = 'none';
+  closeModal('novnc-modal');
+}
+
 function showWebConfirm(message, title = '请确认') {
   return new Promise((resolve) => {
     const modal = document.getElementById('web-confirm-modal');
@@ -1181,6 +1210,8 @@ async function stopEpicTask() {
       message: res.message || '停止指令已发送',
       progress: 100
     });
+    // 登录窗口也会被 stop() 一并关闭，内嵌小窗此时已无画面，避免留下一个连不上的黑框。
+    closeNovncModal();
     await fetchEpicStatus();
     await fetchEpicAccounts();
   } catch (e) {
@@ -1444,7 +1475,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.0';
+  const current = updateInfo?.currentVersion || '1.7.1';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1490,7 +1521,7 @@ async function handleVersionCheckClick() {
   } else {
     openEpicActionModal(
       '版本检查',
-      `当前运行版本 v${updateInfo?.currentVersion || '1.7.0'} 已是最新版本。`,
+      `当前运行版本 v${updateInfo?.currentVersion || '1.7.1'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', '确认无需更新'],
       3
     );
@@ -3259,13 +3290,20 @@ function renderEpicStats() {
 
 function initEpicUI() {
   document.getElementById('btn-epic-add')?.addEventListener('click', () => openEpicModal(null));
-  document.getElementById('btn-close-epic-modal')?.addEventListener('click', () => closeModal('epic-account-modal'));
-  document.getElementById('btn-cancel-epic-modal')?.addEventListener('click', () => closeModal('epic-account-modal'));
+  document.getElementById('btn-close-epic-modal')?.addEventListener('click', closeEpicAccountModal);
+  document.getElementById('btn-cancel-epic-modal')?.addEventListener('click', closeEpicAccountModal);
   document.getElementById('btn-save-epic-modal')?.addEventListener('click', saveEpicAccount);
+  document.getElementById('btn-epic-open-login')?.addEventListener('click', openEpicLoginWindow);
+  document.getElementById('btn-epic-save-login')?.addEventListener('click', saveEpicLoginWindow);
+  document.getElementById('btn-epic-vnc')?.addEventListener('click', () => openNovncModal('Epic 可见浏览器'));
   document.getElementById('btn-epic-claim-all')?.addEventListener('click', () => claimEpic(null));
   document.getElementById('btn-epic-refresh-games')?.addEventListener('click', () => fetchEpicFreeGames(true));
   document.getElementById('btn-epic-save-settings')?.addEventListener('click', saveEpicSettings);
   document.getElementById('btn-epic-stop')?.addEventListener('click', stopEpicTask);
+  document.getElementById('btn-close-novnc')?.addEventListener('click', closeNovncModal);
+  document.getElementById('btn-close-novnc-btn')?.addEventListener('click', closeNovncModal);
+  document.getElementById('btn-refresh-novnc')?.addEventListener('click', refreshNovncModal);
+  document.getElementById('btn-novnc-save-login')?.addEventListener('click', saveEpicLoginWindow);
 
   // 商店检测周期预设（常规每周 vs 节日每日）
   document.querySelectorAll('.cycle-pill').forEach(btn => {
@@ -3555,22 +3593,34 @@ function openEpicModal(accountId) {
   document.getElementById('epic-modal-title').innerText = acc ? `编辑 Epic 账号：${acc.name}` : '添加 Epic 账号';
   document.getElementById('epic-account-name').value = acc ? acc.name : '';
   document.getElementById('epic-account-name').dataset.accountId = acc ? acc.id : '';
-  const sessionInput = document.getElementById('epic-session-input');
-  if (sessionInput) {
-    sessionInput.value = '';
-    sessionInput.placeholder = acc?.hasSession
-      ? '已配置会话 Cookie（内容已隐藏，留空保持不变，可直接粘贴新 JSON 或 Cookie 覆盖）'
-      : '粘贴 Cookie-Editor 导出的 JSON、Playwright storageState，或 a=1; b=2 形式的 Cookie 串';
+  const openLoginBtn = document.getElementById('btn-epic-open-login');
+  const saveLoginBtn = document.getElementById('btn-epic-save-login');
+  const status = document.getElementById('epic-login-status');
+  if (openLoginBtn) openLoginBtn.disabled = !acc;
+  if (saveLoginBtn) saveLoginBtn.disabled = !acc;
+  if (status) {
+    status.innerText = acc
+      ? (acc.hasSession
+        ? '该账号已有登录凭据。点击“打开可见浏览器登录”可在内置 Firefox 中重新登录，完成后点击保存。'
+        : '该账号尚未登录。请打开可见浏览器完成 Epic 登录，然后点击“我已登录，保存凭据”。')
+      : '请先填写备注名称并保存账号，之后再打开可见浏览器登录。';
   }
   openModal('epic-account-modal');
 }
 
+async function closeEpicAccountModal() {
+  const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
+  if (accountId) {
+    await fetch(`/api/epic/accounts/${accountId}/login-window/close`, { method: 'POST' }).catch(() => {});
+  }
+  closeNovncModal();
+  closeModal('epic-account-modal');
+}
+
 async function saveEpicAccount() {
   const nameEl = document.getElementById('epic-account-name');
-  const sessionEl = document.getElementById('epic-session-input');
   const accountId = nameEl.dataset.accountId || '';
   const name = nameEl.value.trim();
-  const session = sessionEl.value.trim();
 
   if (!name && !accountId) {
     openEpicActionModal('无法保存 Epic 账号', '请先填写账号备注名称。', ['填写账号名称', '重新保存'], 0);
@@ -3586,28 +3636,18 @@ async function saveEpicAccount() {
     }).then(r => r.json());
     if (!res.success) throw new Error(res.message || '保存失败');
 
-    const savedId = res.data?.id || accountId;
-    if (session && savedId) {
-      const sres = await fetch(`/api/epic/accounts/${savedId}/session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session })
-      }).then(r => r.json());
-      if (!sres.success) throw new Error(sres.message || '会话导入失败');
-    }
-
     closeModal('epic-account-modal');
     await fetchEpicAccounts();
     openEpicActionModal(
       'Epic 账号已保存',
-      session ? '账号备注已更新，并成功导入新会话 Cookie！' : '账号备注名称已成功更新！',
-      ['保存账号信息', session ? '解析并导入 Cookie' : '保留已有会话', '刷新账号列表'],
+      '账号备注名称已成功更新！',
+      ['保存账号信息', '保留已有登录凭据', '刷新账号列表'],
       2
     );
     updateEpicActionModal({
       progress: 100,
       badge: { text: '已保存', cls: 'ok' },
-      result: `账号 [${name || accountId}] 已就绪。\n${session ? '提示：建议点击卡片上的「🔍 校验」按钮通过网页进度弹窗确认会话连通性。' : ''}`
+      result: `账号 [${name || accountId}] 已就绪。\n如需登录或更新凭据，请点击卡片上的「✏️ 编辑」，再打开可见浏览器登录。`
     });
   } catch (e) {
     openEpicActionModal('Epic 账号保存失败', e.message, ['保存账号信息', '校验结果'], 0);
@@ -3616,6 +3656,70 @@ async function saveEpicAccount() {
       badge: { text: '保存失败', cls: 'err' },
       result: `保存失败：${e.message}`
     });
+  }
+}
+
+async function openEpicLoginWindow() {
+  const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
+  if (!accountId) {
+    openEpicActionModal('请先保存账号', '请先填写账号备注名称并保存，然后再打开可见浏览器登录。', ['保存账号', '打开登录窗口'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '需要先保存', cls: 'warn' } });
+    return;
+  }
+  openEpicActionModal('正在打开 Epic 登录窗口', '正在容器内启动 Firefox 并打开 Epic 登录页...', ['启动 Firefox', '打开登录页', '等待手动登录'], 0);
+  startActionProgressTicker(15, 75, 10, '正在启动 Firefox 登录窗口...');
+  try {
+    const res = await fetch(`/api/epic/accounts/${accountId}/login-window`, { method: 'POST' }).then(r => r.json());
+    stopActionProgressTicker();
+    if (!res.success) throw new Error(res.message || '打开登录窗口失败');
+    updateEpicActionModal({
+      activeIndex: 3,
+      progress: 100,
+      badge: { text: '等待登录', cls: 'warn' },
+      message: '请在可见浏览器中完成 Epic 登录',
+      result: '登录完成后，回到账号编辑弹窗点击“我已登录，保存凭据”。'
+    });
+    openNovncModal('Epic 登录窗口', { showSave: true });
+    const status = document.getElementById('epic-login-status');
+    if (status) status.innerText = '登录窗口已打开。请在下方小窗完成 Epic 登录，然后点击“我已登录，保存凭据”。';
+  } catch (e) {
+    stopActionProgressTicker();
+    updateEpicActionModal({ progress: 100, badge: { text: '打开失败', cls: 'err' }, message: e.message, result: `打开登录窗口失败：${e.message}` });
+  }
+}
+
+async function saveEpicLoginWindow() {
+  const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
+  if (!accountId) return;
+  openEpicActionModal('正在保存 Epic 登录凭据', '正在检测登录状态并保存 Firefox storageState...', ['检测登录状态', '保存 Cookie 与 profile', '关闭登录窗口'], 0);
+  startActionProgressTicker(20, 85, 10, '正在检测 Epic 登录状态...');
+  try {
+    const res = await fetch(`/api/epic/accounts/${accountId}/login-window/save`, { method: 'POST' }).then(r => r.json());
+    stopActionProgressTicker();
+    if (!res.success) throw new Error(res.message || '保存登录凭据失败');
+    if (res.data?.saved) {
+      closeNovncModal();
+      await fetchEpicAccounts();
+      const status = document.getElementById('epic-login-status');
+      if (status) status.innerText = `登录凭据已保存，共 ${res.data.cookieCount || 0} 条 Cookie。`;
+      updateEpicActionModal({
+        activeIndex: 3,
+        progress: 100,
+        badge: { text: '已保存', cls: 'ok' },
+        message: 'Epic 登录凭据已保存',
+        result: `已保存 ${res.data.cookieCount || 0} 条 Cookie 到内置 Firefox profile。`
+      });
+    } else {
+      updateEpicActionModal({
+        progress: 100,
+        badge: { text: '尚未登录', cls: 'warn' },
+        message: res.data?.message || '尚未检测到登录完成',
+        result: '请在可见浏览器小窗中完成 Epic 登录后再点击保存。'
+      });
+    }
+  } catch (e) {
+    stopActionProgressTicker();
+    updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, message: e.message, result: `保存登录凭据失败：${e.message}` });
   }
 }
 
@@ -3877,6 +3981,7 @@ const EPIC_STATUS_TEXT = {
   waiting: '等待中',
   retrying: '重试中',
   stopping: '停止中',
+  login_window: '等待登录',
   done: '已完成'
 };
 
@@ -3890,8 +3995,8 @@ function renderEpicBrowserStatus(data) {
   epicStatusCache = { ...epicStatusCache, ...(data || {}) };
   const st = data.state || {};
   const running = !!data.running;
-  const activeStatuses = ['checking', 'navigating', 'challenge', 'clicking', 'ordering', 'waiting', 'retrying', 'verifying', 'stopping'];
-  const active = running || data.verifying || activeStatuses.includes(st.status);
+  const activeStatuses = ['checking', 'navigating', 'challenge', 'clicking', 'ordering', 'waiting', 'retrying', 'verifying', 'stopping', 'login_window'];
+  const active = running || data.verifying || !!data.loginWindow?.open || activeStatuses.includes(st.status);
   const label = EPIC_STATUS_TEXT[st.status] || '空闲';
   badge.className = `epic-badge ${st.status === 'stopping' || st.status === 'challenge' ? 'warn' : (active || st.status === 'done' ? 'ok' : 'idle')}`;
   badge.innerText = active ? `● ${label}` : label;
@@ -3906,6 +4011,7 @@ function renderEpicBrowserStatus(data) {
   if (nextCheck) parts.push(`下次检查：${nextCheck}`);
   parts.push(`引擎：${data.engine === 'firefox' ? 'Firefox' : 'Chromium'}`);
   parts.push(data.visible ? '模式：可见浏览器' : '模式：无头');
+  if (data.loginWindow?.open) parts.push('登录窗口：已打开');
   if (data.demo) parts.push('⚠️ 演示模式（不启动浏览器）');
   if (meta) meta.innerText = parts.length > 0 ? parts.join('  ｜  ') : '等待首次检查';
   if (updated) {
@@ -3923,7 +4029,7 @@ function renderEpicBrowserStatus(data) {
   if (vncBtn) {
     if (data.visible) {
       vncBtn.style.display = 'inline-flex';
-      vncBtn.href = `${location.protocol}//${location.hostname}:${data.novncPort || 6080}/vnc.html`;
+      vncBtn.title = '在网页小窗中打开 Epic 可见浏览器';
     } else {
       vncBtn.style.display = 'none';
     }

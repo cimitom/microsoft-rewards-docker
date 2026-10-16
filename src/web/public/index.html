@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.7.0</span>
+            <span class="version-label" id="version-label">v1.7.1</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -416,7 +416,7 @@
               <div class="section-title"><span>🖥️</span> 浏览器状态</div>
               <div class="section-actions-inline">
                 <span id="epic-browser-updated">--</span>
-                <a class="btn btn-secondary btn-sm" id="btn-epic-vnc" style="display: none;" target="_blank" rel="noopener">🖥️ 可见浏览器</a>
+                <button class="btn btn-secondary btn-sm" id="btn-epic-vnc" style="display: none;">🖥️ 可见浏览器</button>
                 <button class="btn btn-danger btn-sm" id="btn-epic-stop" style="display: none;" title="立即停止 Epic 领取任务并释放浏览器资源">
                   ⏹️ 停止 Epic
                 </button>
@@ -1092,14 +1092,35 @@
           <input type="text" id="epic-account-name" class="form-input" placeholder="例如：主号">
         </div>
         <div class="form-group">
-          <label class="form-label">会话 Cookie / storageState</label>
-          <textarea id="epic-session-input" class="form-textarea" rows="6" placeholder="粘贴 Cookie-Editor 导出的 JSON、Playwright storageState，或 a=1; b=2 形式的 Cookie 串"></textarea>
-          <small class="form-hint">会话仅保存在本机配置文件（0600 权限），不会下发到浏览器；编辑已有账号时留空表示不修改。</small>
+          <label class="form-label">内置 Firefox 登录</label>
+          <div class="epic-login-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-epic-open-login">🦊 打开可见浏览器登录</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-epic-save-login">✅ 我已登录，保存凭据</button>
+          </div>
+          <small class="form-hint" id="epic-login-status">登录会在容器内的 Firefox 小窗中完成，登录凭据直接保存在该账号的持久化 profile 中，无需复制 Cookie。</small>
         </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-cancel-epic-modal">取消</button>
         <button class="btn btn-primary" id="btn-save-epic-modal">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- noVNC 可见浏览器内嵌小窗 -->
+  <div class="modal-backdrop" id="novnc-modal">
+    <div class="modal-box" style="max-width: 980px; width: 94vw; height: 82vh;">
+      <div class="modal-header">
+        <div class="modal-title"><span>🖥️</span> <span id="novnc-modal-title">Epic 可见浏览器</span></div>
+        <button class="btn-close" id="btn-close-novnc">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 0; flex: 1; min-height: 0;">
+        <iframe id="novnc-frame" title="Epic Firefox 可见浏览器" style="width: 100%; height: 100%; border: 0; background: #111827;"></iframe>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-refresh-novnc">🔄 刷新画面</button>
+        <button class="btn btn-primary" id="btn-novnc-save-login" style="display: none;">✅ 我已登录，保存凭据</button>
+        <button class="btn btn-primary" id="btn-close-novnc-btn">关闭小窗</button>
       </div>
     </div>
   </div>

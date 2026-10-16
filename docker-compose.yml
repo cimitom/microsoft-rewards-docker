@@ -20,6 +20,8 @@ services:
       - NOVNC_PASSWORD=${NOVNC_PASSWORD:-}
       - NOVNC_PORT=6080
       - VNC_PORT=5900
+      # 登录窗口超过该分钟数未保存则自动关闭；设为 0 关闭保护
+      - EPIC_LOGIN_TIMEOUT_MIN=${EPIC_LOGIN_TIMEOUT_MIN:-30}
     volumes:
       - ./data:/app/data
     logging:

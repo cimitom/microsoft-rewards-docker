@@ -21,6 +21,31 @@ async function bootstrap() {
     logger.log('💡', '如果是 NAS 或 VPS 部署，请访问: http://<服务器局域网或公网IP>:' + port);
   });
 
+  // 将 noVNC WebSocket 升级请求转发到容器内部 websockify。
+  // 注意：升级握手不经过 Express，所以这里要显式复用 Basic 鉴权，
+  // 否则设置了 authPassword 也能直接连上 WebSocket 操作浏览器。
+  if (app.locals?.novncProxy) {
+    server.on('upgrade', (req, socket, head) => {
+      if (!String(req.url || '').startsWith('/websockify')) {
+        socket.destroy();
+        return;
+      }
+      const authorized = typeof app.locals.isBasicAuthSatisfied === 'function'
+        ? app.locals.isBasicAuthSatisfied(req)
+        : true;
+      if (!authorized) {
+        socket.write(
+          'HTTP/1.1 401 Unauthorized\r\n' +
+          'WWW-Authenticate: Basic realm="Microsoft Rewards", charset="UTF-8"\r\n' +
+          'Connection: close\r\n\r\n'
+        );
+        socket.destroy();
+        return;
+      }
+      app.locals.novncProxy.ws(req, socket, head);
+    });
+  }
+
   // 启动后台定时任务
   scheduler.start();
 

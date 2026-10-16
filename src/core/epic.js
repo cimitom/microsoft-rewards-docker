@@ -60,6 +60,10 @@ export class EpicManager {
     this.stopRequested = false;
     this.activeContext = null;
     this.activeAccountId = null;
+    this.loginContext = null;
+    this.loginAccountId = null;
+    this.loginSlotOwner = null;
+    this.loginTimer = null;
     this.runningAccountId = null;
     this.lastRun = null; // { startedAt, finishedAt, results: [] }
     this.lastCheckAt = 0;
@@ -101,7 +105,7 @@ export class EpicManager {
   }
 
   async stop() {
-    const active = this.running || this.checking || this.verifying || !!this.activeContext;
+    const active = this.running || this.checking || this.verifying || !!this.activeContext || !!this.loginContext;
     if (!active) {
       return { stopped: false, message: '当前没有正在运行的 Epic 任务' };
     }
@@ -116,7 +120,145 @@ export class EpicManager {
     if (this.activeContext) {
       await this.activeContext.close().catch(() => {});
     }
+    await this.closeLoginWindow().catch(() => {});
     return { stopped: true, message: '停止指令已发送，浏览器资源即将释放' };
+  }
+
+  /** 登录窗口是否正在占用某个账号的 Firefox 持久化 profile */
+  isLoginWindowOpen() {
+    return !!this.loginContext;
+  }
+
+  /**
+   * 登录窗口会长时间占用该账号的 Firefox profile，期间任何领取/校验都必须让路。
+   * 否则两边会打开同一个 profile 目录，Firefox 会报 "profile in use"，
+   * 领取流程还可能把旧的 storageState 回写，覆盖用户刚完成的登录。
+   */
+  assertLoginWindowClosed(action = '执行 Epic 任务') {
+    if (this.loginContext) {
+      throw new Error(`Epic 登录窗口已打开，请先保存或关闭登录窗口再${action}`);
+    }
+  }
+
+  async openLoginWindow(accountId) {
+    if (this.running || this.checking || this.verifying) {
+      throw new Error('Epic 任务正在运行中，请先停止任务再登录');
+    }
+    if (process.env.EPIC_VISIBLE !== '1') {
+      throw new Error('当前未启用可见浏览器，请设置 EPIC_VISIBLE=1 后重启容器');
+    }
+    const acc = configManager.findEpicAccount(accountId);
+    if (!acc) throw new Error('Epic 账号不存在');
+    await this.closeLoginWindow().catch(() => {});
+
+    const slotOwner = `epic-login:${accountId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const gotSlot = await firefoxSlotLock.acquire(slotOwner, 180000);
+    if (!gotSlot) throw new Error('浏览器资源正被 Epic 任务占用，请稍后再登录');
+
+    let launched;
+    try {
+      launched = await this.launchPersistentContext(acc);
+    } catch (e) {
+      firefoxSlotLock.release(slotOwner);
+      throw e;
+    }
+    this.loginContext = launched.context;
+    this.loginAccountId = accountId;
+    this.loginSlotOwner = slotOwner;
+    this.scheduleLoginWindowTimeout();
+    this.updateState({
+      status: 'login_window',
+      progress: 0,
+      accountName: acc.name,
+      lastAction: `已打开 Epic 登录窗口，请在可见浏览器中完成登录`
+    });
+    const loginUrl = 'https://www.epicgames.com/id/login?lang=zh-CN&noHostRedirect=true&redirectUrl=' + encodeURIComponent(`${STORE_BASE}/free-games`);
+    await launched.page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+    return { opened: true, accountId, loginUrl };
+  }
+
+  /**
+   * 登录窗口是人工操作，用户可能中途关掉页面就再也没回来。
+   * 没有超时的话，这个 Firefox 会一直占着 profile，定时领取永远让路。
+   * 默认 30 分钟自动关闭；EPIC_LOGIN_TIMEOUT_MIN=0 可关闭该保护。
+   */
+  scheduleLoginWindowTimeout() {
+    const minutes = Number(process.env.EPIC_LOGIN_TIMEOUT_MIN ?? 30);
+    this.clearLoginWindowTimeout();
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+    this.loginTimer = setTimeout(() => {
+      logger.log('⏱️', `Epic 登录窗口已超过 ${minutes} 分钟未保存，自动关闭并释放浏览器资源`);
+      this.closeLoginWindow().catch(() => {});
+    }, minutes * 60 * 1000);
+    this.loginTimer.unref?.();
+  }
+
+  clearLoginWindowTimeout() {
+    if (this.loginTimer) {
+      clearTimeout(this.loginTimer);
+      this.loginTimer = null;
+    }
+  }
+
+  async saveLoginWindow(accountId) {
+    if (!this.loginContext || this.loginAccountId !== accountId) {
+      throw new Error('当前没有已打开的登录窗口');
+    }
+    const context = this.loginContext;
+    const page = context.pages()[0] || await context.newPage();
+    const detected = await this.detectLoginCompleted(page);
+    if (!detected.ok) {
+      return { saved: false, reason: detected.reason, message: detected.message };
+    }
+
+    const storageState = await context.storageState();
+    configManager.updateEpicAccount(accountId, {
+      storageState,
+      sessionValid: true,
+      lastVerifyAt: Date.now(),
+      lastVerifyMessage: '通过可见浏览器登录并保存',
+      lastSessionImportAt: Date.now()
+    });
+    await this.closeLoginWindow();
+    return { saved: true, cookieCount: storageState.cookies?.length || 0, message: '登录凭据已保存到内置 Firefox profile' };
+  }
+
+  /**
+   * 登录完成判定：先读商店导航的登录态属性，读不到再复用页面状态识别。
+   * 与人机验证一样，识别不出来时宁可提示用户重试，也不要把未登录状态当成已登录保存。
+   */
+  async detectLoginCompleted(page) {
+    const nav = page.locator('egs-navigation').first();
+    if (await nav.getAttribute('isloggedin', { timeout: 5000 }).catch(() => null) === 'true') {
+      return { ok: true };
+    }
+    await page.goto(`${STORE_BASE}/free-games`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+    if (await nav.getAttribute('isloggedin', { timeout: 8000 }).catch(() => null) === 'true') {
+      return { ok: true };
+    }
+
+    const state = await this.detectPageState(page);
+    if (state.state === 'login') {
+      return { ok: false, reason: 'not-logged-in', message: '尚未检测到 Epic 登录完成，请在可见浏览器中完成登录后再保存' };
+    }
+    if (state.state === 'challenge') {
+      return { ok: false, reason: 'challenge', message: '商店正在人机验证，暂时无法确认登录状态，请稍后重试' };
+    }
+    return { ok: true };
+  }
+
+  async closeLoginWindow() {
+    this.clearLoginWindowTimeout();
+    if (this.loginContext) {
+      await this.loginContext.close().catch(() => {});
+    }
+    this.loginContext = null;
+    this.loginAccountId = null;
+    if (this.loginSlotOwner) {
+      firefoxSlotLock.release(this.loginSlotOwner);
+      this.loginSlotOwner = null;
+    }
+    return { closed: true };
   }
 
   getBrowserProxy() {
@@ -252,6 +394,10 @@ export class EpicManager {
       engine: 'firefox',
       visible: process.env.EPIC_VISIBLE === '1',
       novncPort: Number(process.env.NOVNC_PORT || 6080),
+      loginWindow: {
+        open: !!this.loginContext,
+        accountId: this.loginAccountId
+      },
       runningAccountId: this.runningAccountId,
       lastRun: this.lastRun,
       lastCheckAt: this.lastCheckAt,
@@ -805,6 +951,7 @@ export class EpicManager {
   /** 校验会话是否仍然登录（打开商城首页，区分登录失效与人机验证） */
   async verifySession(accountId) {
     if (this.running || this.checking || this.verifying) throw new Error('Epic 任务正在运行中，请等待完成后再校验');
+    this.assertLoginWindowClosed('校验会话');
     const acc = configManager.findEpicAccount(accountId);
     if (!acc) throw new Error('Epic 账号不存在');
     if (!acc.storageState?.cookies?.length) return { valid: false, message: '尚未导入会话' };
@@ -885,6 +1032,7 @@ export class EpicManager {
    */
   async claimForAccount(accountId, prefetchedGames = null) {
     const runStartedAt = Date.now();
+    this.assertLoginWindowClosed('领取免费游戏');
     const acc = configManager.findEpicAccount(accountId);
     if (!acc) throw new Error('Epic 账号不存在');
     if (!acc.storageState?.cookies?.length) throw new Error('该账号尚未导入会话，请先导入 Cookie');
@@ -1025,6 +1173,7 @@ export class EpicManager {
 
   /** 实际执行全部账号领取（供定时检查内部调用，不再重复做并发判断） */
   async runClaimAll() {
+    this.assertLoginWindowClosed('执行批量领取');
     this.running = true;
     const startedAt = Date.now();
     const allResults = [];
@@ -1089,6 +1238,7 @@ export class EpicManager {
   /** 为单个账号领取（带运行状态保护） */
   async claimOne(accountId) {
     if (this.running || this.checking || this.verifying) throw new Error('Epic 任务正在运行中，请稍后再试');
+    this.assertLoginWindowClosed('领取免费游戏');
     this.running = true;
     this.runningAccountId = accountId;
     const startedAt = Date.now();
@@ -1115,6 +1265,7 @@ export class EpicManager {
   async checkAndClaimIfNeeded() {
     // 防止「定时检查」与「手动领取」互相踩踏
     if (this.running || this.checking || this.verifying) return { skipped: 'busy' };
+    if (this.loginContext) return { skipped: 'login-window' };
     const settings = this.getSettings();
     if (!settings.enabled) return { skipped: 'disabled' };
 

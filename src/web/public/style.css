@@ -2397,6 +2397,13 @@ body {
   white-space: pre-wrap;
 }
 
+.epic-login-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
 /* Tabs & Steps */
 .tabs-nav, .steps-nav {
   display: flex;

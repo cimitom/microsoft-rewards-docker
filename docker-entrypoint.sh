@@ -14,7 +14,8 @@ if [ "${EPIC_VISIBLE:-0}" = "1" ]; then
   fi
 
   websockify -D --web=/usr/share/novnc/ "${NOVNC_PORT:-6080}" "localhost:${VNC_PORT:-5900}"
-  echo "Epic visible browser: http://<host>:${NOVNC_PORT:-6080}/vnc.html"
+  echo "Epic visible browser (WebUI 内嵌小窗): http://<host>:${PORT:-5308}/novnc/vnc.html"
+  echo "Epic visible browser (直连 noVNC):     http://<host>:${NOVNC_PORT:-6080}/vnc.html"
 fi
 
 exec "$@"

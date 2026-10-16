@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import httpProxy from 'http-proxy';
 import { fileURLToPath } from 'url';
 import configManager from '../config.js';
 import logger from '../logger.js';
@@ -18,9 +19,29 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.7.0';
+const CURRENT_VERSION = '1.7.1';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
+
+/**
+ * HTTP Basic 鉴权判定。Express 中间件与 noVNC 的 WebSocket 升级握手共用同一套规则，
+ * 避免出现「页面要密码、WebSocket 不用」的绕过口子。
+ */
+export function isBasicAuthSatisfied(req) {
+  const password = configManager.get()?.server?.authPassword;
+  if (!password) return true;
+
+  const header = req.headers?.authorization || '';
+  if (!header.startsWith('Basic ')) return false;
+  try {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf-8');
+    const sep = decoded.indexOf(':');
+    const pass = sep >= 0 ? decoded.slice(sep + 1) : decoded;
+    return pass === password;
+  } catch {
+    return false;
+  }
+}
 
 // 宿主机整机 CPU 负载率（仅在读不到容器 cgroup 时作为回退值）
 function getHostCpuUsage() {
@@ -282,21 +303,35 @@ export function createServer() {
   // 注意：/api/config 会返回全部账号的 Cookie 与 Token，未设密码时任何能访问该端口的人
   // 都能拿到账号凭据，强烈建议设置密码（尤其是把端口暴露到内网之外时）。
   app.use((req, res, next) => {
-    const password = configManager.get()?.server?.authPassword;
-    if (!password) return next();
-
-    const header = req.headers.authorization || '';
-    if (header.startsWith('Basic ')) {
-      try {
-        const decoded = Buffer.from(header.slice(6), 'base64').toString('utf-8');
-        const sep = decoded.indexOf(':');
-        const pass = sep >= 0 ? decoded.slice(sep + 1) : decoded;
-        if (pass === password) return next();
-      } catch {}
-    }
+    if (isBasicAuthSatisfied(req)) return next();
 
     res.set('WWW-Authenticate', 'Basic realm="Microsoft Rewards", charset="UTF-8"');
     res.status(401).send('需要认证：请在配置中设置 server.authPassword 后使用该密码访问');
+  });
+
+  // noVNC 通过现有 5308 端口反向代理，避免依赖宿主机额外映射 6080。
+  // 必须注册在认证中间件之后：noVNC 能直接操作已登录 Epic 会话的浏览器，
+  // 一旦绕过密码就等于把账号交出去。
+  const novncProxy = httpProxy.createProxyServer({
+    target: `http://127.0.0.1:${process.env.NOVNC_PORT || 6080}`,
+    ws: true,
+    changeOrigin: true
+  });
+  novncProxy.on('error', (err, req, res) => {
+    if (res?.writeHead && !res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`noVNC 代理不可用: ${err.message}`);
+    }
+  });
+  app.locals.novncProxy = novncProxy;
+  // 供 src/index.js 在 WebSocket 升级阶段复用同一套鉴权规则。
+  app.locals.isBasicAuthSatisfied = isBasicAuthSatisfied;
+  // noVNC 静态资源从容器内 /usr/share/novnc 提供（Debian novnc 包默认路径）。
+  app.use('/novnc', express.static(process.env.NOVNC_STATIC_DIR || '/usr/share/novnc'));
+  // 不使用 app.use('/websockify', ...)：express 会剥掉挂载前缀，这里保留原始 URL 再转发。
+  app.use((req, res, next) => {
+    if (!String(req.url || '').startsWith('/websockify')) return next();
+    novncProxy.web(req, res);
   });
 
   app.use(express.json());
@@ -903,6 +938,33 @@ export function createServer() {
       });
       logger.log('🎮', `Epic 账号 [${acc.name}] 会话已导入（${summary.cookieCount} 个 Cookie${summary.hasEpicSession ? '，包含 Epic 登录凭据' : '，⚠️ 未检测到 EPIC 登录 Cookie'}）`, '', acc.name);
       res.json({ success: true, data: summary });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/epic/accounts/:id/login-window', async (req, res) => {
+    try {
+      const result = await epicManager.openLoginWindow(req.params.id);
+      res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/epic/accounts/:id/login-window/save', async (req, res) => {
+    try {
+      const result = await epicManager.saveLoginWindow(req.params.id);
+      res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/epic/accounts/:id/login-window/close', async (req, res) => {
+    try {
+      const result = await epicManager.closeLoginWindow();
+      res.json({ success: true, data: result });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
     }
