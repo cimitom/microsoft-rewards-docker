@@ -1,19 +1,18 @@
 import fs from 'fs';
 import path from 'path';
-import { chromium } from 'patchright-core';
+import { firefox } from 'playwright-firefox';
 import configManager from '../config.js';
 import logger from '../logger.js';
 import networkClient from '../network.js';
-import browserManager from './browser.js';
-import { browserSlotLock } from './contextLock.js';
+import { firefoxSlotLock } from './contextLock.js';
 import { DATA_DIR } from '../fsUtil.js';
-import { PC_USER_AGENT, SEC_CH_UA, PLATFORM, createAlignedPage, applyWebGLFingerprint } from './fingerprint.js';
+import { applyFirefoxStealth } from './firefoxStealth.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
 const STORE_BASE = 'https://store.epicgames.com/zh-CN';
 const STORE_HOME = `${STORE_BASE}/`;
-const EPIC_PROFILE_DIR = path.join(DATA_DIR, 'epic-profiles');
+const EPIC_PROFILE_DIR = path.join(DATA_DIR, 'epic-firefox-profiles');
 const CHALLENGE_TEXT_RE = /verify you are human|确认您是真人|正在验证|checking your browser|cf-mitigated|try again|cloudflare/i;
 const LOGIN_TEXT_RE = /sign in|log in|登录|登入/i;
 export const EPIC_ORDER_BUTTON_RE = /添加到库|添加至库|加入库|Add to Library|下订单|下单|确认订单|结账|Place Order|Checkout/i;
@@ -43,13 +42,10 @@ class EpicStopError extends Error {
   }
 }
 
-// 与积分任务共用同一套浏览器身份，避免同一个出口 IP 上出现两套互相矛盾的指纹
-const UA = PC_USER_AGENT;
-const BROWSER_CLIENT_HINTS = {
-  'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-  'sec-ch-ua': SEC_CH_UA,
-  'sec-ch-ua-mobile': '?0',
-  'sec-ch-ua-platform': PLATFORM.clientHint
+// Epic 使用 Firefox，不能复用 Chromium 的 UA 与 Sec-CH-UA。
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0';
+const FIREFOX_HEADERS = {
+  'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8'
 };
 
 /**
@@ -129,24 +125,20 @@ export class EpicManager {
     return { server: String(cfg.network.proxyUrl).trim() };
   }
 
-  async launchPersistentContext(acc, execPath) {
+  async launchPersistentContext(acc) {
     fs.mkdirSync(epicProfilePath(acc.id), { recursive: true });
     const proxy = this.getBrowserProxy();
-    const context = await chromium.launchPersistentContext(epicProfilePath(acc.id), {
-      executablePath: execPath,
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--no-first-run',
-        '--no-default-browser-check'
-      ],
+    const headless = process.env.EPIC_VISIBLE !== '1';
+    const context = await firefox.launchPersistentContext(epicProfilePath(acc.id), {
+      headless,
       userAgent: UA,
       viewport: { width: 1366, height: 768 },
       locale: 'zh-CN',
       timezoneId: 'Asia/Shanghai',
-      extraHTTPHeaders: BROWSER_CLIENT_HINTS,
+      extraHTTPHeaders: FIREFOX_HEADERS,
+      firefoxUserPrefs: {
+        'webgl.disabled': true
+      },
       storageState: {
         cookies: acc.storageState?.cookies || [],
         origins: acc.storageState?.origins || []
@@ -159,13 +151,10 @@ export class EpicManager {
     if (cookies.length > 0) {
       await context.addCookies(cookies).catch(() => {});
     }
-    await applyWebGLFingerprint(context);
+    await applyFirefoxStealth(context);
 
-    // launchPersistentContext 会自带一个 about:blank 页面，统一清掉后创建对齐页面。
-    for (const p of context.pages()) {
-      await p.close().catch(() => {});
-    }
-    const page = await createAlignedPage(context);
+    const page = context.pages()[0] || await context.newPage();
+    await page.setViewportSize({ width: 1366, height: 768 }).catch(() => {});
     return { context, page };
   }
 
@@ -260,6 +249,9 @@ export class EpicManager {
       running: this.running,
       verifying: this.verifying,
       stopRequested: this.stopRequested,
+      engine: 'firefox',
+      visible: process.env.EPIC_VISIBLE === '1',
+      novncPort: Number(process.env.NOVNC_PORT || 6080),
       runningAccountId: this.runningAccountId,
       lastRun: this.lastRun,
       lastCheckAt: this.lastCheckAt,
@@ -828,12 +820,9 @@ export class EpicManager {
       return { valid, message };
     }
 
-    const execPath = browserManager.getExecutablePath();
-    if (!execPath) throw new Error('未检测到 Chromium 内核');
-
     // 与积分任务的搜索流程共用浏览器资源锁，避免两个 Chromium 同时占内存
     const slotOwner = `epic-verify:${accountId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    const gotSlot = await browserSlotLock.acquire(slotOwner, 180000);
+    const gotSlot = await firefoxSlotLock.acquire(slotOwner, 180000);
     if (!gotSlot) throw new Error('浏览器资源正被积分任务占用，请稍后再试');
     this.throwIfStopped();
     let context = null;
@@ -845,7 +834,7 @@ export class EpicManager {
         accountName: acc.name,
         lastAction: `校验 Epic 账号「${acc.name}」...`
       });
-      const launched = await this.launchPersistentContext(acc, execPath);
+      const launched = await this.launchPersistentContext(acc);
       context = launched.context;
       this.activeContext = context;
       this.activeAccountId = accountId;
@@ -886,7 +875,7 @@ export class EpicManager {
       }
       this.stopRequested = false;
       if (context) await context.close().catch(() => {});
-      browserSlotLock.release(slotOwner);
+      firefoxSlotLock.release(slotOwner);
     }
   }
 
@@ -902,9 +891,6 @@ export class EpicManager {
 
     const settings = this.getSettings();
     const demo = this.isDemo();
-    const execPath = browserManager.getExecutablePath();
-    if (!demo && !execPath) throw new Error('未检测到 Chromium 内核，无法执行领取');
-
     const allGames = prefetchedGames || await this.fetchFreeGames();
     const handled = acc.handledGames || {};
     const pending = allGames.filter(g => g.isFreeNow !== false && !['claimed', 'owned'].includes(handled[g.id]?.status));
@@ -925,11 +911,11 @@ export class EpicManager {
       if (!demo) {
         // 与积分任务的搜索流程共用浏览器资源锁，避免两个 Chromium 同时占内存
         slotOwner = `epic-claim:${accountId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-        const gotSlot = await browserSlotLock.acquire(slotOwner, 180000);
+        const gotSlot = await firefoxSlotLock.acquire(slotOwner, 180000);
         if (!gotSlot) throw new Error('浏览器资源正被积分任务占用，请稍后再试');
         slotHeld = true;
         this.throwIfStopped();
-        const launched = await this.launchPersistentContext(acc, execPath);
+        const launched = await this.launchPersistentContext(acc);
         context = launched.context;
         page = launched.page;
         this.activeContext = context;
@@ -1005,7 +991,7 @@ export class EpicManager {
         this.activeContext = null;
         this.activeAccountId = null;
       }
-      if (slotHeld && slotOwner) browserSlotLock.release(slotOwner);
+      if (slotHeld && slotOwner) firefoxSlotLock.release(slotOwner);
     }
 
     this.recordResults(accountId, results);

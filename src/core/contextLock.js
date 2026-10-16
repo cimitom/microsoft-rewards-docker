@@ -64,11 +64,20 @@ export class AccountContextLock {
 
 export const accountContextLock = new AccountContextLock();
 /**
- * 浏览器资源锁：Chromium 很吃内存，NAS 上同时跑两个实例容易 OOM。
- * 积分任务的搜索/打孔卡与 Epic 领取共用这一把锁，保证同一时刻只有一个浏览器在跑。
+ * Chromium 浏览器资源锁：积分任务的搜索/打孔卡共用这一把锁。
+ * Epic 已改用独立 Firefox 引擎与 firefoxSlotLock，因此可与微软任务并行。
  * 与 accountContextLock 是两件不同的事，不要合并：
  *   - accountContextLock 保护「全局账号上下文」，只在积分任务内部使用；
- *   - browserSlotLock 保护「浏览器这个重资源」，跨模块共用。
+ *   - browserSlotLock 保护微软 Chromium；
+ *   - firefoxSlotLock 保护 Epic Firefox。
  */
 export const browserSlotLock = new AccountContextLock();
+/**
+ * Firefox 浏览器资源锁。
+ *
+ * Epic 改用 Firefox 后，它与微软的 Chromium 是两套独立进程。
+ * 8GB 内存环境允许并行运行，因此这里使用独立锁；低内存部署仍可通过
+ * 上层配置选择串行执行。
+ */
+export const firefoxSlotLock = new AccountContextLock();
 export default accountContextLock;

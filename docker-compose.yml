@@ -12,9 +12,14 @@ services:
     restart: unless-stopped
     ports:
       - "5308:5308"
+      - "6080:6080"
     environment:
       - TZ=Asia/Shanghai
       - PORT=5308
+      - EPIC_VISIBLE=${EPIC_VISIBLE:-1}
+      - NOVNC_PASSWORD=${NOVNC_PASSWORD:-}
+      - NOVNC_PORT=6080
+      - VNC_PORT=5900
     volumes:
       - ./data:/app/data
     logging:

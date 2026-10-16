@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AccountContextLock, accountContextLock, browserSlotLock } from '../src/core/contextLock.js';
+import { AccountContextLock, accountContextLock, browserSlotLock, firefoxSlotLock } from '../src/core/contextLock.js';
 
 test('不同持有者互斥，同一持有者可重入', () => {
   const lock = new AccountContextLock();
@@ -42,4 +42,12 @@ test('账号上下文锁与浏览器资源锁是两把独立的锁', () => {
   assert.equal(browserSlotLock.tryAcquire('epic-browser'), true);
   accountContextLock.release('task-run');
   browserSlotLock.release('epic-browser');
+});
+
+test('Chromium 与 Firefox 浏览器锁可并行持有', () => {
+  assert.notEqual(browserSlotLock, firefoxSlotLock);
+  assert.equal(browserSlotLock.tryAcquire('rewards-browser'), true);
+  assert.equal(firefoxSlotLock.tryAcquire('epic-firefox'), true);
+  browserSlotLock.release('rewards-browser');
+  firefoxSlotLock.release('epic-firefox');
 });

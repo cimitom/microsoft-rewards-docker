@@ -438,7 +438,7 @@ class ConfigManager {
     if (cfg.epic.accounts.length === before) return false;
     try {
       const safeId = String(id || '').replace(/[^A-Za-z0-9_-]/g, '_');
-      fs.rmSync(path.join(DATA_DIR, 'epic-profiles', safeId), { recursive: true, force: true });
+      fs.rmSync(path.join(DATA_DIR, 'epic-firefox-profiles', safeId), { recursive: true, force: true });
     } catch {}
     this.save();
     return true;

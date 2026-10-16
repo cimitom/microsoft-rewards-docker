@@ -657,6 +657,136 @@ export class TaskManager {
   }
 
   /**
+   * WebUI 任务卡片点击执行：每次只执行该卡片对应的一次动作。
+   * 支持 sign / read / search / 打孔卡类任务。
+   */
+  async runTaskAction(accountId, taskKey) {
+    const acc = configManager.resolveAccount(accountId);
+    if (!acc) throw new Error('未找到对应账号');
+    if (!taskKey) throw new Error('缺少任务标识');
+    if (!accountContextLock.tryAcquire('web-action')) {
+      throw new Error('已有任务正在执行，请稍后再试（避免账号上下文串台）');
+    }
+
+    try {
+      rewardsApi.setCurrentAccount(acc);
+      const before = this.getStatus(acc.id).stats || {};
+      const result = {
+        taskKey,
+        accountId: acc.id,
+        accountName: acc.name,
+        message: '',
+        alreadyDone: false,
+        details: [],
+        before: {
+          progress: Number(before?.tasks?.[taskKey]?.progress || 0),
+          max: Number(before?.tasks?.[taskKey]?.max || 0),
+          points: Number(before?.tasks?.[taskKey]?.points || 0)
+        }
+      };
+
+      if (taskKey === 'sign') {
+        const appStatus = await rewardsApi.getAppCheckInStatus().catch(() => null);
+        if (appStatus?.isCurrentDayCompleted) {
+          result.alreadyDone = true;
+          result.message = `今日已签到（官网 App 连签 ${appStatus.completedDays || 0}/7 天）`;
+        } else {
+          const tokenOk = await authManager.refreshToken(false, acc.id).catch(() => false);
+          let points = 0;
+          if (tokenOk) {
+            const appRes = await rewardsApi.signApp().catch(() => null);
+            if (appRes && Number(appRes.points || 0) > 0) {
+              points += Number(appRes.points);
+              result.details.push(`App 端签到成功 +${appRes.points} 积分`);
+            } else if (appRes?.isDuplicate) {
+              result.details.push('App 端今日已签到');
+            } else {
+              result.details.push('App 端签到未返回明确结果');
+            }
+          } else {
+            result.details.push('移动端 Token 未就绪，跳过 App 签到');
+          }
+
+          await rewardsApi.randomDelay(1500, 3000);
+          const pcPoints = await rewardsApi.signPC().catch(() => 0);
+          if (pcPoints >= 0) {
+            points += Number(pcPoints || 0);
+            result.details.push(pcPoints > 0 ? `PC 网页端签到成功 +${pcPoints} 积分` : 'PC 网页端签到已处理');
+          }
+          await this.syncAccountOfficialStatus(acc, { owned: true });
+          result.message = points > 0 ? `签到完成，本次获得 +${points} 积分` : '签到请求已完成';
+        }
+      } else if (taskKey === 'read') {
+        const tokenOk = await authManager.refreshToken(false, acc.id).catch(() => false);
+        if (!tokenOk) throw new Error('移动端 Token 未就绪，无法执行新闻阅读');
+        const beforeRead = await rewardsApi.getReadProgress();
+        const cur = Number(beforeRead?.progress || 0);
+        const max = Number(beforeRead?.max || 30);
+        if (cur >= max) {
+          result.alreadyDone = true;
+          result.message = `新闻阅读配额已打满（${cur}/${max}）`;
+        } else {
+          const readRes = await rewardsApi.doReadArticle();
+          if (!readRes) throw new Error('新闻阅读上报失败');
+          await rewardsApi.randomDelay(2000, 4000);
+          const afterRead = await rewardsApi.getReadProgress();
+          const after = Number(afterRead?.progress || Math.min(max, cur + 3));
+          this.updateTask('read', {
+            progress: after,
+            max,
+            points: after,
+            done: after >= max
+          }, acc.id);
+          result.message = `阅读完成，进度 ${cur}/${max} → ${after}/${max}`;
+          result.details.push(`单篇阅读 +${readRes.points || 3} 积分`);
+        }
+      } else if (taskKey === 'search') {
+        const searchResult = await browserManager.singleTestSearch(acc);
+        await this.syncAccountOfficialStatus(acc, { owned: true });
+        result.message = searchResult?.message || '单次搜索完成';
+        result.details.push('已完成一次拟人键盘搜索与官网进度同步');
+      } else {
+        const quests = await rewardsApi.getQuestPunchCards();
+        const isDesktop = taskKey === 'desktopApp';
+        const isHalloween = taskKey === 'quest_halloween';
+        const isMonthly = taskKey === 'monthlyQuest';
+        const quest = quests.find(q => {
+          const title = String(q.title || '');
+          if (isDesktop) return /桌面|RewardsApp/i.test(title) || /RewardsApp/i.test(q.questId || '');
+          if (isHalloween) return /Halloween|万圣节/i.test(title) || /Halloween/i.test(q.questId || '');
+          if (isMonthly) return /亮点|FY27|Monthly/i.test(title);
+          return !q.done;
+        }) || quests.find(q => !q.done);
+
+        if (!quest || quest.done) {
+          result.alreadyDone = true;
+          result.message = '当前暂无可完成的任务（按钮可能尚未解锁或已完成）';
+        } else {
+          const questRes = await browserManager.runQuestPunchCards(acc, [quest]);
+          if (questRes?.details?.length) {
+            this.recordPunchCardSteps(acc.id, questRes.details);
+            result.details.push(...questRes.details.map(d => d.stepName || '完成一个子任务'));
+          }
+          await this.syncAccountOfficialStatus(acc, { owned: true });
+          result.message = questRes?.completed > 0
+            ? `已推进 ${questRes.completed} 个可完成子任务`
+            : '已刷新任务状态，当前没有可点击完成的按钮';
+        }
+      }
+
+      const after = this.getStatus(acc.id).stats || {};
+      result.after = {
+        progress: Number(after?.tasks?.[taskKey]?.progress || 0),
+        max: Number(after?.tasks?.[taskKey]?.max || 0),
+        points: Number(after?.tasks?.[taskKey]?.points || 0)
+      };
+      return result;
+    } finally {
+      accountContextLock.release('web-action');
+    }
+  }
+
+  /**
    * 记录打孔卡完成步数历史 (精确记录时间戳与任务名)
    */
   recordPunchCardSteps(accountId, details = []) {

@@ -18,7 +18,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.6.7';
+const CURRENT_VERSION = '1.7.0';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -548,6 +548,17 @@ export function createServer() {
     try {
       const accountId = req.body?.accountId || null;
       const result = await taskManager.runSingleTestSearch(accountId);
+      res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  // 任务卡片点击执行：签到、阅读、搜索或打孔卡推进一次
+  app.post('/api/tasks/card-action', async (req, res) => {
+    try {
+      const { accountId, taskKey } = req.body || {};
+      const result = await taskManager.runTaskAction(accountId, taskKey);
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });

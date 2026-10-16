@@ -11,6 +11,7 @@ let webConfirmResolver = null;
 let epicActionPollTimer = null;
 let microsoftActionPollTimer = null;
 let actionProgressTimer = null;
+let lastEpicActionLog = '';
 // 前端日志视图的起始时间：点击「清空」后只显示此后的新日志（后端日志不受影响）
 let logViewSince = 0;
 // 最近一次系统指标（容器 CPU/内存），供浏览器监控卡片复用
@@ -622,7 +623,9 @@ function initUIEvents() {
     const resDiv = document.getElementById('cfg-auth-test-result');
     if (!input) {
       if (resDiv) resDiv.innerHTML = '<span style="color:#EF4444;">请先在输入框中粘贴包含 code= 的跳转链接</span>';
-      return alert('请先填入包含 code 的链接或授权码');
+      openEpicActionModal('缺少授权码', '请先填入包含 code 的链接或授权码。', ['填写授权码', '重新换取 Token'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+      return;
     }
     if (resDiv) resDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在向微软官方请求兑换 OAuth Token...</span>';
     const targetId = editingAccountIdInModal || 'acc_1';
@@ -666,26 +669,26 @@ function initUIEvents() {
   });
 
   // 配置中心：清空该账号保存的 Cookie
-  document.getElementById('btn-clear-modal-cookie')?.addEventListener('click', () => {
-    if (confirm('确定要清空该账号保存的 Cookie 吗？保存配置后生效。')) {
-      const input = document.getElementById('cfg-cookie');
-      input.value = '__MSR_SECRET_CLEAR__';
-      input.placeholder = '已标记清空（点击下方保存配置后生效）';
-      const resDiv = document.getElementById('cfg-cookie-test-result');
-      if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
-    }
+  document.getElementById('btn-clear-modal-cookie')?.addEventListener('click', async () => {
+    const ok = await showWebConfirm('确定要清空该账号保存的 Cookie 吗？保存配置后生效。', '清空 Cookie');
+    if (!ok) return;
+    const input = document.getElementById('cfg-cookie');
+    input.value = '__MSR_SECRET_CLEAR__';
+    input.placeholder = '已标记清空（点击下方保存配置后生效）';
+    const resDiv = document.getElementById('cfg-cookie-test-result');
+    if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
   });
 
   // 配置中心：清空该账号保存的授权码与 Token
-  document.getElementById('btn-clear-modal-auth')?.addEventListener('click', () => {
-    if (confirm('确定要清空该账号保存的移动端授权码与 Token 吗？保存配置后生效。')) {
-      const input = document.getElementById('cfg-authcode');
-      input.value = '__MSR_SECRET_CLEAR__';
-      input.placeholder = '已标记清空（点击下方保存配置后生效）';
-      document.getElementById('cfg-refresh-token').value = '';
-      const resDiv = document.getElementById('cfg-auth-test-result');
-      if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
-    }
+  document.getElementById('btn-clear-modal-auth')?.addEventListener('click', async () => {
+    const ok = await showWebConfirm('确定要清空该账号保存的移动端授权码与 Token 吗？保存配置后生效。', '清空移动端凭据');
+    if (!ok) return;
+    const input = document.getElementById('cfg-authcode');
+    input.value = '__MSR_SECRET_CLEAR__';
+    input.placeholder = '已标记清空（点击下方保存配置后生效）';
+    document.getElementById('cfg-refresh-token').value = '';
+    const resDiv = document.getElementById('cfg-auth-test-result');
+    if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
   });
 
   // 全局点击关闭卡片操作菜单
@@ -698,20 +701,40 @@ function initUIEvents() {
     const claimBtn = document.getElementById('hero-claim-btn-text');
     const origText = claimBtn ? claimBtn.innerText : '';
     if (claimBtn) claimBtn.innerText = '⏳ 领取中...';
+    openEpicActionModal('领取待领积分', '正在向微软官网提交领取请求...', ['锁定账号上下文', '提交领取请求', '刷新积分看板'], 0);
+    startActionProgressTicker(15, 88, 9, '正在向微软官网提交领取请求...');
     try {
       const res = await fetch('/api/tasks/claim-points', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId: selectedAccountId })
       }).then(r => r.json());
+      stopActionProgressTicker();
       if (res.success) {
-        alert(`🎉 ${res.message}`);
+        updateEpicActionModal({
+          activeIndex: 3,
+          progress: 100,
+          badge: { text: '领取完成', cls: 'ok' },
+          message: res.message || '领取请求已完成',
+          result: res.message || '领取请求已完成'
+        });
         fetchStatus();
       } else {
-        alert(`领取失败: ${res.message}`);
+        updateEpicActionModal({
+          progress: 100,
+          badge: { text: '领取失败', cls: 'err' },
+          message: res.message || '领取失败',
+          result: `领取失败：${res.message || '未知错误'}`
+        });
       }
     } catch (e) {
-      alert(`请求异常: ${e.message}`);
+      stopActionProgressTicker();
+      updateEpicActionModal({
+        progress: 100,
+        badge: { text: '请求异常', cls: 'err' },
+        message: e.message,
+        result: `请求异常：${e.message}`
+      });
     } finally {
       if (claimBtn) claimBtn.innerText = origText;
     }
@@ -876,7 +899,7 @@ function showWebConfirm(message, title = '请确认') {
   return new Promise((resolve) => {
     const modal = document.getElementById('web-confirm-modal');
     if (!modal) {
-      resolve(window.confirm(message));
+      resolve(false);
       return;
     }
     document.getElementById('web-confirm-title').innerText = title;
@@ -905,6 +928,19 @@ function setActionSteps(steps, activeIndex = 0) {
   }).join('');
 }
 
+function appendEpicActionLog(message, force = false) {
+  const text = String(message || '').trim();
+  if (!text) return;
+  if (!force && text === lastEpicActionLog) return;
+  lastEpicActionLog = text;
+  const box = document.getElementById('epic-action-log');
+  if (!box) return;
+  box.style.display = 'block';
+  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  box.innerText += `${box.innerText ? '\n' : ''}[${time}] ${text}`;
+  box.scrollTop = box.scrollHeight;
+}
+
 function openEpicActionModal(title, message, steps = [], activeIndex = 0, showStop = false) {
   document.getElementById('epic-action-title').innerText = title;
   document.getElementById('epic-action-message').innerText = message;
@@ -913,6 +949,13 @@ function openEpicActionModal(title, message, steps = [], activeIndex = 0, showSt
   document.getElementById('epic-action-progress').style.width = '0%';
   document.getElementById('epic-action-result').style.display = 'none';
   document.getElementById('epic-action-result').innerText = '';
+  const logBox = document.getElementById('epic-action-log');
+  if (logBox) {
+    logBox.style.display = 'none';
+    logBox.innerText = '';
+  }
+  lastEpicActionLog = '';
+  appendEpicActionLog(message, true);
   const stopBtn = document.getElementById('btn-epic-action-stop');
   if (stopBtn) stopBtn.style.display = showStop ? 'inline-flex' : 'none';
   const backgroundBtn = document.getElementById('btn-epic-action-background');
@@ -945,6 +988,7 @@ function updateEpicActionModal({ title, badge, message, progress, activeIndex, r
     const resultEl = document.getElementById('epic-action-result');
     resultEl.style.display = 'block';
     resultEl.innerText = result;
+    appendEpicActionLog(`结果：${String(result).split('\n')[0]}`);
   }
   if (final === true || progress === 100) {
     const stopBtn = document.getElementById('btn-epic-action-stop');
@@ -1031,6 +1075,79 @@ function buildMicrosoftStatusDetails(data) {
   return lines.join('\n');
 }
 
+async function runTaskCardAction(accountId, taskKey, taskName = taskKey) {
+  let targetId = accountId;
+  if (!targetId || targetId === 'all') {
+    targetId = currentConfig?.accounts?.[0]?.id || null;
+  }
+  if (!targetId) {
+    openEpicActionModal('无法执行任务', '当前没有可用账号。', ['检查账号列表'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '无账号', cls: 'err' } });
+    return;
+  }
+
+  const accName = currentConfig?.accounts?.find(a => a.id === targetId)?.name || targetId;
+  const isSearch = taskKey === 'search';
+  openEpicActionModal(
+    `${taskName} · ${accName}`,
+    `正在执行「${taskName}」一次...`,
+    ['检查当前状态', '执行一次任务动作', '刷新官网进度', '输出结果明细'],
+    0
+  );
+  if (isSearch) startMicrosoftActionPolling();
+  else startActionProgressTicker(12, 88, 8, `正在执行「${taskName}」一次...`);
+
+  try {
+    const res = await fetch('/api/tasks/card-action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: targetId, taskKey })
+    }).then(r => r.json());
+
+    stopMicrosoftActionPolling();
+    stopActionProgressTicker();
+
+    if (res.success) {
+      const d = res.data || {};
+      const before = d.before || {};
+      const after = d.after || {};
+      const lines = [];
+      if (before.max || after.max) {
+        lines.push(`进度：${before.progress || 0}/${before.max || 0} → ${after.progress || 0}/${after.max || 0}`);
+      }
+      if (Array.isArray(d.details) && d.details.length) {
+        lines.push(...d.details.map(x => `• ${x}`));
+      }
+      updateEpicActionModal({
+        activeIndex: 4,
+        progress: 100,
+        badge: { text: d.alreadyDone ? '已完成' : '执行完成', cls: d.alreadyDone ? 'warn' : 'ok' },
+        message: d.message || '任务动作已完成',
+        result: lines.length ? lines.join('\n') : (d.message || '任务动作已完成')
+      });
+    } else {
+      updateEpicActionModal({
+        progress: 100,
+        badge: { text: '执行失败', cls: 'err' },
+        message: res.message || '任务执行失败',
+        result: `失败原因：${res.message || '未知错误'}`
+      });
+    }
+  } catch (e) {
+    stopMicrosoftActionPolling();
+    stopActionProgressTicker();
+    updateEpicActionModal({
+      progress: 100,
+      badge: { text: '执行异常', cls: 'err' },
+      message: e.message,
+      result: `请求异常：${e.message}`
+    });
+  } finally {
+    fetchStatus();
+    fetchHistory(currentHistoryDays);
+  }
+}
+
 function startEpicActionPolling() {
   stopEpicActionPolling();
   const poll = async () => {
@@ -1047,6 +1164,7 @@ function startEpicActionPolling() {
         message: st.lastAction || '正在执行...',
         progress: typeof st.progress === 'number' ? st.progress : undefined
       });
+      appendEpicActionLog(st.lastAction || '');
     } catch {}
   };
   poll();
@@ -1326,7 +1444,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.6.7';
+  const current = updateInfo?.currentVersion || '1.7.0';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1372,7 +1490,7 @@ async function handleVersionCheckClick() {
   } else {
     openEpicActionModal(
       '版本检查',
-      `当前运行版本 v${updateInfo?.currentVersion || '1.6.7'} 已是最新版本。`,
+      `当前运行版本 v${updateInfo?.currentVersion || '1.7.0'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', '确认无需更新'],
       3
     );
@@ -1681,7 +1799,11 @@ function formatPunchCardTooltip(t) {
 
   for (const [key, t] of tasksList) {
     const card = document.createElement('div');
-    card.className = 'task-card';
+    card.className = 'task-card task-card-clickable';
+    card.dataset.taskKey = key;
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('title', '点击立即执行一次该任务');
     const isDone = t.done || (t.max > 0 && t.progress >= t.max);
     
     let subtext = isDone ? '状态: ✅ 已完成' : (running ? '状态: ⏳ 进行中' : '状态: 待执行');
@@ -1742,6 +1864,14 @@ function formatPunchCardTooltip(t) {
         </div>
       </div>
     `;
+    const triggerTaskCard = () => runTaskCardAction(selectedAccountId, key, t.name || key);
+    card.addEventListener('click', triggerTaskCard);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        triggerTaskCard();
+      }
+    });
     taskGrid.appendChild(card);
   }
 
@@ -2041,7 +2171,10 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
         body: JSON.stringify({ accountId: acc.id })
       }).then(r => r.json());
       if (res.success) fetchStatus();
-      else alert(res.message);
+      else {
+        openEpicActionModal('无法启动账号任务', res.message || '启动失败', ['检查运行状态'], 0);
+        updateEpicActionModal({ progress: 100, badge: { text: '启动失败', cls: 'err' } });
+      }
     });
 
     card.querySelector('.btn-toggle-single')?.addEventListener('click', async (e) => {
@@ -2167,7 +2300,8 @@ async function runTasks() {
   if (res.success) {
     fetchStatus();
   } else {
-    alert(res.message);
+    openEpicActionModal('无法启动任务', res.message || '启动失败', ['检查运行状态'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '启动失败', cls: 'err' } });
   }
 }
 
@@ -2392,14 +2526,16 @@ function loadAccountIntoForm(accId) {
 async function saveSettingsFromModal() {
   // 保护：配置还没加载完成时保存，会用空数据覆盖掉所有账号（连同 Cookie/Token）
   if (!currentConfig || !Array.isArray(currentConfig.accounts) || currentConfig.accounts.length === 0) {
-    alert('配置尚未加载完成，为避免覆盖账号数据，请稍后重试。');
+    openEpicActionModal('配置尚未加载完成', '为避免覆盖账号数据，请稍后重试。', ['等待配置加载', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '暂不可保存', cls: 'warn' } });
     return;
   }
   // 搜索节奏必须满足安全下限并落在 3 小时执行窗口内，否则拒绝保存
   const rhythmError = validateSearchRhythm();
   if (rhythmError) {
     updateSearchRhythmHint();
-    alert(`搜索节奏设置无效：${rhythmError}`);
+    openEpicActionModal('搜索节奏设置无效', rhythmError, ['调整搜索间隔', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'err' } });
     return;
   }
   const searchRhythm = readSearchRhythmInputs();
@@ -2493,12 +2629,14 @@ async function saveSettingsFromModal() {
   }).then(r => r.json());
 
   if (res.success) {
-    alert('配置已成功保存并即时生效！');
     closeModal('settings-modal');
     fetchConfig();
     fetchStatus();
+    openEpicActionModal('配置已保存', '配置已成功保存并即时生效。', ['校验配置', '写入配置', '重启调度器', '刷新看板'], 4);
+    updateEpicActionModal({ progress: 100, badge: { text: '已保存', cls: 'ok' } });
   } else {
-    alert(`保存失败: ${res.message}`);
+    openEpicActionModal('配置保存失败', res.message || '保存失败', ['校验配置', '写入配置'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, result: `保存失败：${res.message || '未知错误'}` });
   }
 }
 
@@ -2567,7 +2705,11 @@ window.testNotifyChannel = async function(channel) {
   if (channel === 'telegram') {
     const botToken = document.getElementById('cfg-notify-tg-token')?.value.trim();
     const chatId = document.getElementById('cfg-notify-tg-chat')?.value.trim();
-    if (!botToken || !chatId) return alert('请先输入 Telegram Bot Token 和 Chat ID');
+    if (!botToken || !chatId) {
+      openEpicActionModal('通知参数缺失', '请先输入 Telegram Bot Token 和 Chat ID。', ['填写参数', '重新测试'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+      return;
+    }
     val = JSON.stringify({ botToken, chatId });
   } else {
     const idMap = {
@@ -2578,22 +2720,30 @@ window.testNotifyChannel = async function(channel) {
       pushme: 'cfg-notify-pushme'
     };
     val = document.getElementById(idMap[channel])?.value.trim();
-    if (!val) return alert('请先输入配置的值');
+    if (!val) {
+      openEpicActionModal('通知参数缺失', '请先输入配置的值。', ['填写参数', '重新测试'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+      return;
+    }
   }
 
+  openEpicActionModal('通知测试', `正在测试「${channel}」通知渠道...`, ['校验参数', '发送测试消息', '返回结果'], 0);
+  startActionProgressTicker(15, 85, 10, `正在测试「${channel}」通知渠道...`);
   try {
     const res = await fetch('/api/notify/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel, value: val })
     }).then(r => r.json());
+    stopActionProgressTicker();
     if (res.success) {
-      alert(`「${channel}」测试消息发送成功，请查收！`);
+      updateEpicActionModal({ activeIndex: 3, progress: 100, badge: { text: '发送成功', cls: 'ok' }, message: '测试消息发送成功', result: `「${channel}」测试消息发送成功，请查收。` });
     } else {
-      alert(`测试发送失败: ${res.message}`);
+      updateEpicActionModal({ progress: 100, badge: { text: '发送失败', cls: 'err' }, message: res.message || '测试发送失败', result: `测试发送失败：${res.message || '未知错误'}` });
     }
   } catch (e) {
-    alert(`测试异常: ${e.message}`);
+    stopActionProgressTicker();
+    updateEpicActionModal({ progress: 100, badge: { text: '测试异常', cls: 'err' }, message: e.message, result: `测试异常：${e.message}` });
   }
 };
 
@@ -3754,6 +3904,8 @@ function renderEpicBrowserStatus(data) {
   if (data.lastCheckAt) parts.push(`上次检查：${formatEpicTime(data.lastCheckAt)}`);
   const nextCheck = getEpicNextCheckText();
   if (nextCheck) parts.push(`下次检查：${nextCheck}`);
+  parts.push(`引擎：${data.engine === 'firefox' ? 'Firefox' : 'Chromium'}`);
+  parts.push(data.visible ? '模式：可见浏览器' : '模式：无头');
   if (data.demo) parts.push('⚠️ 演示模式（不启动浏览器）');
   if (meta) meta.innerText = parts.length > 0 ? parts.join('  ｜  ') : '等待首次检查';
   if (updated) {
@@ -3766,6 +3918,15 @@ function renderEpicBrowserStatus(data) {
     stopBtn.style.display = active ? 'inline-flex' : 'none';
     stopBtn.disabled = st.status === 'stopping';
     stopBtn.innerText = st.status === 'stopping' ? '⏳ 停止中' : '⏹️ 停止 Epic';
+  }
+  const vncBtn = document.getElementById('btn-epic-vnc');
+  if (vncBtn) {
+    if (data.visible) {
+      vncBtn.style.display = 'inline-flex';
+      vncBtn.href = `${location.protocol}//${location.hostname}:${data.novncPort || 6080}/vnc.html`;
+    } else {
+      vncBtn.style.display = 'none';
+    }
   }
   renderEpicStats();
 }

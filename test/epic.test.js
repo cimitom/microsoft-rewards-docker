@@ -32,7 +32,7 @@ test('Epic 人机验证与登录标识识别准确', () => {
 
 test('epicProfilePath 隔离账号并安全清理特殊字符', () => {
   const p1 = epicProfilePath('epic_1791970091529');
-  assert.match(p1, /epic-profiles[/\\]epic_1791970091529$/);
+  assert.match(p1, /epic-firefox-profiles[/\\]epic_1791970091529$/);
 
   const p2 = epicProfilePath('user/../evil:1');
   assert.ok(!p2.includes('..'));
