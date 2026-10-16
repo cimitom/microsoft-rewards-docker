@@ -1475,7 +1475,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.1';
+  const current = updateInfo?.currentVersion || '1.7.2';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1521,7 +1521,7 @@ async function handleVersionCheckClick() {
   } else {
     openEpicActionModal(
       '版本检查',
-      `当前运行版本 v${updateInfo?.currentVersion || '1.7.1'} 已是最新版本。`,
+      `当前运行版本 v${updateInfo?.currentVersion || '1.7.2'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', '确认无需更新'],
       3
     );

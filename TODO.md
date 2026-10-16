@@ -1,5 +1,19 @@
 # 下一版本待办
 
+## 已完成于 v1.7.2
+
+- [x] 定位「内置浏览器完成人机验证后提示错误回复」：Epic 登录页风控采集到自相矛盾的 Firefox 指纹。
+- [x] 移除 Chromium 专用 stealth 注入（`window.chrome`、Chrome PDF 插件列表、`navigator.languages`/`hardwareConcurrency` 等伪造项）。
+- [x] UA 版本号改为从浏览器自身 `application.ini` 读取，不再写死 `rv:127.0` 伪装 Windows。
+- [x] 移除 `webgl.disabled`，镜像补 Mesa 软件渲染，让 Xvfb 下 WebGL 真实可用。
+- [x] 镜像补充 `fontconfig` 与常用字体，避免字体缺失导致页面满屏乱码。
+- [x] 新增 `test/firefoxFingerprint.test.js` 防指纹自相矛盾回归。
+
+### v1.7.2 遗留 / 待验证
+
+- [ ] 在真实 Docker 环境重跑一次 Epic 登录，确认人机验证后能正常进入并保存凭据。
+- [ ] 若仍被风控拦截，下一步考虑为 Xvfb 提供固定尺寸的「真实窗口」外观，或改用带 GPU 的宿主直通。
+
 ## 已完成于 v1.7.1
 
 - [x] noVNC 通过现有 `5308` 端口反向代理，不再依赖宿主机额外映射 `6080`。

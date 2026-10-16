@@ -1,13 +1,26 @@
 FROM node:20-bookworm-slim
 
-# 安装 Chromium、Firefox 依赖、虚拟显示与中文字体支持
+# 安装 Chromium、Firefox 依赖、虚拟显示、字体与软件渲染的 OpenGL 支持
+# libgl*/libgl1-mesa-dri：Xvfb 里没有 GPU，靠 Mesa llvmpipe 提供 WebGL。
+#   Epic 登录页的风控会采集 WebGL，缺了它会被判成异常浏览器。
+# fontconfig + 各字体包：--no-install-recommends 不会自动装推荐项，
+#   字体缺失会让页面回退到占位字形，出现满屏乱码。
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     xvfb \
     x11vnc \
     novnc \
     websockify \
+    fontconfig \
+    fonts-dejavu-core \
+    fonts-liberation \
+    fonts-noto-color-emoji \
     fonts-wqy-zenhei \
+    libgl1 \
+    libegl1 \
+    libgles2 \
+    libglx-mesa0 \
+    libgl1-mesa-dri \
     tzdata \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -16,6 +29,8 @@ ENV TZ=Asia/Shanghai
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV EPIC_VISIBLE=1
 ENV DISPLAY=:1
+# 容器内没有 GPU，固定走 Mesa 软件渲染，避免 Firefox 尝试 DRI 失败后直接禁用 WebGL。
+ENV LIBGL_ALWAYS_SOFTWARE=1
 
 WORKDIR /app
 

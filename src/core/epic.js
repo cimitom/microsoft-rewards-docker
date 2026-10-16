@@ -6,7 +6,11 @@ import logger from '../logger.js';
 import networkClient from '../network.js';
 import { firefoxSlotLock } from './contextLock.js';
 import { DATA_DIR } from '../fsUtil.js';
-import { applyFirefoxStealth } from './firefoxStealth.js';
+import {
+  applyFirefoxStealth,
+  detectFirefoxVersion,
+  buildFirefoxUserAgent
+} from './firefoxStealth.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
@@ -43,7 +47,12 @@ class EpicStopError extends Error {
 }
 
 // Epic 使用 Firefox，不能复用 Chromium 的 UA 与 Sec-CH-UA。
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0';
+// 版本号从浏览器自身的 application.ini 读取，避免写死后与镜像里的 Firefox 版本脱节。
+export const FIREFOX_VERSION = detectFirefoxVersion(firefox.executablePath());
+const UA = buildFirefoxUserAgent(FIREFOX_VERSION);
+if (!UA) {
+  logger.log('🟡', '未能读取内置 Firefox 版本号，Epic 接口请求将不附带自定义 User-Agent');
+}
 const FIREFOX_HEADERS = {
   'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8'
 };
@@ -273,14 +282,10 @@ export class EpicManager {
     const headless = process.env.EPIC_VISIBLE !== '1';
     const context = await firefox.launchPersistentContext(epicProfilePath(acc.id), {
       headless,
-      userAgent: UA,
       viewport: { width: 1366, height: 768 },
       locale: 'zh-CN',
       timezoneId: 'Asia/Shanghai',
       extraHTTPHeaders: FIREFOX_HEADERS,
-      firefoxUserPrefs: {
-        'webgl.disabled': true
-      },
       storageState: {
         cookies: acc.storageState?.cookies || [],
         origins: acc.storageState?.origins || []
@@ -528,9 +533,12 @@ export class EpicManager {
   }
 
   async fetchFreeGamesFromApi() {
+    // 与浏览器保持同一个身份：UA 由内置 Firefox 的真实版本拼出，读不到就不发。
+    const headers = { 'accept': 'application/json' };
+    if (UA) headers['user-agent'] = UA;
     const res = await networkClient.request({
       url: FREE_GAMES_API,
-      headers: { 'user-agent': UA, 'accept': 'application/json' },
+      headers,
       timeout: 20000
     });
     const data = typeof res === 'string' ? JSON.parse(res) : res;

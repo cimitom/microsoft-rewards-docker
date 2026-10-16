@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -110,6 +110,14 @@
   - 登录窗口打开期间会占用该账号的 Firefox profile，领取与校验自动让路，避免并发打开同一个 profile；
   - 登录窗口超过 `EPIC_LOGIN_TIMEOUT_MIN`（默认 30 分钟）未保存会自动关闭并释放资源，设为 `0` 可关闭该保护；
   - noVNC 静态资源与 WebSocket 升级握手都走与 WebUI 相同的 `server.authPassword`，不会绕过密码。
+- 🧬 **Epic 登录风控修复：Firefox 指纹一致性 (v1.7.2)**：
+  - **修复「人机验证通过后仍提示错误回复」**：旧版本把 Chromium 专用 stealth 注入 Firefox，制造出自相矛盾的指纹，被 Epic 登录页的 FingerprintJS 风控判为机器人，登录 POST 直接失败；
+  - 移除凭空注入的 `window.chrome`（Firefox 原生没有）与 `Chrome PDF Plugin / Chrome PDF Viewer / Native Client` 插件列表（Firefox 不存在这些插件）；
+  - 不再写死 `rv:127.0` 伪装 Windows Firefox：旧代码在镜像里实际是 Firefox 157，且 `navigator.platform` / `oscpu` / `appVersion` 仍暴露真实系统，UA 与它们互相矛盾。现在版本号从浏览器自身 `application.ini` 读取，系统如实描述；
+  - 移除 `webgl.disabled`：Epic 风控会采集 WebGL，整体关闭会被判成异常浏览器；镜像补充 Mesa 软件渲染（`libgl1-mesa-dri` + `LIBGL_ALWAYS_SOFTWARE=1`）让 Xvfb 下 WebGL 真实可用；
+  - 镜像补充 `fontconfig` / `fonts-liberation` / `fonts-dejavu-core` / `fonts-noto-color-emoji`，避免字体缺失导致页面回退成满屏乱码；
+  - stealth 只保留 `navigator.webdriver` → `false` 这一处（Playwright 驱动下为 `true`，真实用户为 `false`），其余一律保留浏览器原生值；
+  - 移除不再使用的 `puppeteer-extra-plugin-stealth` 依赖，**单元测试增至 74 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；
