@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -118,6 +118,17 @@
   - 镜像补充 `fontconfig` / `fonts-liberation` / `fonts-dejavu-core` / `fonts-noto-color-emoji`，避免字体缺失导致页面回退成满屏乱码；
   - stealth 只保留 `navigator.webdriver` → `false` 这一处（Playwright 驱动下为 `true`，真实用户为 `false`），其余一律保留浏览器原生值；
   - 移除不再使用的 `puppeteer-extra-plugin-stealth` 依赖，**单元测试增至 74 个**。
+- 🔧 **更新检查、Cookie 文案、Epic 定时与指纹加固 (v1.7.3)**：
+  - **修复「有新版却不提示更新」**：更新检查原先读 GitHub 的 `releases/latest`，但发布流程只推 tag 不建 Release，最新 Release 停在 `v1.6.2`，导致 `v1.6.3~v1.7.2` 之间的用户比较出来永远是「无需更新」。现在改为直接读 tags 列表取语义化版本最大值，并在 CI 里补上「打 tag 时自动创建 Release」，让已经装在别人机器上的旧版也能收到提示；
+  - **更新检查失败不再伪装成「已是最新」**：以前 GitHub 被墙或限流时会静默回退成「已是最新版本」，让「检查失败」和「真的没更新」长得一模一样；现在如实显示检查失败与失败原因；
+  - **修正 Cookie 向导文案**：原文写「登录 `rewards.bing.com` 获取 Cookie」，但 PC 搜索实际访问的是 `cn.bing.com`，登录身份 Cookie `_U` 也由该站点下发；同时删掉「必须包含 `_U` 或 `KievRPSSecAuth`」里对 `KievRPSSecAuth` 的错误承诺 —— 代码只认 `_U`，`KievRPSSecAuth` 不能替代它；
+  - **Epic 自动领取新增「自动领取时间」**：到设定时间之前一律暂停，容器重启不再立刻跑一轮（旧逻辑里 `lastCheckAt` 是内存值、重启即归零，间隔限制完全失效）；
+  - **Epic 登录窗口改用干净会话**：不再把账号里已失效的旧 `storageState` 注入登录上下文，并改用独立的临时 profile，避免带着矛盾会话去登录（Epic 官方排障同样建议清空站点数据后重登）；
+  - **`navigator.webdriver` 补丁不再可被识别**：对齐 getter 的 `toString`，现在返回 `function webdriver() { [native code] }` 而不是 `() => false`；
+  - **WebGL 渲染器伪装**：仅在检测到软件渲染（llvmpipe / SwiftShader）时才替换为常见 Intel 核显标识，真机 GPU 保持原值，避免为伪装引入新的矛盾；
+  - **新增「🔍 指纹自检」**：一键用与领取任务相同的参数开一次临时浏览器，直接列出 UA / platform / `webdriver` / `window.chrome` / 插件 / WebGL 等信号并给出告警，登录再被拦时可先确认是不是浏览器自己露馅；
+  - **恢复「粘贴会话」兜底入口**：内置浏览器登录始终过不了风控时，可用自己电脑上的真实浏览器登录后导入会话，完全绕开自动化检测；
+  - **单元测试增至 83 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；
@@ -268,9 +279,10 @@ npm test
 > ✨ 提示：系统会自动捕获并持久化保存 Refresh Token，后续系统会**永久自动无感续期**，无需再次操作。
 
 ### 步骤 2：网页端 Cookie 配置
-1. 在电脑浏览器登录 [rewards.bing.com](https://rewards.bing.com)；
+1. 在电脑浏览器登录 [cn.bing.com](https://cn.bing.com)（**不是** `rewards.bing.com`：PC 搜索实际访问的是 `cn.bing.com`，登录身份 Cookie `_U` 由该站点下发）；
 2. 按 `F12` 打开开发者工具，在【网络 / Network】中抓取任意请求的 `Cookie`，或者直接在【应用程序 / Application -> Cookies】中复制完整 Cookie 文本；
-3. 粘贴至输入框，点击 **「测试 Cookie 有效性」**，确认显示“Cookie 有效”即可。
+3. **确认 Cookie 串里包含 `_U=...`**。没有 `_U` 时，网页端能登录、但 PC 搜索不会计分（`KievRPSSecAuth` 不能替代 `_U`）；
+4. 粘贴至输入框，点击 **「测试 Cookie 有效性」**，确认显示“Cookie 有效”即可。
 
 ### 步骤 3：网络与代理（若在境外 VPS 部署必选）
 - 如果你的设备在**中国国内家庭宽带 / NAS**：保持默认直连即可。

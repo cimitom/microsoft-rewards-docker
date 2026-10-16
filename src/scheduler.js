@@ -266,6 +266,31 @@ class Scheduler {
     this.startEpicJob();
   }
 
+  /** 指定时刻是否已到达当天的 Epic 自动领取启动时间（HH:MM） */
+  hasReachedEpicStartTime(timeStr, now = Date.now()) {
+    const [h, m] = String(timeStr || '10:00').split(':').map(Number);
+    const startMin = (Number.isFinite(h) ? h : 10) * 60 + (Number.isFinite(m) ? m : 0);
+    const d = new Date(now);
+    return d.getHours() * 60 + d.getMinutes() >= startMin;
+  }
+
+  /**
+   * 这一次 tick 是否该真正执行 Epic 检查。
+   *
+   * 同时承载两条规则，抽出来是为了能单测：
+   *   1. 到点前一律暂停 —— 容器重启后默认什么都不做，等设定的启动时间再开始；
+   *   2. 首次检查的下限取「上次检查」与「进程启动时刻」中较晚的一个。
+   *      旧逻辑只看 lastCheckAt，而它是内存值、重启即归零，于是重启就立刻跑一轮。
+   */
+  shouldRunEpicCheck(settings, now = Date.now()) {
+    if (!settings?.enabled) return false;
+    if (!this.hasReachedEpicStartTime(settings.autoClaimTime, now)) return false;
+    const since = Math.max(epicManager.lastCheckAt || 0, epicManager.bootedAt || 0);
+    const intervalMin = Number(settings.checkIntervalMin);
+    if (!Number.isFinite(intervalMin) || intervalMin <= 0) return true;
+    return (now - since) / 60000 >= intervalMin;
+  }
+
   /** Epic 免费游戏：按设置的检查间隔轮询，发现未领取的才真正触发领取 */
   startEpicJob() {
     if (this.epicJob) {
@@ -282,13 +307,10 @@ class Scheduler {
     this.epicJob = cron.schedule('* * * * *', async () => {
       if (epicManager.running) return;
       const s = epicManager.getSettings();
-      if (!s.enabled) return;
+      if (!this.shouldRunEpicCheck(s)) return;
 
       const accounts = configManager.getEpicAccounts().filter(a => a.enabled !== false && a.storageState?.cookies?.length);
       if (accounts.length === 0) return;
-
-      const elapsedMin = (Date.now() - epicManager.lastCheckAt) / 60000;
-      if (epicManager.lastCheckAt && elapsedMin < s.checkIntervalMin) return;
 
       try {
         await epicManager.checkAndClaimIfNeeded();
@@ -297,7 +319,7 @@ class Scheduler {
       }
     });
 
-    logger.log('🎮', `Epic 免费游戏自动领取已就绪（每 ${settings.checkIntervalMin} 分钟检查一次，失败重试 ${settings.retryCount} 次）`);
+    logger.log('🎮', `Epic 免费游戏自动领取已就绪（每天 ${settings.autoClaimTime} 之后每 ${settings.checkIntervalMin} 分钟检查一次，失败重试 ${settings.retryCount} 次）`);
   }
 
   stop() {

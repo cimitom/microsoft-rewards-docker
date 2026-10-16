@@ -9,7 +9,8 @@ import { DATA_DIR } from '../fsUtil.js';
 import {
   applyFirefoxStealth,
   detectFirefoxVersion,
-  buildFirefoxUserAgent
+  buildFirefoxUserAgent,
+  evaluateFirefoxFingerprint
 } from './firefoxStealth.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
@@ -36,6 +37,19 @@ export function isEpicChallengeText(text) {
 
 export function isEpicLoginText(text) {
   return LOGIN_TEXT_RE.test(String(text || ''));
+}
+
+/**
+ * 归一化「每天自动领取时间」。非法输入一律退回 10:00，
+ * 避免一个手滑写入的空值让定时任务永远不触发。
+ */
+export function normalizeAutoClaimTime(value) {
+  const m = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return '10:00';
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isInteger(h) || !Number.isInteger(min) || h < 0 || h > 23 || min < 0 || min > 59) return '10:00';
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
 class EpicStopError extends Error {
@@ -76,6 +90,8 @@ export class EpicManager {
     this.runningAccountId = null;
     this.lastRun = null; // { startedAt, finishedAt, results: [] }
     this.lastCheckAt = 0;
+    // 进程启动时刻。定时器用它做「首次检查」的下限，避免容器一重启就立刻跑一轮。
+    this.bootedAt = Date.now();
     // 无头浏览器实时状态（供前端展示当前跑到哪一步）
     this.state = {
       status: 'idle', // idle | checking | navigating | challenge | clicking | ordering | waiting | retrying | verifying | done
@@ -166,7 +182,15 @@ export class EpicManager {
 
     let launched;
     try {
-      launched = await this.launchPersistentContext(acc);
+      // 登录必须从干净会话开始，并且用独立的临时 profile：
+      // 旧凭据（多半已失效）混进来会让登录请求带着互相矛盾的会话，
+      // 而登录窗口的使命就是建立一个全新会话。正常领取用的 profile 不受影响。
+      const loginProfile = `${epicProfilePath(accountId)}-login`;
+      fs.rmSync(loginProfile, { recursive: true, force: true });
+      launched = await this.launchPersistentContext(acc, {
+        cleanSession: true,
+        profileDir: loginProfile
+      });
     } catch (e) {
       firefoxSlotLock.release(slotOwner);
       throw e;
@@ -270,33 +294,120 @@ export class EpicManager {
     return { closed: true };
   }
 
+  /**
+   * 指纹自检：用与领取任务完全相同的启动参数开一个临时浏览器，
+   * 采集风控最常看的那几项，直接展示给用户。
+   *
+   * 为什么需要它：Epic 的「安全检查」是服务端判定，黑盒且不给原因。
+   * 与其反复猜，不如先把「我们自己的浏览器是否还在露馅」变成可观测的。
+   */
+  async selfCheckFingerprint() {
+    if (this.running || this.checking || this.verifying) {
+      throw new Error('Epic 任务正在运行中，请先停止任务再做指纹自检');
+    }
+    if (this.loginContext) throw new Error('请先关闭 Epic 登录窗口再做指纹自检');
+
+    const slotOwner = `epic-selfcheck:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const gotSlot = await firefoxSlotLock.acquire(slotOwner, 60000);
+    if (!gotSlot) throw new Error('浏览器资源正被占用，请稍后再试');
+
+    const tmpProfile = path.join(EPIC_PROFILE_DIR, `selfcheck-${Date.now()}`);
+    let context = null;
+    try {
+      const launched = await this.launchPersistentContext(
+        { id: 'selfcheck', storageState: null },
+        { cleanSession: true, profileDir: tmpProfile }
+      );
+      context = launched.context;
+      const page = launched.page;
+      // 用 about:blank 即可：这些信号与页面无关，不打扰 Epic，也避免触发风控计数
+      await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      const signals = await page.evaluate(() => {
+        const readGl = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (!gl) return { vendor: '', renderer: '' };
+            const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+            return {
+              vendor: dbg ? String(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) || '') : '',
+              renderer: dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '') : ''
+            };
+          } catch {
+            return { vendor: '', renderer: '' };
+          }
+        };
+        const glInfo = readGl();
+        return {
+          userAgent: navigator.userAgent,
+          appVersion: navigator.appVersion,
+          platform: navigator.platform,
+          oscpu: navigator.oscpu || '',
+          languages: Array.from(navigator.languages || []),
+          hardwareConcurrency: navigator.hardwareConcurrency,
+          webdriver: navigator.webdriver,
+          pluginsCount: navigator.plugins.length,
+          hasWindowChrome: typeof window.chrome !== 'undefined',
+          webglVendor: glInfo.vendor,
+          webglRenderer: glInfo.renderer,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          screen: `${screen.width}x${screen.height}`
+        };
+      });
+      return {
+        signals,
+        warnings: evaluateFirefoxFingerprint(signals),
+        firefoxVersion: FIREFOX_VERSION
+      };
+    } finally {
+      if (context) await context.close().catch(() => {});
+      fs.rmSync(tmpProfile, { recursive: true, force: true });
+      firefoxSlotLock.release(slotOwner);
+    }
+  }
+
   getBrowserProxy() {
     const cfg = configManager.get();
     if (!cfg.network?.useProxy || !cfg.network?.proxyUrl) return null;
     return { server: String(cfg.network.proxyUrl).trim() };
   }
 
-  async launchPersistentContext(acc) {
-    fs.mkdirSync(epicProfilePath(acc.id), { recursive: true });
+  /**
+   * 启动 Firefox 持久化上下文。
+   *
+   * @param {object} acc 账号
+   * @param {object} [opts]
+   * @param {boolean} [opts.cleanSession] 不注入账号里已保存的 storageState。
+   *   登录流程必须用干净会话：拿一个多半已失效的旧凭据去登录，
+   *   会让登录请求带着互相矛盾的会话，Epic 官方排障也是建议清空站点数据后重登。
+   * @param {string} [opts.profileDir] 覆盖 profile 目录（登录窗口用独立的临时目录）
+   */
+  async launchPersistentContext(acc, { cleanSession = false, profileDir = null } = {}) {
+    const dir = profileDir || epicProfilePath(acc.id);
+    fs.mkdirSync(dir, { recursive: true });
     const proxy = this.getBrowserProxy();
     const headless = process.env.EPIC_VISIBLE !== '1';
-    const context = await firefox.launchPersistentContext(epicProfilePath(acc.id), {
+    const context = await firefox.launchPersistentContext(dir, {
       headless,
       viewport: { width: 1366, height: 768 },
       locale: 'zh-CN',
       timezoneId: 'Asia/Shanghai',
       extraHTTPHeaders: FIREFOX_HEADERS,
-      storageState: {
-        cookies: acc.storageState?.cookies || [],
-        origins: acc.storageState?.origins || []
-      },
+      ...(cleanSession ? {} : {
+        storageState: {
+          cookies: acc.storageState?.cookies || [],
+          origins: acc.storageState?.origins || []
+        }
+      }),
       ...(proxy ? { proxy } : {})
     });
 
     // 配置里的会话是登录凭据的唯一来源；持久化 profile 负责保留 CF 信任 Cookie。
-    const cookies = acc.storageState?.cookies || [];
-    if (cookies.length > 0) {
-      await context.addCookies(cookies).catch(() => {});
+    if (!cleanSession) {
+      const cookies = acc.storageState?.cookies || [];
+      if (cookies.length > 0) {
+        await context.addCookies(cookies).catch(() => {});
+      }
     }
     await applyFirefoxStealth(context);
 
@@ -421,6 +532,7 @@ export class EpicManager {
     };
     return {
       enabled: e.enabled !== false,
+      autoClaimTime: normalizeAutoClaimTime(e.autoClaimTime),
       checkIntervalMin: clamp(e.checkIntervalMin, 5, 10080, 720),
       retryCount: clamp(e.retryCount, 0, 5, 2),
       retryIntervalSec: clamp(e.retryIntervalSec, 10, 600, 60),

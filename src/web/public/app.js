@@ -1475,13 +1475,15 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.2';
+  const current = updateInfo?.currentVersion || '1.7.3';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
   let text = `${statusLine}\n当前版本：v${current}`;
   if (updateInfo?.hasUpdate) {
     text += `\n\n🚀 发现新版本 v${updateInfo.latestVersion}！\n${updateInfo.releaseTitle || ''}\n点击查看更新日志与升级方式`;
+  } else if (updateInfo?.checkFailed) {
+    text += `\n\n⚠️ 无法检查更新：${updateInfo.checkError || '连接 GitHub 失败'}\n（这不代表已是最新版本，可稍后重试）`;
   } else {
     text += `\n✅ 已是最新版本`;
   }
@@ -1500,6 +1502,11 @@ async function checkVersionUpdate() {
         if (indicator) indicator.style.display = 'inline-flex';
         if (updateText) updateText.innerText = `发现新版 v${res.data.latestVersion}`;
         if (pill) pill.classList.add('has-update');
+      } else if (res.data.checkFailed) {
+        // 检查失败不能伪装成「已是最新」，否则用户永远不知道自己是漏检还是真没更新
+        if (indicator) indicator.style.display = 'inline-flex';
+        if (updateText) updateText.innerText = '更新检查失败';
+        if (pill) pill.classList.remove('has-update');
       } else {
         if (indicator) indicator.style.display = 'none';
         if (pill) pill.classList.remove('has-update');
@@ -1519,13 +1526,22 @@ async function handleVersionCheckClick() {
       window.open(updateInfo.releaseUrl, '_blank');
     }
   } else {
+    const failed = updateInfo?.checkFailed;
     openEpicActionModal(
       '版本检查',
-      `当前运行版本 v${updateInfo?.currentVersion || '1.7.2'} 已是最新版本。`,
-      ['获取远端版本', '比较版本号', '确认无需更新'],
+      failed
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.3'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.3'} 已是最新版本。`,
+      ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
-    updateEpicActionModal({ progress: 100, badge: { text: '已是最新', cls: 'ok' } });
+    updateEpicActionModal({
+      progress: 100,
+      badge: failed ? { text: '检查失败', cls: 'warn' } : { text: '已是最新', cls: 'ok' },
+      result: failed
+        ? `失败原因：${updateInfo?.checkError || '连接 GitHub 失败'}\n\n常见原因：容器无法直连 api.github.com（国内网络/防火墙），或触发了 GitHub 接口限流。\n这不代表已是最新版本，可稍后重试。`
+        : undefined
+    });
   }
 }
 
@@ -3295,7 +3311,12 @@ function initEpicUI() {
   document.getElementById('btn-save-epic-modal')?.addEventListener('click', saveEpicAccount);
   document.getElementById('btn-epic-open-login')?.addEventListener('click', openEpicLoginWindow);
   document.getElementById('btn-epic-save-login')?.addEventListener('click', saveEpicLoginWindow);
+  document.getElementById('btn-epic-import-session')?.addEventListener('click', importEpicSession);
   document.getElementById('btn-epic-vnc')?.addEventListener('click', () => openNovncModal('Epic 可见浏览器'));
+  document.getElementById('btn-epic-fingerprint')?.addEventListener('click', openEpicFingerprintModal);
+  document.getElementById('btn-refresh-fingerprint')?.addEventListener('click', loadEpicFingerprint);
+  document.getElementById('btn-close-fingerprint')?.addEventListener('click', () => closeModal('epic-fingerprint-modal'));
+  document.getElementById('btn-close-fingerprint-btn')?.addEventListener('click', () => closeModal('epic-fingerprint-modal'));
   document.getElementById('btn-epic-claim-all')?.addEventListener('click', () => claimEpic(null));
   document.getElementById('btn-epic-refresh-games')?.addEventListener('click', () => fetchEpicFreeGames(true));
   document.getElementById('btn-epic-save-settings')?.addEventListener('click', saveEpicSettings);
@@ -3598,6 +3619,11 @@ function openEpicModal(accountId) {
   const status = document.getElementById('epic-login-status');
   if (openLoginBtn) openLoginBtn.disabled = !acc;
   if (saveLoginBtn) saveLoginBtn.disabled = !acc;
+  // 会话导入是兜底路径，每次打开都清空，避免把上一次的粘贴内容误提交
+  const sessionInput = document.getElementById('epic-session-input');
+  if (sessionInput) sessionInput.value = '';
+  const importBtn = document.getElementById('btn-epic-import-session');
+  if (importBtn) importBtn.disabled = !acc;
   if (status) {
     status.innerText = acc
       ? (acc.hasSession
@@ -3720,6 +3746,96 @@ async function saveEpicLoginWindow() {
   } catch (e) {
     stopActionProgressTicker();
     updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, message: e.message, result: `保存登录凭据失败：${e.message}` });
+  }
+}
+
+// ===== Epic 指纹自检 =====
+async function openEpicFingerprintModal() {
+  openModal('epic-fingerprint-modal');
+  await loadEpicFingerprint();
+}
+
+async function loadEpicFingerprint() {
+  const summary = document.getElementById('epic-fingerprint-summary');
+  const detail = document.getElementById('epic-fingerprint-detail');
+  if (summary) summary.innerHTML = '正在启动临时浏览器采集指纹…';
+  if (detail) detail.innerHTML = '';
+  try {
+    const res = await fetch('/api/epic/fingerprint').then(r => r.json());
+    if (!res.success) throw new Error(res.message || '自检失败');
+    const { signals = {}, warnings = [], firefoxVersion } = res.data || {};
+    if (summary) {
+      summary.innerHTML = warnings.length === 0
+        ? `<div style="color:#22C55E;">✅ 未发现明显的自动化特征（内置 Firefox ${escapeHtml(String(firefoxVersion || '?'))}）</div>`
+        : `<div style="color:#F59E0B;">⚠️ 发现 ${warnings.length} 处可疑特征，Epic 风控可能据此拦截登录：</div>
+           <ul style="margin:6px 0 0 18px;">${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`;
+    }
+    if (detail) {
+      const rows = [
+        ['User-Agent', signals.userAgent],
+        ['appVersion', signals.appVersion],
+        ['platform', signals.platform],
+        ['oscpu', signals.oscpu],
+        ['languages', (signals.languages || []).join(', ')],
+        ['hardwareConcurrency', signals.hardwareConcurrency],
+        ['navigator.webdriver', String(signals.webdriver)],
+        ['navigator.plugins', signals.pluginsCount],
+        ['window.chrome', signals.hasWindowChrome ? '存在（异常）' : '不存在'],
+        ['WebGL 厂商', signals.webglVendor || '（不可用）'],
+        ['WebGL 渲染器', signals.webglRenderer || '（不可用）'],
+        ['时区', signals.timezone],
+        ['屏幕', signals.screen]
+      ];
+      detail.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:12px;">${
+        rows.map(([k, v]) => `<tr><td style="padding:4px 8px; color:#94A3B8; white-space:nowrap; vertical-align:top;">${escapeHtml(k)}</td><td style="padding:4px 8px; word-break:break-all;">${escapeHtml(String(v ?? ''))}</td></tr>`).join('')
+      }</table>`;
+    }
+  } catch (e) {
+    if (summary) summary.innerHTML = `<div style="color:#EF4444;">自检失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ===== Epic 会话导入（内置登录被风控拦住时的兜底） =====
+async function importEpicSession() {
+  const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
+  const session = document.getElementById('epic-session-input')?.value.trim();
+  if (!accountId) {
+    openEpicActionModal('请先保存账号', '请先填写账号名称并保存，然后再导入会话。', ['保存账号', '导入会话'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '需要先保存', cls: 'warn' } });
+    return;
+  }
+  if (!session) {
+    openEpicActionModal('没有可导入的内容', '请先粘贴 storageState JSON 或 Cookie 字符串。', ['粘贴会话', '重新导入'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '内容为空', cls: 'warn' } });
+    return;
+  }
+  openEpicActionModal('正在导入 Epic 会话', '正在解析并写入账号凭据…', ['解析会话', '写入配置', '刷新账号'], 0);
+  startActionProgressTicker(20, 85, 10, '正在解析会话…');
+  try {
+    const res = await fetch(`/api/epic/accounts/${accountId}/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session })
+    }).then(r => r.json());
+    stopActionProgressTicker();
+    if (!res.success) throw new Error(res.message || '导入失败');
+    const input = document.getElementById('epic-session-input');
+    if (input) input.value = '';
+    await fetchEpicAccounts();
+    updateEpicActionModal({
+      activeIndex: 3,
+      progress: 100,
+      badge: { text: '已导入', cls: 'ok' },
+      message: '会话已导入',
+      result: `共导入 ${res.data?.cookieCount ?? 0} 个 Cookie。${
+        res.data?.hasEpicSession
+          ? '已检测到 Epic 登录凭据。'
+          : '⚠️ 未检测到 EPIC 登录 Cookie，请确认粘贴的是 Epic 站点的会话。'
+      }`
+    });
+  } catch (e) {
+    stopActionProgressTicker();
+    updateEpicActionModal({ progress: 100, badge: { text: '导入失败', cls: 'err' }, message: e.message, result: `导入失败：${e.message}` });
   }
 }
 
@@ -3929,6 +4045,7 @@ async function loadEpicSettings() {
     };
     const enabledEl = document.getElementById('epic-set-enabled');
     if (enabledEl) enabledEl.checked = s.enabled !== false;
+    set('epic-set-auto-time', s.autoClaimTime || '10:00');
     set('epic-set-interval', s.checkIntervalMin ?? 30);
     set('epic-set-retry', s.retryCount ?? 2);
     set('epic-set-retry-interval', s.retryIntervalSec ?? 60);
@@ -3949,6 +4066,7 @@ async function loadEpicSettings() {
 async function saveEpicSettings() {
   const body = {
     enabled: document.getElementById('epic-set-enabled')?.checked !== false,
+    autoClaimTime: document.getElementById('epic-set-auto-time')?.value || '10:00',
     checkIntervalMin: Number(document.getElementById('epic-set-interval')?.value),
     retryCount: Number(document.getElementById('epic-set-retry')?.value),
     retryIntervalSec: Number(document.getElementById('epic-set-retry-interval')?.value),
@@ -3963,7 +4081,7 @@ async function saveEpicSettings() {
     if (!res.success) throw new Error(res.message || '保存失败');
     epicSettingsCache = res.data || {};
     await loadEpicSettings();
-    openEpicActionModal('Epic 领取设置已保存', '新的检查与重试策略已即时生效。', ['校验设置参数', '写入配置', '重启调度器'], 3);
+    openEpicActionModal('Epic 领取设置已保存', `新的检查与重试策略已即时生效。每天 ${body.autoClaimTime} 之后才会开始自动检查。`, ['校验设置参数', '写入配置', '重启调度器'], 3);
     updateEpicActionModal({ progress: 100, badge: { text: '已保存', cls: 'ok' } });
   } catch (e) {
     openEpicActionModal('Epic 设置保存失败', e.message, ['校验设置参数', '写入配置'], 0);

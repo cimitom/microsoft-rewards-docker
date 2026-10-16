@@ -13,13 +13,13 @@ import scheduler from '../scheduler.js';
 import rewardsApi from '../core/api.js';
 import historyManager from '../core/history.js';
 import browserManager from '../core/browser.js';
-import epicManager from '../core/epic.js';
+import epicManager, { normalizeAutoClaimTime } from '../core/epic.js';
 import { accountContextLock } from '../core/contextLock.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.7.2';
+const CURRENT_VERSION = '1.7.3';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -408,44 +408,84 @@ export function createServer() {
   });
 
   // 0.5 检查版本更新
-  let cachedRelease = null;
-  let cachedReleaseTime = 0;
-  app.get('/api/system/check-update', async (req, res) => {
+  // 注意：发布流程只推 git tag，不建 GitHub Release，所以不能用 releases/latest。
+  // 它返回的是「最近一次发布的 Release」，历史上只到 v1.6.2；于是 v1.6.3~v1.7.2
+  // 之间的用户比较出来是「无需更新」，永远收不到升级提示。
+  // 这里改为直接读 tags 列表取语义化版本最大值，Release 仅用于补充更新说明。
+  let cachedLatest = null;
+  let cachedLatestTime = 0;
+
+  const GITHUB_REPO = 'wangheqiang530/microsoft-rewards-docker';
+
+  async function fetchLatestVersionInfo() {
+    const tagRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/tags?per_page=100`, {
+      headers: { 'User-Agent': 'microsoft-rewards-docker', 'Accept': 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(6000)
+    });
+    if (!tagRes.ok) throw new Error(`GitHub tags 接口返回 ${tagRes.status}`);
+    const tags = await tagRes.json();
+    if (!Array.isArray(tags)) throw new Error('GitHub tags 返回格式异常');
+
+    let latest = null;
+    for (const t of tags) {
+      const name = String(t?.name || '').trim();
+      // 只认 vX.Y.Z 形式的版本标签，过滤掉临时标签
+      if (!/^v\d+\.\d+\.\d+$/.test(name)) continue;
+      if (!latest || compareVersions(name.replace(/^v/, ''), latest) > 0) {
+        latest = name.replace(/^v/, '');
+      }
+    }
+    if (!latest) throw new Error('未在 tags 中找到 vX.Y.Z 形式的版本标签');
+
+    // 更新说明是锦上添花，拿不到不影响版本比较
+    let release = null;
     try {
-      if (!cachedRelease || Date.now() - cachedReleaseTime > 10 * 60 * 1000) {
-        const ghRes = await fetch('https://api.github.com/repos/wangheqiang530/microsoft-rewards-docker/releases/latest', {
-          headers: { 'User-Agent': 'microsoft-rewards-docker' },
-          signal: AbortSignal.timeout(3500)
-        }).then(r => r.json());
-        if (ghRes && ghRes.tag_name) {
-          cachedRelease = ghRes;
-          cachedReleaseTime = Date.now();
-        }
+      const relRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${latest}`, {
+        headers: { 'User-Agent': 'microsoft-rewards-docker', 'Accept': 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(4000)
+      });
+      if (relRes.ok) release = await relRes.json();
+    } catch {}
+
+    return { latestVersion: latest, release };
+  }
+
+  app.get('/api/system/check-update', async (req, res) => {
+    const currentVersion = CURRENT_VERSION;
+    try {
+      if (!cachedLatest || Date.now() - cachedLatestTime > 10 * 60 * 1000) {
+        cachedLatest = await fetchLatestVersionInfo();
+        cachedLatestTime = Date.now();
       }
 
-      const currentVersion = CURRENT_VERSION;
-      const latestTag = cachedRelease?.tag_name?.replace(/^v/, '') || currentVersion;
-      const hasUpdate = compareVersions(latestTag, currentVersion) > 0;
+      const latestVersion = cachedLatest.latestVersion;
+      const release = cachedLatest.release;
+      const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
 
       res.json({
         success: true,
         data: {
           currentVersion,
-          latestVersion: latestTag,
+          latestVersion,
           hasUpdate,
-          releaseUrl: cachedRelease?.html_url || 'https://github.com/wangheqiang530/microsoft-rewards-docker/releases/latest',
-          releaseTitle: cachedRelease?.name || `v${latestTag}`,
-          releaseNotes: cachedRelease?.body || ''
+          checkFailed: false,
+          releaseUrl: release?.html_url || `https://github.com/${GITHUB_REPO}/releases/tag/v${latestVersion}`,
+          releaseTitle: release?.name || `v${latestVersion}`,
+          releaseNotes: release?.body || ''
         }
       });
-    } catch {
+    } catch (e) {
+      // 检查失败必须如实上报。以前这里静默回退成「已是最新」，
+      // 让「GitHub 被墙 / 限流」和「确实是最新版」两种情况长得一模一样。
       res.json({
         success: true,
         data: {
-          currentVersion: CURRENT_VERSION,
-          latestVersion: CURRENT_VERSION,
+          currentVersion,
+          latestVersion: currentVersion,
           hasUpdate: false,
-          releaseUrl: 'https://github.com/wangheqiang530/microsoft-rewards-docker/releases'
+          checkFailed: true,
+          checkError: e.message,
+          releaseUrl: `https://github.com/${GITHUB_REPO}/releases`
         }
       });
     }
@@ -970,6 +1010,17 @@ export function createServer() {
     }
   });
 
+  // 指纹自检：用与领取任务相同的启动参数开一次临时浏览器，回报风控最常看的信号。
+  // Epic 的安全检查是服务端黑盒判定，先把「浏览器本身是否露馅」变成可观测的。
+  app.get('/api/epic/fingerprint', async (req, res) => {
+    try {
+      const data = await epicManager.selfCheckFingerprint();
+      res.json({ success: true, data });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
   app.post('/api/epic/accounts/:id/verify', async (req, res) => {
     try {
       const result = await epicManager.verifySession(req.params.id);
@@ -1041,6 +1092,7 @@ export function createServer() {
       configManager.update({
         epic: {
           enabled: b.enabled !== false,
+          autoClaimTime: normalizeAutoClaimTime(b.autoClaimTime),
           checkIntervalMin: num(b.checkIntervalMin, 5, 1440, 30),
           retryCount: num(b.retryCount, 0, 5, 2),
           retryIntervalSec: num(b.retryIntervalSec, 10, 600, 60),

@@ -77,6 +77,7 @@ const DEFAULT_CONFIG = {
   },
   epic: {
     enabled: true,
+    autoClaimTime: '10:00', // 每天自动领取的启动时间（HH:MM），到点前一律暂停
     checkIntervalMin: 30, // 检查间隔（分钟）：到点先查有没有新免费游戏，有才领取
     retryCount: 2,        // 单个游戏领取失败后的重试次数
     retryIntervalSec: 60, // 失败重试间隔（秒）

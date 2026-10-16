@@ -88,6 +88,23 @@ test('登录窗口启动失败时不残留 Firefox 资源锁', async () => {
   assert.equal(firefoxSlotLock.isBusy(), false);
 });
 
+test('登录窗口使用干净会话与独立临时 profile，不注入已失效的旧凭据', async () => {
+  ensureAccount();
+  const { em } = makeManager();
+  let seenOpts = null;
+  const base = em.launchPersistentContext;
+  em.launchPersistentContext = async (acc, opts) => {
+    seenOpts = opts;
+    return base(acc, opts);
+  };
+  await withVisibleBrowser(async () => {
+    await em.openLoginWindow(ACCOUNT_ID);
+    await em.closeLoginWindow();
+  });
+  assert.equal(seenOpts?.cleanSession, true, '登录必须从干净会话开始，否则会带着旧会话去登录');
+  assert.match(String(seenOpts?.profileDir || ''), /-login$/, '登录应使用独立的临时 profile，不污染领取用的 profile');
+});
+
 test('登录窗口打开时领取与校验快速失败，而不是去抢同一个 profile', async () => {
   ensureAccount();
   const { em } = makeManager();

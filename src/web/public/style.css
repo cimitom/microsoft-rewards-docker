@@ -792,6 +792,11 @@ body {
   border-color: var(--accent);
 }
 
+/* 时间选择器比数字输入宽：HH:MM 加上浏览器自带的时钟按钮需要更多横向空间 */
+.epic-setting-input input[type="time"] {
+  width: 104px;
+}
+
 .epic-setting-input em {
   color: var(--text-muted);
   font-size: 10.5px;

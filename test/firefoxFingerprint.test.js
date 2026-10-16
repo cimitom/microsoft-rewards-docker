@@ -8,7 +8,8 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const {
   detectFirefoxVersion,
   buildFirefoxUserAgent,
-  webdriverInitScript
+  webdriverInitScript,
+  evaluateFirefoxFingerprint
 } = await import('../src/core/firefoxStealth.js');
 
 /**
@@ -93,4 +94,47 @@ test('Epic 启动 Firefox 时不再伪造 UA、也不再关闭 WebGL', () => {
   assert.ok(!/rv:127\.0/.test(src), '不允许再写死 Firefox 版本号');
   assert.ok(!/userAgent:\s*UA/.test(src), '不允许只改 UA 字符串而留下 platform/oscpu 矛盾');
   assert.ok(!/webgl\.disabled/.test(src), 'WebGL 是风控采集项，不允许整体关闭');
+});
+
+test('指纹自检：干净的 Firefox 指纹不应报任何告警', () => {
+  const warnings = evaluateFirefoxFingerprint({
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0',
+    platform: 'Linux x86_64',
+    webdriver: false,
+    hasWindowChrome: false,
+    pluginsCount: 0,
+    webglVendor: 'Intel Inc.',
+    webglRenderer: 'Mesa Intel(R) UHD Graphics 620 (KBL GT2)',
+    languages: ['zh-CN']
+  });
+  assert.deepEqual(warnings, []);
+});
+
+test('指纹自检能识别出自动化与身份矛盾特征', () => {
+  const base = {
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0',
+    platform: 'Linux x86_64',
+    webdriver: false,
+    hasWindowChrome: false,
+    pluginsCount: 0,
+    webglVendor: 'Intel Inc.',
+    webglRenderer: 'Mesa Intel(R) UHD Graphics 620 (KBL GT2)',
+    languages: ['zh-CN']
+  };
+
+  const flags = (patch) => evaluateFirefoxFingerprint({ ...base, ...patch }).join(' | ');
+  assert.match(flags({ webdriver: true }), /webdriver/);
+  assert.match(flags({ hasWindowChrome: true }), /window\.chrome/);
+  assert.match(flags({ pluginsCount: 3 }), /plugins/);
+  assert.match(flags({ webglRenderer: 'Mesa/llvmpipe (LLVM 15.0.6, 256 bits)' }), /软件渲染/);
+  assert.match(flags({ webglRenderer: '' }), /WebGL 不可用/);
+  assert.match(flags({ languages: [] }), /languages/);
+  // v1.7.1 的真实事故：UA 声称 Windows，platform 却是 Mac
+  assert.match(
+    flags({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
+      platform: 'MacIntel'
+    }),
+    /自相矛盾/
+  );
 });

@@ -16,7 +16,8 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # 需要 contents: write 才能在打 tag 时创建 GitHub Release
+      contents: write
       packages: write
 
     steps:
@@ -91,3 +92,19 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # 5. 建 GitHub Release
+      #    为什么必须有：旧版本客户端的「检查更新」读的是 releases/latest，
+      #    而发布流程历史上只推 tag、不建 Release —— 最新 Release 停在 v1.6.2，
+      #    于是 v1.6.3~v1.7.2 之间的用户永远收不到升级提示。
+      #    新版客户端已改为直接读 tags，但已经装在别人机器上的旧版改不了，只能靠补 Release。
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag \
+          || echo "::warning::Release 已存在或创建失败，跳过（不影响镜像发布）"

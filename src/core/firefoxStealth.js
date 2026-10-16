@@ -28,20 +28,124 @@ import path from 'path';
  * 真实 Firefox 的 navigator.webdriver 是 false，而 Playwright 驱动的实例是 true。
  * 注意是「置为 false」而不是删除属性：真实 Firefox 上该属性存在且为 false，
  * 删掉它反而多出一个 `'webdriver' in navigator === false` 的特征。
+ *
+ * 另外必须把 getter 的 toString 也伪装成 native：否则风控只要一句
+ * `Function.prototype.toString.call(descriptor.get)` 就会看到 `() => false`，
+ * 而真实 Firefox 返回的是 `function webdriver() { [native code] }`。
  */
 export function webdriverInitScript() {
   try {
+    const fakeGet = function webdriver() { return false; };
+
+    // 只针对我们这一处补丁伪造 native 外观，其余函数原样透传，
+    // 尽量不干扰页面自身对 Function.prototype.toString 的使用。
+    const nativeToString = Function.prototype.toString;
+    const patchedToString = function toString() {
+      if (this === fakeGet) return 'function webdriver() {\n    [native code]\n}';
+      return nativeToString.call(this);
+    };
+    patchedToString.toString = () => nativeToString.call(nativeToString);
+    Object.defineProperty(Function.prototype, 'toString', {
+      value: patchedToString,
+      writable: true,
+      configurable: true,
+      enumerable: false
+    });
+
     Object.defineProperty(Navigator.prototype, 'webdriver', {
-      get: () => false,
+      get: fakeGet,
       configurable: true,
       enumerable: true
     });
   } catch {}
 }
 
+/**
+ * 容器里没有 GPU，WebGL 只能走 Mesa llvmpipe（软件渲染）。
+ * 「软件渲染」本身就是虚拟机 / 无头环境的典型特征，风控会据此扣分，
+ * 所以这里把 UNMASKED_VENDOR / UNMASKED_RENDERER 换成常见的 Intel 核显标识。
+ *
+ * 与 browser.js 给 Chromium 的处理保持一致：同样处理 toString，
+ * 避免 getParameter 的源码暴露这是一段补丁。
+ */
+export function webglInitScript() {
+  const VENDOR = 'Intel Inc.';
+  const RENDERER = 'Mesa Intel(R) UHD Graphics 620 (KBL GT2)';
+  const SOFTWARE_RE = /llvmpipe|swiftshader|softpipe|software|mesa offscreen/i;
+  try {
+    const patch = (proto) => {
+      if (!proto || !proto.getParameter) return;
+      const orig = proto.getParameter;
+      let spoof = null; // null = 还没判定，true = 需要伪装，false = 真显卡，保持原样
+      proto.getParameter = function (p) {
+        if (p === 37445 || p === 37446) {
+          if (spoof === null) {
+            // 厂商与渲染器一次性判定，避免出现「厂商是 Mesa、渲染器是 Intel」这种新的矛盾
+            const realVendor = String(orig.call(this, 37445) || '');
+            const realRenderer = String(orig.call(this, 37446) || '');
+            spoof = SOFTWARE_RE.test(`${realVendor} ${realRenderer}`);
+          }
+          // 只有软件渲染才替换；真机 GPU 保持真实值，不为伪装引入新矛盾
+          if (spoof) return p === 37445 ? VENDOR : RENDERER;
+        }
+        return orig.call(this, p);
+      };
+      proto.getParameter.toString = () => orig.toString();
+    };
+    patch(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype);
+    patch(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype);
+  } catch {}
+}
+
 export async function applyFirefoxStealth(context) {
   if (!context?.addInitScript) return;
   await context.addInitScript(webdriverInitScript).catch(() => {});
+  await context.addInitScript(webglInitScript).catch(() => {});
+}
+
+/**
+ * 把采集到的指纹信号翻译成人能看懂的告警。
+ *
+ * 抽成纯函数是为了能单测：这些都是「同一份指纹里前后矛盾」的判据，
+ * 也正是 v1.7.2 之前把 Epic 登录搞挂的那类问题。
+ */
+export function evaluateFirefoxFingerprint(signals = {}) {
+  const warnings = [];
+  const ua = String(signals.userAgent || '');
+  const platform = String(signals.platform || '');
+  const gl = `${signals.webglVendor || ''} ${signals.webglRenderer || ''}`.trim();
+
+  if (signals.webdriver !== false) {
+    warnings.push('navigator.webdriver 不是 false —— 会被直接判定为自动化浏览器');
+  }
+  if (signals.hasWindowChrome) {
+    warnings.push('window.chrome 存在 —— Firefox 原生没有这个对象，属于 Chromium 补丁残留');
+  }
+  if (Number(signals.pluginsCount) > 0) {
+    warnings.push(`navigator.plugins 有 ${signals.pluginsCount} 项 —— Firefox 不应有插件列表`);
+  }
+  if (ua && !/Firefox\//.test(ua)) {
+    warnings.push('UA 里没有 Firefox 标识');
+  }
+  if (/Windows NT/.test(ua) && !/Win/.test(platform)) {
+    warnings.push('UA 声称 Windows，但 navigator.platform 不是 Win —— 身份自相矛盾');
+  }
+  if (/Macintosh/.test(ua) && !/Mac/.test(platform)) {
+    warnings.push('UA 声称 macOS，但 navigator.platform 不是 Mac —— 身份自相矛盾');
+  }
+  if (/(X11|Linux)/.test(ua) && !/Linux/.test(platform)) {
+    warnings.push('UA 声称 Linux，但 navigator.platform 不是 Linux —— 身份自相矛盾');
+  }
+  if (/llvmpipe|swiftshader|softpipe|software/i.test(gl)) {
+    warnings.push('WebGL 暴露软件渲染（llvmpipe / SwiftShader）—— 典型的无头或虚拟机特征');
+  }
+  if (!signals.webglRenderer) {
+    warnings.push('WebGL 不可用 —— 风控会当成异常浏览器');
+  }
+  if (!Array.isArray(signals.languages) || signals.languages.length === 0) {
+    warnings.push('navigator.languages 为空 —— 真实浏览器一定带语言列表');
+  }
+  return warnings;
 }
 
 /**
