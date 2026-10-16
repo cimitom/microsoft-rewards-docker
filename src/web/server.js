@@ -19,7 +19,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.7.5';
+const CURRENT_VERSION = '1.7.6';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -874,12 +874,16 @@ export function createServer() {
     });
     result.diagnosis = diagnosis;
 
-    // 如果成功获取到积分，同步更新当前账户的总积分
-    if (result.balance > 0) {
-      const accStats = taskManager.ensureAccountStats(result.accountId || 'acc_1');
-      accStats.balance = result.balance;
-      taskManager.saveStats();
+    // 体检结果落盘后同步更新统计；成功体检还会解除历史运行阻断。
+    const accStats = taskManager.ensureAccountStats(result.accountId || 'acc_1');
+    if (result.allValid) {
+      // 完整体检已确认双端有效，旧运行时阻断标记必须立即失效。
+      delete accStats.executionBlockReason;
     }
+    if (result.balance > 0) {
+      accStats.balance = result.balance;
+    }
+    taskManager.saveStats();
     return result;
   }
 

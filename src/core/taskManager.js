@@ -323,7 +323,10 @@ export class TaskManager {
             logger.log('🔴', `移动端 Token 异常，已标记该账号暂停执行：${binding.message}`, accCfg.name || accountId);
             accStats.executionBlockReason = binding.message;
             this.recordAccountCredentialBlock(accCfg, binding, info.balance);
-          } else if (mobileTrusted && /移动端 Token/i.test(accCfg.authDiagnosis?.warningMessage || '')) {
+          } else if (mobileTrusted) {
+            // 重新授权或体检恢复后必须解除历史运行阻断。
+            // 旧实现依赖 authDiagnosis.warningMessage 仍包含「移动端 Token」，
+            // 但成功体检会把 warningMessage 清空，导致旧阻断标记永久残留。
             delete accStats.executionBlockReason;
             configManager.recordAuthDiagnosis(accCfg.id, {
               cookieValid: true,

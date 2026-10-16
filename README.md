@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.6-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -145,6 +145,11 @@
   - **异常凭据账号统一拦截**：Token 绑定错误、Cookie/Token 失效或诊断异常的账号会跳过定时任务，手动运行、卡片操作和单次测搜会直接拒绝并显示具体原因；
   - **修复 Epic 新建账号登录按钮无响应**：新账号点击“打开可见浏览器登录”时会先自动保存备注账号，再启动 Firefox 登录窗口；
   - **单元测试增至 99 个**。
+- 🔓 **凭据恢复后解除历史运行阻断 (v1.7.6)**：
+  - **修复“体检正常但无法运行”**：重新授权或体检恢复后，实时校验确认移动端 Token 已正常时，会立即清除历史 `executionBlockReason`，不再永久跳过账号；
+  - **完整体检即时恢复执行**：账号体检确认双端有效时，会同步清除旧的运行阻断标记并持久化；
+  - **回归测试覆盖**：新增 Token 从绑定错误恢复后自动解除阻断的测试，防止问题复发；
+  - **单元测试增至 100 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；
