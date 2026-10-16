@@ -5,7 +5,7 @@ import configManager from '../config.js';
 import logger from '../logger.js';
 import networkClient from '../network.js';
 import { firefoxSlotLock } from './contextLock.js';
-import { DATA_DIR } from '../fsUtil.js';
+import { DATA_DIR, withTimeout } from '../fsUtil.js';
 import {
   applyFirefoxStealth,
   detectFirefoxVersion,
@@ -87,6 +87,8 @@ export class EpicManager {
     this.loginAccountId = null;
     this.loginSlotOwner = null;
     this.loginTimer = null;
+    this.loginClosePromise = null;
+    this.closeTimeoutMs = Math.max(10, Number(process.env.BROWSER_CLOSE_TIMEOUT_MS) || 15000);
     this.runningAccountId = null;
     this.lastRun = null; // { startedAt, finishedAt, results: [] }
     this.lastCheckAt = 0;
@@ -135,6 +137,7 @@ export class EpicManager {
       return { stopped: false, message: '当前没有正在运行的 Epic 任务' };
     }
     this.stopRequested = true;
+    const hadTask = this.running || this.checking || this.verifying;
     this.updateState({
       status: 'stopping',
       progress: this.state.progress || 0,
@@ -142,10 +145,24 @@ export class EpicManager {
       lastAction: '正在停止 Epic 任务并释放浏览器资源...'
     });
     logger.log('🛑', '收到手动停止指令，正在关闭 Epic 浏览器并释放资源');
-    if (this.activeContext) {
-      await this.activeContext.close().catch(() => {});
+    const activeContext = this.activeContext;
+    this.activeContext = null;
+    this.activeAccountId = null;
+    await Promise.allSettled([
+      activeContext
+        ? withTimeout(Promise.resolve().then(() => activeContext.close()), this.closeTimeoutMs, '关闭 Epic 浏览器超时').catch(() => {})
+        : Promise.resolve(),
+      this.closeLoginWindow().catch(() => {})
+    ]);
+    if (!this.running && !this.checking && !this.verifying) {
+      if (!hadTask) this.stopRequested = false;
+      this.updateState({
+        status: 'idle',
+        progress: 0,
+        code: 'stopped',
+        lastAction: 'Epic 任务已停止，浏览器资源已释放'
+      });
     }
-    await this.closeLoginWindow().catch(() => {});
     return { stopped: true, message: '停止指令已发送，浏览器资源即将释放' };
   }
 
@@ -237,6 +254,9 @@ export class EpicManager {
     if (!this.loginContext || this.loginAccountId !== accountId) {
       throw new Error('当前没有已打开的登录窗口');
     }
+    if (!configManager.findEpicAccount(accountId)) {
+      throw new Error('Epic 账号不存在或已被删除');
+    }
     const context = this.loginContext;
     const page = context.pages()[0] || await context.newPage();
     const detected = await this.detectLoginCompleted(page);
@@ -282,16 +302,36 @@ export class EpicManager {
 
   async closeLoginWindow() {
     this.clearLoginWindowTimeout();
-    if (this.loginContext) {
-      await this.loginContext.close().catch(() => {});
+    const previousClose = this.loginClosePromise;
+    if (!this.loginContext && previousClose) {
+      await previousClose.catch(() => {});
+      return { closed: true };
     }
+    const context = this.loginContext;
+    const slotOwner = this.loginSlotOwner;
     this.loginContext = null;
     this.loginAccountId = null;
-    if (this.loginSlotOwner) {
-      firefoxSlotLock.release(this.loginSlotOwner);
-      this.loginSlotOwner = null;
+    this.loginSlotOwner = null;
+    // 先释放锁，再尽力关闭浏览器。否则 Firefox 卡死时锁会永久泄漏。
+    if (slotOwner) firefoxSlotLock.release(slotOwner);
+    const closePromise = context
+      ? withTimeout(Promise.resolve().then(() => context.close()), this.closeTimeoutMs, '关闭 Epic 登录窗口超时').catch(() => {})
+      : Promise.resolve();
+    this.loginClosePromise = closePromise;
+    try {
+      await closePromise;
+    } finally {
+      if (this.loginClosePromise === closePromise) this.loginClosePromise = null;
     }
     return { closed: true };
+  }
+
+  /** 删除账号前只关闭属于该账号的登录窗口，避免误伤其他账号的人工登录。 */
+  async closeLoginWindowForAccount(accountId) {
+    if (this.loginContext && this.loginAccountId !== accountId) {
+      return { closed: false, message: '另一个账号的登录窗口仍处于打开状态' };
+    }
+    return this.closeLoginWindow();
   }
 
   /**
@@ -360,9 +400,17 @@ export class EpicManager {
         firefoxVersion: FIREFOX_VERSION
       };
     } finally {
-      if (context) await context.close().catch(() => {});
-      fs.rmSync(tmpProfile, { recursive: true, force: true });
-      firefoxSlotLock.release(slotOwner);
+      try {
+        if (context) {
+          await withTimeout(Promise.resolve().then(() => context.close()), this.closeTimeoutMs, '关闭指纹自检浏览器超时').catch(() => {});
+        }
+      } finally {
+        try {
+          fs.rmSync(tmpProfile, { recursive: true, force: true });
+        } finally {
+          firefoxSlotLock.release(slotOwner);
+        }
+      }
     }
   }
 
@@ -505,6 +553,7 @@ export class EpicManager {
   getState() {
     return {
       running: this.running,
+      checking: this.checking,
       verifying: this.verifying,
       stopRequested: this.stopRequested,
       engine: 'firefox',
@@ -573,14 +622,25 @@ export class EpicManager {
 
     // 4) 原始 Cookie 请求头字符串：a=1; b=2
     const cookies = [];
-    for (const part of text.split(';')) {
+    for (const part of text.split(/[;\r\n]+/)) {
       const trimmed = part.trim();
       if (!trimmed) continue;
-      const eq = trimmed.indexOf('=');
-      if (eq <= 0) continue;
-      const name = trimmed.slice(0, eq).trim();
-      const value = trimmed.slice(eq + 1).trim();
+      let name = '';
+      let value = '';
+      if (trimmed.includes('\t') && !trimmed.includes('=')) {
+        const cols = trimmed.split('\t');
+        name = String(cols[0] || '').trim();
+        value = String(cols[1] || '').trim();
+      } else {
+        const eq = trimmed.indexOf('=');
+        if (eq <= 0) continue;
+        name = trimmed.slice(0, eq).trim();
+        value = trimmed.slice(eq + 1).trim();
+      }
       if (!name) continue;
+      if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+        value = value.slice(1, -1);
+      }
       cookies.push({
         name,
         value,
@@ -1141,8 +1201,13 @@ export class EpicManager {
         this.activeAccountId = null;
       }
       this.stopRequested = false;
-      if (context) await context.close().catch(() => {});
-      firefoxSlotLock.release(slotOwner);
+      try {
+        if (context) {
+          await withTimeout(Promise.resolve().then(() => context.close()), this.closeTimeoutMs, '关闭会话校验浏览器超时').catch(() => {});
+        }
+      } finally {
+        firefoxSlotLock.release(slotOwner);
+      }
     }
   }
 
@@ -1254,12 +1319,17 @@ export class EpicManager {
       }
       configManager.updateEpicAccount(accountId, patch);
     } finally {
-      if (context) await context.close().catch(() => {});
-      if (this.activeContext === context) {
-        this.activeContext = null;
-        this.activeAccountId = null;
+      try {
+        if (context) {
+          await withTimeout(Promise.resolve().then(() => context.close()), this.closeTimeoutMs, '关闭 Epic 领取浏览器超时').catch(() => {});
+        }
+      } finally {
+        if (this.activeContext === context) {
+          this.activeContext = null;
+          this.activeAccountId = null;
+        }
+        if (slotHeld && slotOwner) firefoxSlotLock.release(slotOwner);
       }
-      if (slotHeld && slotOwner) firefoxSlotLock.release(slotOwner);
     }
 
     this.recordResults(accountId, results);

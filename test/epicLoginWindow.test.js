@@ -129,7 +129,7 @@ test('停止 Epic 任务会关闭登录窗口并释放 Firefox 锁', async () =>
     assert.equal(res.stopped, true);
     assert.equal(em.isLoginWindowOpen(), false);
     assert.equal(firefoxSlotLock.isBusy(), false);
-    em.stopRequested = false;
+    assert.equal(em.stopRequested, false, '只关闭登录窗口时不能把后续任务永久标成已停止');
   });
 });
 

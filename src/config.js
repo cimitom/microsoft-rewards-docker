@@ -371,7 +371,9 @@ class ConfigManager {
     if (cfg.accounts.length <= 1) {
       throw new Error('至少需要保留一个账号');
     }
+    const before = cfg.accounts.length;
     cfg.accounts = cfg.accounts.filter(a => a.id !== accountId);
+    if (cfg.accounts.length === before) return false;
     // 账号被删掉后，它的浏览器会话（含登录 Cookie）不应该继续留在磁盘上
     removeBrowserSession(accountId);
     this.save();
@@ -439,7 +441,9 @@ class ConfigManager {
     if (cfg.epic.accounts.length === before) return false;
     try {
       const safeId = String(id || '').replace(/[^A-Za-z0-9_-]/g, '_');
-      fs.rmSync(path.join(DATA_DIR, 'epic-firefox-profiles', safeId), { recursive: true, force: true });
+      const profileRoot = path.join(DATA_DIR, 'epic-firefox-profiles');
+      fs.rmSync(path.join(profileRoot, safeId), { recursive: true, force: true });
+      fs.rmSync(path.join(profileRoot, `${safeId}-login`), { recursive: true, force: true });
     } catch {}
     this.save();
     return true;

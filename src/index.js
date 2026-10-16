@@ -26,7 +26,9 @@ async function bootstrap() {
   // 否则设置了 authPassword 也能直接连上 WebSocket 操作浏览器。
   if (app.locals?.novncProxy) {
     server.on('upgrade', (req, socket, head) => {
-      if (!String(req.url || '').startsWith('/websockify')) {
+      const requestUrl = String(req.url || '');
+      const isNovncPath = requestUrl.startsWith('/novnc/websockify');
+      if (!requestUrl.startsWith('/websockify') && !isNovncPath) {
         socket.destroy();
         return;
       }
@@ -41,6 +43,9 @@ async function bootstrap() {
         );
         socket.destroy();
         return;
+      }
+      if (isNovncPath) {
+        req.url = req.url.replace(/^\/novnc/, '');
       }
       app.locals.novncProxy.ws(req, socket, head);
     });

@@ -21,6 +21,7 @@ let diagAccountId = null;
 
 // 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
+const SECRET_CLEAR = '__MSR_SECRET_CLEAR__';
 let guideDraftAccount = {
   id: '',
   name: '新账号',
@@ -542,7 +543,8 @@ function initUIEvents() {
           urlOrCode: input,
           accountId: guideDraftAccount.id,
           name: guideDraftAccount.name,
-          order: guideDraftAccount.order
+          order: guideDraftAccount.order,
+          draft: true
         })
       }).then(r => r.json());
       if (res.success) {
@@ -621,6 +623,10 @@ function initUIEvents() {
   document.getElementById('btn-exchange-token')?.addEventListener('click', async () => {
     const input = document.getElementById('cfg-authcode').value.trim();
     const resDiv = document.getElementById('cfg-auth-test-result');
+    if (input === SECRET_CLEAR) {
+      if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">凭据已标记清空，请先保存配置或重新粘贴授权码后再换取 Token。</span>';
+      return;
+    }
     if (!input) {
       if (resDiv) resDiv.innerHTML = '<span style="color:#EF4444;">请先在输入框中粘贴包含 code= 的跳转链接</span>';
       openEpicActionModal('缺少授权码', '请先填入包含 code 的链接或授权码。', ['填写授权码', '重新换取 Token'], 0);
@@ -636,7 +642,11 @@ function initUIEvents() {
     }).then(r => r.json());
     if (res.success) {
       if (resDiv) resDiv.innerHTML = '<span style="color:#34D399;">✅ Token 换取并自动保存成功！</span>';
-      document.getElementById('cfg-refresh-token').value = '********';
+      const refreshEl = document.getElementById('cfg-refresh-token');
+      if (refreshEl) {
+        refreshEl.value = '********';
+        delete refreshEl.dataset.clear;
+      }
       document.getElementById('cfg-authcode').placeholder = '已配置授权码（内容已隐藏）';
       document.getElementById('cfg-authcode').value = '';
       fetchConfig();
@@ -651,6 +661,10 @@ function initUIEvents() {
     const input = document.getElementById('cfg-cookie').value.trim();
     const resDiv = document.getElementById('cfg-cookie-test-result');
     const targetId = editingAccountIdInModal || 'acc_1';
+    if (input === SECRET_CLEAR) {
+      if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">Cookie 已标记清空，请先保存配置或重新粘贴后再测试。</span>';
+      return;
+    }
     if (resDiv) resDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在请求微软官网验证 Cookie 有效性...</span>';
     try {
       const testRes = await fetch('/api/auth/test-cookie', {
@@ -673,7 +687,7 @@ function initUIEvents() {
     const ok = await showWebConfirm('确定要清空该账号保存的 Cookie 吗？保存配置后生效。', '清空 Cookie');
     if (!ok) return;
     const input = document.getElementById('cfg-cookie');
-    input.value = '__MSR_SECRET_CLEAR__';
+    input.value = SECRET_CLEAR;
     input.placeholder = '已标记清空（点击下方保存配置后生效）';
     const resDiv = document.getElementById('cfg-cookie-test-result');
     if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
@@ -684,9 +698,13 @@ function initUIEvents() {
     const ok = await showWebConfirm('确定要清空该账号保存的移动端授权码与 Token 吗？保存配置后生效。', '清空移动端凭据');
     if (!ok) return;
     const input = document.getElementById('cfg-authcode');
-    input.value = '__MSR_SECRET_CLEAR__';
+    input.value = SECRET_CLEAR;
     input.placeholder = '已标记清空（点击下方保存配置后生效）';
-    document.getElementById('cfg-refresh-token').value = '';
+    const refreshEl = document.getElementById('cfg-refresh-token');
+    if (refreshEl) {
+      refreshEl.value = '';
+      refreshEl.dataset.clear = '1';
+    }
     const resDiv = document.getElementById('cfg-auth-test-result');
     if (resDiv) resDiv.innerHTML = '<span style="color:#F59E0B;">⚠️ 已标记清空，请点击弹窗底部「保存配置」使变更落盘</span>';
   });
@@ -1150,7 +1168,10 @@ async function runTaskCardAction(accountId, taskKey, taskName = taskKey) {
       updateEpicActionModal({
         activeIndex: 4,
         progress: 100,
-        badge: { text: d.alreadyDone ? '已完成' : '执行完成', cls: d.alreadyDone ? 'warn' : 'ok' },
+        badge: {
+          text: d.alreadyDone ? '已完成' : (d.hadFailure ? '部分完成' : '执行完成'),
+          cls: d.alreadyDone || d.hadFailure ? 'warn' : 'ok'
+        },
         message: d.message || '任务动作已完成',
         result: lines.length ? lines.join('\n') : (d.message || '任务动作已完成')
       });
@@ -1204,7 +1225,10 @@ async function stopEpicTask() {
   const ok = await showWebConfirm('确定立即停止当前 Epic 任务吗？\n正在进行的浏览器页面会被关闭，浏览器资源会尽快释放给微软积分任务。', '停止 Epic 任务');
   if (!ok) return;
   try {
-    const res = await fetch('/api/epic/stop', { method: 'POST' }).then(r => r.json());
+    const res = await fetch('/api/epic/stop', {
+      method: 'POST',
+      signal: AbortSignal.timeout(20000)
+    }).then(r => r.json());
     updateEpicActionModal({
       badge: { text: '停止中', cls: 'warn' },
       message: res.message || '停止指令已发送',
@@ -1336,7 +1360,7 @@ async function handleQuickAddAccount() {
     payload.id = editingAccountIdInQuickModal;
   }
   if (quickAddCookieCleared) {
-    payload.cookie = '__MSR_SECRET_CLEAR__';
+    payload.cookie = SECRET_CLEAR;
   } else if (cookieVal && !cookieVal.startsWith('（已标记清空')) {
     payload.cookie = cookieVal;
   } else if (!isEditing) {
@@ -1402,17 +1426,22 @@ async function handleDeleteCurrentAccountInModal() {
   const ok = await showWebConfirm('确定要删除当前选中的这个账号吗？\n该账号的浏览器会话也会被清理。', '删除微软账号');
   if (!ok) return;
 
-  const res = await fetch(`/api/accounts/${editingAccountIdInModal}`, { method: 'DELETE' }).then(r => r.json());
-  if (res.success) {
-    selectedAccountId = 'all';
-    fetchConfig();
-    fetchStatus();
-    closeModal('settings-modal');
-    openEpicActionModal('账号已删除', '账号及其浏览器会话已清理。', ['删除账号配置', '清理浏览器会话', '刷新账号列表'], 3);
-    updateEpicActionModal({ progress: 100, badge: { text: '已删除', cls: 'ok' } });
-  } else {
-    openEpicActionModal('账号删除失败', res.message || '删除失败', ['删除账号配置', '校验结果'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '删除失败', cls: 'err' }, result: `删除失败：${res.message || '未知错误'}` });
+  try {
+    const res = await fetch(`/api/accounts/${editingAccountIdInModal}`, { method: 'DELETE' }).then(r => r.json());
+    if (res.success) {
+      selectedAccountId = 'all';
+      fetchConfig();
+      fetchStatus();
+      closeModal('settings-modal');
+      openEpicActionModal('账号已删除', '账号及其浏览器会话已清理。', ['删除账号配置', '清理浏览器会话', '刷新账号列表'], 3);
+      updateEpicActionModal({ progress: 100, badge: { text: '已删除', cls: 'ok' } });
+    } else {
+      openEpicActionModal('账号删除失败', res.message || '删除失败', ['删除账号配置', '校验结果'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '删除失败', cls: 'err' }, result: `删除失败：${res.message || '未知错误'}` });
+    }
+  } catch (e) {
+    openEpicActionModal('账号删除异常', e.message, ['删除账号配置', '校验结果'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '删除异常', cls: 'err' }, result: `删除异常：${e.message}` });
   }
 }
 
@@ -1475,7 +1504,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.3';
+  const current = updateInfo?.currentVersion || '1.7.4';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1530,8 +1559,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.3'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.3'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.4'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.4'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -1614,7 +1643,7 @@ function renderAccountSelectorBar(summary) {
     const isActive = selectedAccountId === acc.id;
     const auth = getAccountAuthStatus(acc);
     html += `
-      <button class="account-chip ${isActive ? 'active' : ''}" data-acc-id="${acc.id}">
+      <button class="account-chip ${isActive ? 'active' : ''}" data-acc-id="${escapeHtml(acc.id)}">
         <span class="chip-icon">${auth.cls === 'badge-auth-valid' ? '🟢' : auth.cls === 'badge-auth-invalid' ? '🔴' : (acc.enabled ? '👤' : '⏸️')}</span>
         <span class="chip-name">${escapeHtml(acc.name)}</span>
         <span class="chip-sub">${(acc.balance || 0).toLocaleString()} 分</span>
@@ -1642,7 +1671,7 @@ function renderAccountSelectorBar(summary) {
   });
 
   bar.querySelector('#btn-add-account-chip')?.addEventListener('click', () => {
-    openModal('account-quick-add-modal');
+    openQuickAddAccountModal();
   });
 }
 
@@ -1893,17 +1922,17 @@ function formatPunchCardTooltip(t) {
     card.innerHTML = `
       <div class="task-top">
         <div class="task-info">
-          <div class="task-icon">${t.icon || '📌'}</div>
+          <div class="task-icon">${escapeHtml(t.icon || '📌')}</div>
           <div>
-            <div class="task-name">${t.name}</div>
-            <div class="task-subtext">${subtext}</div>
+            <div class="task-name">${escapeHtml(t.name || key)}</div>
+            <div class="task-subtext">${escapeHtml(subtext)}</div>
           </div>
         </div>
-        <div class="pts-badge">${pointsBadge}</div>
+        <div class="pts-badge">${escapeHtml(pointsBadge)}</div>
       </div>
       <div class="progress-wrap">
         <div class="progress-labels">
-          <span>${progressLabel}</span>
+          <span>${escapeHtml(progressLabel)}</span>
           <span>${progPercent}%</span>
         </div>
         <div class="progress-bar-track">
@@ -1970,7 +1999,9 @@ function getAccountAuthStatus(acc) {
     `检测结果：${d.overallValid ? (d.warning ? '已登录但存在异常' : '整体有效') : '存在失效项'}`,
     cookieLine,
     tokenLine,
-    ...(d.warning ? [`⚠️ ${d.warningMessage || 'Cookie 存在异常，请重新抓取'}`] : [])
+    ...(d.cookieMessage ? [`Cookie：${d.cookieMessage}`] : []),
+    ...(d.tokenMessage ? [`Token：${d.tokenMessage}`] : []),
+    ...(d.warning ? [`⚠️ ${d.warningMessage || '凭据存在异常，请重新检查'}`] : [])
   ].join('\n');
   if (d.overallValid && d.warning) {
     return { text: '需修复', cls: 'badge-auth-warn', tip };
@@ -2280,7 +2311,7 @@ function buildLogLine(log) {
   div.className = 'log-line';
   const acc = logAccountName(log);
   const cls = acc === '系统' ? 'log-acc log-acc-system' : 'log-acc';
-  div.innerHTML = `<span class="log-time">[${log.time}]</span> <span>${log.icon}</span> <strong class="${cls}">[${escapeHtml(acc)}]</strong> ${escapeHtml(log.message)}`;
+  div.innerHTML = `<span class="log-time">[${escapeHtml(log.time)}]</span> <span>${escapeHtml(log.icon)}</span> <strong class="${cls}">[${escapeHtml(acc)}]</strong> ${escapeHtml(log.message)}`;
   return div;
 }
 
@@ -2338,23 +2369,34 @@ function escapeHtml(str) {
 }
 
 async function runTasks() {
-  const reqBody = selectedAccountId !== 'all' ? { accountId: selectedAccountId } : {};
-  const res = await fetch('/api/tasks/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(reqBody)
-  }).then(r => r.json());
-  if (res.success) {
-    fetchStatus();
-  } else {
-    openEpicActionModal('无法启动任务', res.message || '启动失败', ['检查运行状态'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '启动失败', cls: 'err' } });
+  try {
+    const reqBody = selectedAccountId !== 'all' ? { accountId: selectedAccountId } : {};
+    const res = await fetch('/api/tasks/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody)
+    }).then(r => r.json());
+    if (res.success) {
+      fetchStatus();
+    } else {
+      openEpicActionModal('无法启动任务', res.message || '启动失败', ['检查运行状态'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '启动失败', cls: 'err' }, result: res.message || '' });
+    }
+  } catch (e) {
+    openEpicActionModal('启动任务异常', e.message, ['检查网络与运行状态'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '请求异常', cls: 'err' }, result: `请求异常：${e.message}` });
   }
 }
 
 async function stopTasks() {
-  await fetch('/api/tasks/stop', { method: 'POST' });
-  fetchStatus();
+  try {
+    const res = await fetch('/api/tasks/stop', { method: 'POST' }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '停止失败');
+    fetchStatus();
+  } catch (e) {
+    openEpicActionModal('停止任务失败', e.message, ['发送停止指令'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '停止失败', cls: 'err' }, result: `停止失败：${e.message}` });
+  }
 }
 
 async function fetchConfig() {
@@ -2537,7 +2579,11 @@ function loadAccountIntoForm(accId) {
   document.querySelectorAll('.secret-toggle').forEach(btn => { btn.textContent = '👁'; });
   updateCookieHint(hasCookie);
 
-  document.getElementById('cfg-refresh-token').value = acc.refreshToken ? '********' : '';
+  const refreshTokenElem = document.getElementById('cfg-refresh-token');
+  if (refreshTokenElem) {
+    refreshTokenElem.value = acc.refreshToken ? '********' : '';
+    delete refreshTokenElem.dataset.clear;
+  }
   const cookieRes = document.getElementById('cfg-cookie-test-result');
   if (cookieRes) cookieRes.innerHTML = '';
   const authRes = document.getElementById('cfg-auth-test-result');
@@ -2615,6 +2661,10 @@ async function saveSettingsFromModal() {
       durationHours: 2
     }
   };
+  if (document.getElementById('cfg-refresh-token')?.dataset.clear === '1') {
+    updatedAccountData.refreshToken = SECRET_CLEAR;
+    updatedAccountData.accessToken = SECRET_CLEAR;
+  }
 
   if (idx !== -1) {
     currentAccounts[idx] = { ...currentAccounts[idx], ...updatedAccountData };
@@ -2725,22 +2775,33 @@ async function saveGuideSettings() {
         refreshToken: guideDraftAccount.refreshToken,
         accessToken: guideDraftAccount.accessToken,
         tokenTime: guideDraftAccount.tokenTime,
+        tokenAlreadyExchanged: !!(guideDraftAccount.refreshToken && guideDraftAccount.accessToken),
         timeSlot: { startHour: sh, endHour: eh, randomDelayMin: 60, durationHours: 2 }
       })
     }).then(r => r.json());
-    if (accRes.success && accRes.data?.id) {
-      selectedAccountId = accRes.data.id;
+    if (!accRes.success || !accRes.data?.id) {
+      throw new Error(accRes.message || '账号保存失败');
     }
+    selectedAccountId = accRes.data.id;
   } catch (e) {
-    console.error('保存向导账号失败:', e);
+    openEpicActionModal('向导保存失败', e.message, ['保存账号资料', '写入网络配置'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, result: `保存失败：${e.message}` });
+    return;
   }
 
   // 2) 保存网络与代理设置
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ network: { useProxy, proxyUrl, lockRegion } })
-  });
+  try {
+    const netRes = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ network: { useProxy, proxyUrl, lockRegion } })
+    }).then(r => r.json());
+    if (!netRes.success) throw new Error(netRes.message || '网络配置保存失败');
+  } catch (e) {
+    openEpicActionModal('向导保存失败', e.message, ['保存账号资料', '写入网络配置'], 1);
+    updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, result: `保存失败：${e.message}` });
+    return;
+  }
 
   fetchConfig();
   fetchStatus();
@@ -3430,11 +3491,11 @@ function renderEpicAccounts(accounts) {
           </div>
         </div>
         <div class="epic-account-actions">
-          <button class="btn btn-primary btn-sm epic-claim" data-id="${a.id}" title="为这个账号领取">▶️ 领取</button>
-          <button class="btn btn-secondary btn-sm epic-verify" data-id="${a.id}" title="校验浏览器会话">🔍 校验</button>
-          <button class="btn btn-secondary btn-sm epic-import" data-id="${a.id}" title="编辑账号名称或更新浏览器会话 Cookie">✏️ 编辑</button>
-          <button class="btn btn-secondary btn-sm epic-toggle" data-id="${a.id}" title="${a.enabled ? '停用此账号' : '启用此账号'}">${a.enabled ? '⏸️ 停用' : '▶️ 启用'}</button>
-          <button class="btn btn-danger btn-sm epic-delete" data-id="${a.id}" title="删除此账号">🗑️ 删除</button>
+          <button class="btn btn-primary btn-sm epic-claim" data-id="${escapeHtml(a.id)}" title="为这个账号领取">▶️ 领取</button>
+          <button class="btn btn-secondary btn-sm epic-verify" data-id="${escapeHtml(a.id)}" title="校验浏览器会话">🔍 校验</button>
+          <button class="btn btn-secondary btn-sm epic-import" data-id="${escapeHtml(a.id)}" title="编辑账号名称或更新浏览器会话 Cookie">✏️ 编辑</button>
+          <button class="btn btn-secondary btn-sm epic-toggle" data-id="${escapeHtml(a.id)}" title="${a.enabled ? '停用此账号' : '启用此账号'}">${a.enabled ? '⏸️ 停用' : '▶️ 启用'}</button>
+          <button class="btn btn-danger btn-sm epic-delete" data-id="${escapeHtml(a.id)}" title="删除此账号">🗑️ 删除</button>
         </div>
       </div>`;
   }).join('');
@@ -3558,6 +3619,7 @@ function renderEpicRecords(records) {
     const statusMap = {
       claimed: { cls: 'ok', text: '已领取' },
       owned: { cls: 'warn', text: '已拥有' },
+      blocked: { cls: 'warn', text: '已拦截' },
       failed: { cls: 'err', text: '失败' }
     };
     const status = statusMap[r.status] || { cls: r.ok ? 'ok' : 'err', text: r.ok ? '成功' : '失败' };
@@ -3596,7 +3658,10 @@ async function fetchEpicFreeGames(manual = false) {
 }
 
 function openEpicModal(accountId) {
-  if (accountId && (epicStatusCache.running || epicStatusCache.verifying)) {
+  const epicBusy = epicStatusCache.running
+    || epicStatusCache.verifying
+    || ['checking', 'stopping', 'verifying'].includes(epicStatusCache.state?.status);
+  if (accountId && epicBusy) {
     openEpicActionModal(
       'Epic 任务正在运行',
       '当前无法编辑会话，请先停止 Epic 任务。',
@@ -3912,11 +3977,12 @@ async function toggleEpicAccount(accountId) {
   const acc = epicAccountCache.find(a => a.id === accountId);
   if (!acc) return;
   try {
-    await fetch('/api/epic/accounts', {
+    const res = await fetch('/api/epic/accounts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: accountId, name: acc.name, enabled: !acc.enabled })
-    });
+    }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '更新失败');
     await fetchEpicAccounts();
   } catch (e) {
     openEpicActionModal('Epic 账号操作失败', e.message, ['更新账号状态', '刷新账号列表'], 0);
@@ -3977,10 +4043,17 @@ async function claimEpic(accountId) {
 
     const data = res.data || {};
     let resultText = '';
-    const results = data.results || [];
-    if (results.length > 0) {
+    const rawResults = data.results || [];
+    const resultGroups = accountId
+      ? [{
+          accountId,
+          accountName: epicAccountCache.find(a => a.id === accountId)?.name || accountId,
+          results: rawResults
+        }]
+      : rawResults;
+    if (resultGroups.length > 0) {
       const blocks = [];
-      results.forEach(group => {
+      resultGroups.forEach(group => {
         const title = group.accountName ? `【账号: ${group.accountName}】` : '';
         const items = (group.results || []).map(r => {
           const icon = r.ok ? '✅' : (r.status === 'blocked' ? '🛡️' : '❌');
@@ -4051,7 +4124,7 @@ async function loadEpicSettings() {
     set('epic-set-retry-interval', s.retryIntervalSec ?? 60);
     set('epic-set-account-gap', s.accountGapSec ?? 20);
 
-    const curMin = Number(s.checkIntervalMin ?? 720);
+    const curMin = Number(s.checkIntervalMin ?? 30);
     document.querySelectorAll('.cycle-pill').forEach(btn => {
       const bMin = Number(btn.getAttribute('data-min'));
       if (bMin === curMin) btn.classList.add('active');

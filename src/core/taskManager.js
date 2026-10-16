@@ -9,6 +9,7 @@ import historyManager from './history.js';
 import browserManager from './browser.js';
 import { accountContextLock } from './contextLock.js';
 import { SearchStagnationGuard, normalizeStagnantLimit } from './searchStagnation.js';
+import { isBalanceMismatch } from './accountIdentity.js';
 import { DATA_DIR, writeFileAtomic } from '../fsUtil.js';
 
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
@@ -307,8 +308,18 @@ export class TaskManager {
           };
         }
 
-        // 2. 同步新闻阅读真实配额
-        if (info.readMax > 0) {
+        // 2. 同步新闻阅读真实配额。
+        //    阅读进度来自移动端 DAPI，Token 绑定错误时这份数据属于另一个账号，
+        //    绝不能拿它覆盖当前网页 Cookie 账号的阅读状态。
+        let mobileTrusted = true;
+        if (accCfg.refreshToken && info.readMax > 0) {
+          const binding = await this.checkMobileAccountBinding(accCfg, info.balance).catch(() => null);
+          mobileTrusted = !!binding?.tokenOk && !binding?.mismatch;
+          if (!mobileTrusted && binding?.mismatch) {
+            logger.log('🔴', `${binding.message}，本次不采用移动端阅读进度`, accCfg.name || accountId);
+          }
+        }
+        if (info.readMax > 0 && mobileTrusted) {
           const readCur = Number(info.readProgress || 0);
           const readMax = Number(info.readMax || 30);
           const isReadDone = readCur >= readMax;
@@ -613,23 +624,30 @@ export class TaskManager {
    * 领取 Dashboard 待领取额外积分
    */
   async claimPendingPoints(targetAccountId = 'all') {
+    if (!accountContextLock.tryAcquire('web-action')) {
+      throw new Error('已有任务正在执行，请稍后再领取额外积分');
+    }
     const accounts = configManager.getAccounts().filter(a => a.enabled !== false && a.cookie);
     const targets = targetAccountId === 'all' ? accounts : accounts.filter(a => a.id === targetAccountId);
     let totalClaimed = 0;
-    for (const acc of targets) {
-      try {
-        rewardsApi.setCurrentAccount(acc);
-        const pts = await browserManager.claimDashboardPoints(acc);
-        if (pts > 0) {
-          totalClaimed += pts;
-          const st = this.ensureAccountStats(acc.id);
-          st.balance = (st.balance || 0) + pts;
-          st.claimablePoints = 0;
-          this.saveStats();
-        }
-      } catch {}
+    try {
+      for (const acc of targets) {
+        try {
+          rewardsApi.setCurrentAccount(acc);
+          const pts = await browserManager.claimDashboardPoints(acc);
+          if (pts > 0) {
+            totalClaimed += pts;
+            const st = this.ensureAccountStats(acc.id);
+            st.balance = (st.balance || 0) + pts;
+            st.claimablePoints = 0;
+            this.saveStats();
+          }
+        } catch {}
+      }
+      return totalClaimed;
+    } finally {
+      accountContextLock.release('web-action');
     }
-    return totalClaimed;
   }
 
   /**
@@ -657,6 +675,28 @@ export class TaskManager {
   }
 
   /**
+   * 在执行任何移动端任务前校验 Token 归属。
+   * 网页端余额与 DAPI 余额明显不一致时，Token 很可能属于另一个微软账号，
+   * 必须直接拦住，不能把签到/阅读算到别人头上。
+   */
+  async checkMobileAccountBinding(acc, webBalance = null) {
+    const tokenOk = await authManager.refreshToken(false, acc.id).catch(() => false);
+    if (!tokenOk) {
+      return { tokenOk: false, mobileBalance: null, mismatch: false, message: '移动端 Token 未就绪或刷新失败' };
+    }
+    const mobileBalance = await rewardsApi.getMobileBalance();
+    const mismatch = isBalanceMismatch(webBalance, mobileBalance);
+    return {
+      tokenOk: true,
+      mobileBalance,
+      mismatch,
+      message: mismatch
+        ? `移动端 Token 实际绑定到其他账号（Token 余额 ${mobileBalance}，网页端余额 ${webBalance}）`
+        : ''
+    };
+  }
+
+  /**
    * WebUI 任务卡片点击执行：每次只执行该卡片对应的一次动作。
    * 支持 sign / read / search / 打孔卡类任务。
    */
@@ -677,6 +717,7 @@ export class TaskManager {
         accountName: acc.name,
         message: '',
         alreadyDone: false,
+        hadFailure: false,
         details: [],
         before: {
           progress: Number(before?.tasks?.[taskKey]?.progress || 0),
@@ -686,25 +727,36 @@ export class TaskManager {
       };
 
       if (taskKey === 'sign') {
-        const appStatus = await rewardsApi.getAppCheckInStatus().catch(() => null);
+        const info = await rewardsApi.getRewardsInfo(1).catch(() => null);
+        const appStatus = info?.streaks?.bingapp || await rewardsApi.getAppCheckInStatus().catch(() => null);
         if (appStatus?.isCurrentDayCompleted) {
           result.alreadyDone = true;
           result.message = `今日已签到（官网 App 连签 ${appStatus.completedDays || 0}/7 天）`;
         } else {
-          const tokenOk = await authManager.refreshToken(false, acc.id).catch(() => false);
           let points = 0;
-          if (tokenOk) {
-            const appRes = await rewardsApi.signApp().catch(() => null);
-            if (appRes && Number(appRes.points || 0) > 0) {
+          const webBalance = Number(info?.balance || before?.balance || 0);
+          const binding = await this.checkMobileAccountBinding(acc, webBalance);
+          if (binding.mismatch) {
+            result.hadFailure = true;
+            result.details.push(binding.message);
+            result.details.push('已跳过 App 签到，避免把签到算到其他微软账号');
+          } else if (!binding.tokenOk) {
+            result.hadFailure = true;
+            result.details.push(binding.message);
+          } else {
+            const appRes = await rewardsApi.signApp().catch(e => ({ error: e.message }));
+            if (appRes && isBalanceMismatch(webBalance, appRes.balance)) {
+              result.hadFailure = true;
+              result.details.push(`App 端返回的账号余额 ${appRes.balance} 与网页端 ${webBalance} 不一致，已拒绝把本次签到计给当前账号`);
+            } else if (appRes && Number(appRes.points || 0) > 0) {
               points += Number(appRes.points);
               result.details.push(`App 端签到成功 +${appRes.points} 积分`);
             } else if (appRes?.isDuplicate) {
               result.details.push('App 端今日已签到');
             } else {
-              result.details.push('App 端签到未返回明确结果');
+              result.hadFailure = true;
+              result.details.push(`App 端签到未生效${appRes?.error ? `：${appRes.error}` : ''}`);
             }
-          } else {
-            result.details.push('移动端 Token 未就绪，跳过 App 签到');
           }
 
           await rewardsApi.randomDelay(1500, 3000);
@@ -714,11 +766,24 @@ export class TaskManager {
             result.details.push(pcPoints > 0 ? `PC 网页端签到成功 +${pcPoints} 积分` : 'PC 网页端签到已处理');
           }
           await this.syncAccountOfficialStatus(acc, { owned: true });
-          result.message = points > 0 ? `签到完成，本次获得 +${points} 积分` : '签到请求已完成';
+          const finalInfo = await rewardsApi.getRewardsInfo(1).catch(() => null);
+          const finalApp = finalInfo?.streaks?.bingapp;
+          if (finalApp?.isCurrentDayCompleted) {
+            result.details.push(`官网 App 连签已确认：${finalApp.completedDays || 0}/7 天`);
+          } else if (finalApp && !binding.mismatch && binding.tokenOk) {
+            result.hadFailure = true;
+            result.details.push('官网 App 连签仍未完成，请检查移动端授权');
+          }
+          result.message = result.hadFailure
+            ? '签到部分完成，请查看明细'
+            : (points > 0 ? `签到完成，本次获得 +${points} 积分` : '签到请求已完成');
         }
       } else if (taskKey === 'read') {
-        const tokenOk = await authManager.refreshToken(false, acc.id).catch(() => false);
-        if (!tokenOk) throw new Error('移动端 Token 未就绪，无法执行新闻阅读');
+        const info = await rewardsApi.getRewardsInfo(1).catch(() => null);
+        const webBalance = Number(info?.balance || before?.balance || 0);
+        const binding = await this.checkMobileAccountBinding(acc, webBalance);
+        if (binding.mismatch) throw new Error(binding.message);
+        if (!binding.tokenOk) throw new Error(binding.message);
         const beforeRead = await rewardsApi.getReadProgress();
         const cur = Number(beforeRead?.progress || 0);
         const max = Number(beforeRead?.max || 30);
@@ -728,29 +793,108 @@ export class TaskManager {
         } else {
           const readRes = await rewardsApi.doReadArticle();
           if (!readRes) throw new Error('新闻阅读上报失败');
-          await rewardsApi.randomDelay(2000, 4000);
-          const afterRead = await rewardsApi.getReadProgress();
-          const after = Number(afterRead?.progress || Math.min(max, cur + 3));
-          this.updateTask('read', {
-            progress: after,
-            max,
-            points: after,
-            done: after >= max
-          }, acc.id);
-          result.message = `阅读完成，进度 ${cur}/${max} → ${after}/${max}`;
-          result.details.push(`单篇阅读 +${readRes.points || 3} 积分`);
+          if (readRes.isDuplicate) {
+            result.hadFailure = true;
+            result.message = '今日新闻阅读已上报过，未重复计分';
+            result.details.push('接口返回重复阅读，未计入进度');
+          } else {
+            await rewardsApi.randomDelay(2000, 4000);
+            const afterRead = await rewardsApi.getReadProgress();
+            const after = Number(afterRead?.progress || Math.min(max, cur + 3));
+            this.updateTask('read', {
+              progress: after,
+              max,
+              points: after,
+              done: after >= max
+            }, acc.id);
+            result.message = `阅读完成，进度 ${cur}/${max} → ${after}/${max}`;
+            result.details.push(`单篇阅读 +${readRes.points || 3} 积分`);
+          }
         }
       } else if (taskKey === 'search') {
         const searchResult = await browserManager.singleTestSearch(acc);
         await this.syncAccountOfficialStatus(acc, { owned: true });
         result.message = searchResult?.message || '单次搜索完成';
         result.details.push('已完成一次拟人键盘搜索与官网进度同步');
+      } else if (taskKey === 'dailySet' || taskKey === 'promos') {
+        const category = taskKey === 'dailySet' ? 'dailyset' : 'promo';
+        const allCards = await rewardsApi.discoverCards();
+        const cards = allCards.filter(c => c.category === category);
+
+        if (cards.length === 0) {
+          if (taskKey === 'dailySet') {
+            const info = await rewardsApi.getRewardsInfo(1).catch(() => null);
+            const streak = info?.streaks?.dailyset;
+            if (streak?.isCurrentDayCompleted) {
+              result.alreadyDone = true;
+              result.message = `每日活动集已完成（${streak.activitiesCompleted || 0}/${streak.activitiesTotal || 3}）`;
+            } else {
+              result.message = '当前暂无可执行的 Daily Set 活动（可能尚未解锁或已完成）';
+            }
+          } else {
+            const cardStatus = await rewardsApi.getActivityCardStatus().catch(() => null);
+            if (cardStatus && cardStatus.total > 0 && cardStatus.completed >= cardStatus.total) {
+              result.alreadyDone = true;
+              result.message = `活动卡片已全部完成（${cardStatus.completed}/${cardStatus.total}）`;
+            } else {
+              result.message = '当前暂无可执行的活动卡片（可能尚未解锁或已完成）';
+            }
+          }
+        } else {
+          let okCount = 0;
+          let claimedPoints = 0;
+          for (const card of cards) {
+            const claimed = await rewardsApi.claimCard(card);
+            if (!claimed) {
+              result.hadFailure = true;
+              result.details.push(`未完成：${card.title || card.offerId}`);
+              continue;
+            }
+            okCount++;
+            claimedPoints += Number(card.points || 0);
+            result.details.push(`${card.title || card.offerId} +${Number(card.points || 0)} 积分`);
+            await rewardsApi.randomDelay(1800, 3500);
+          }
+
+          if (taskKey === 'promos') {
+            const currentPromo = before?.tasks?.promos || {};
+            const promoMax = Math.max(Number(currentPromo.max || 0), cards.length);
+            const nextProgress = Math.min(promoMax, Number(currentPromo.progress || 0) + okCount);
+            this.updateTask('promos', {
+              progress: nextProgress,
+              max: promoMax,
+              points: Number(currentPromo.points || 0) + claimedPoints,
+              done: nextProgress >= promoMax
+            }, acc.id);
+          }
+
+          const synced = await this.syncAccountOfficialStatus(acc, { owned: true });
+          if (taskKey === 'dailySet' && !synced) {
+            const nextProgress = Math.min(Number(before?.tasks?.dailySet?.max || 3) || 3, Number(before?.tasks?.dailySet?.progress || 0) + okCount);
+            this.updateTask('dailySet', {
+              progress: nextProgress,
+              max: Number(before?.tasks?.dailySet?.max || 3) || 3,
+              points: nextProgress >= (Number(before?.tasks?.dailySet?.max || 3) || 3) ? 30 : 0,
+              done: nextProgress >= (Number(before?.tasks?.dailySet?.max || 3) || 3)
+            }, acc.id);
+          }
+          result.message = okCount > 0
+            ? `已推进 ${okCount} 个可完成活动`
+            : '已刷新状态，当前没有可点击完成的活动';
+        }
       } else {
         const quests = await rewardsApi.getQuestPunchCards();
         const isDesktop = taskKey === 'desktopApp';
         const isHalloween = taskKey === 'quest_halloween';
         const isMonthly = taskKey === 'monthlyQuest';
-        const quest = quests.find(q => {
+        const configuredName = String(before?.tasks?.[taskKey]?.name || '');
+        let quest = configuredName
+          ? quests.find(q => {
+              const title = String(q.title || '');
+              return title === configuredName || title.includes(configuredName) || configuredName.includes(title);
+            })
+          : null;
+        quest = quest || quests.find(q => {
           const title = String(q.title || '');
           if (isDesktop) return /桌面|RewardsApp/i.test(title) || /RewardsApp/i.test(q.questId || '');
           if (isHalloween) return /Halloween|万圣节/i.test(title) || /Halloween/i.test(q.questId || '');
@@ -866,7 +1010,8 @@ export class TaskManager {
       return;
     }
 
-    const startBalance = await rewardsApi.getBalance();
+    // syncAccountOfficialStatus 已优先从网页端拿到真实余额；只有它没拿到时才回退 DAPI。
+    const startBalance = Number(accStats.balance) > 0 ? Number(accStats.balance) : await rewardsApi.getBalance();
     // 每天只记录一次「今日起始余额」，用日期字段判断，
     // 不再用 `startBalance === 0` 判断（余额恰好为 0 的账号会被反复覆盖）
     if (startBalance !== null) {
@@ -879,9 +1024,12 @@ export class TaskManager {
     this.saveStats();
     logger.log('📊', `当前积分: ${accStats.balance}`, accountName);
 
-    // 检查或刷新 Token
-    const tokenOk = await authManager.refreshToken(false, accountId);
-    if (!tokenOk) {
+    // 检查或刷新 Token，并确认它确实属于当前网页 Cookie 账号
+    const binding = await this.checkMobileAccountBinding(accCfg, Number(startBalance ?? accStats.balance));
+    const tokenOk = binding.tokenOk && !binding.mismatch;
+    if (binding.mismatch) {
+      logger.log('🔴', `${binding.message}；将跳过 App 签到与移动端阅读`, accountName);
+    } else if (!tokenOk) {
       logger.log('🟡', '移动端 OAuth Token 未就绪，将跳过 App 签到与阅读任务', accountName);
     }
 
@@ -895,7 +1043,9 @@ export class TaskManager {
 
         if (tokenOk) {
           const appRes = await rewardsApi.signApp();
-          if (appRes && Number(appRes.points || 0) > 0) {
+          if (appRes && isBalanceMismatch(startBalance, appRes.balance)) {
+            logger.log('🔴', `App 端返回的账号余额 ${appRes.balance} 与网页端 ${startBalance} 不一致，已拒绝本次签到`, accountName);
+          } else if (appRes && Number(appRes.points || 0) > 0) {
             signSuccess = true;
             signPoints += Number(appRes.points);
             logger.log('📱', `App 端静默签到成功 +${appRes.points} 积分`, accountName);
@@ -912,15 +1062,7 @@ export class TaskManager {
               logger.log('📱', `App 端签到已生效（官网连签第 ${appStatus.currentDay || 1} 天）`, accountName);
             } else {
               const progressText = appStatus ? `${appStatus.completedDays || 0}/7 天` : '状态未知';
-              logger.log('🟡', `App 端签到未生效：官网「必应应用连续打卡」仍为 ${progressText}，请检查该账号的移动端授权 (Refresh Token) 是否有效`, accountName);
-              // 典型误配：这个账号的移动端 Token 其实是另一个微软账号的，
-              // 签到会算到那个账号上，本账号自然永远是 0/1。
-              const tokenBalance = Number(appRes.balance);
-              const cookieBalance = Number(accStats.balance);
-              if (Number.isFinite(tokenBalance) && Number.isFinite(cookieBalance)
-                && cookieBalance > 0 && Math.abs(tokenBalance - cookieBalance) > 100) {
-                logger.log('🔴', `注意：移动端 Token 所属账号积分 (${tokenBalance}) 与网页端 Cookie 所属账号积分 (${cookieBalance}) 不一致，该账号的移动端授权很可能绑定的是另一个微软账号，请在配置向导里重新授权`, accountName);
-              }
+              logger.log('🟡', `App 端签到未生效：官网「必应应用连续打卡」仍为 ${progressText}${appRes.error ? `（${appRes.error}）` : ''}`, accountName);
             }
           } else {
             logger.log('🟡', 'App 端签到未成功（Token 或接口异常），下次巡检会自动重试', accountName);
@@ -940,6 +1082,10 @@ export class TaskManager {
           logger.addTimeline(accountName, `双端签到完成 (+${signPoints || 10} 积分)`);
         }
       }
+
+      // 双端签入必须以官网「必应应用连续打卡」为准。
+      // PC 端成功、App 端失败时不能继续把卡片标成已完成，这里立即用官网状态纠偏。
+      await this.syncAccountOfficialStatus(accCfg, { owned: true });
     }
 
     if (!this.running) return;
@@ -959,7 +1105,7 @@ export class TaskManager {
         let okCount = 0;
         for (let i = 0; i < remaining && this.running; i++) {
           const res = await rewardsApi.doReadArticle();
-          if (res) {
+          if (res && !res.isDuplicate) {
             okCount++;
             logger.log('📖', `阅读完成第 ${i + 1}/${remaining} 篇 (+${res.points || 3} 积分)`, accountName);
             // 实时写入进度：否则整个阅读过程（约 1 分钟）界面会一直停在 0/30
@@ -970,6 +1116,9 @@ export class TaskManager {
               points: liveProg,
               done: liveProg >= max
             }, accountId);
+          } else if (res?.isDuplicate) {
+            logger.log('🟡', `第 ${i + 1}/${remaining} 篇阅读被接口判为重复，未计入进度`, accountName);
+            break;
           }
           await rewardsApi.randomDelay(3000, 6000);
         }

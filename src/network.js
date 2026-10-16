@@ -122,7 +122,7 @@ class NetworkClient {
 
     // 先导入用户配置的原始 Cookie
     if (cfg.account?.cookie) {
-      const parts = cfg.account.cookie.split(';');
+      const parts = normalizeCookieString(cfg.account.cookie).split(';');
       for (const p of parts) {
         const t = p.trim();
         const eq = t.indexOf('=');
@@ -187,10 +187,16 @@ class NetworkClient {
 
     const agent = this.getAgent();
     const finalHeaders = { ...headers };
+    if (finalHeaders.cookie !== undefined) {
+      finalHeaders.cookie = normalizeCookieString(String(finalHeaders.cookie));
+    }
+    if (finalHeaders.Cookie !== undefined) {
+      finalHeaders.Cookie = normalizeCookieString(String(finalHeaders.Cookie));
+    }
 
     // 自动添加 Cookie（仅限微软/Bing 域名，防止账号凭据外泄给第三方接口）
     const cookieHeader = cookieOverride !== null
-      ? cookieOverride
+      ? normalizeCookieString(String(cookieOverride))
       : (isMicrosoftHost(url) ? this.getCookieString(url) : '');
     if (cookieHeader && !finalHeaders['cookie'] && !finalHeaders['Cookie']) {
       finalHeaders['cookie'] = cookieHeader;

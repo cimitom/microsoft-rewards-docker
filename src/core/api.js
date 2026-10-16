@@ -34,6 +34,8 @@ export const APP_CONFIG = {
   }
 };
 
+export { isBalanceMismatch } from './accountIdentity.js';
+
 export const SEARCH_POOL = [
   "what is the weather forecast tomorrow",
   "how do I make sourdough bread at home",
@@ -352,7 +354,26 @@ export class RewardsApi {
   /**
    * 获取当前总积分余额
    */
-  async getBalance() {
+  async getWebBalance() {
+    try {
+      const res = await networkClient.request({
+        url: `https://rewards.bing.com/api/getuserinfo?type=1&X-Requested-With=XMLHttpRequest&_=${Date.now()}`,
+        headers: {
+          ...pcXhrHeaders(),
+          'referer': 'https://rewards.bing.com/',
+          'x-requested-with': 'XMLHttpRequest'
+        }
+      });
+      const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
+      const balance = data?.dashboard?.availablePoints ?? data?.dashboard?.userStatus?.availablePoints ?? data?.balance;
+      if (balance !== undefined && balance !== null && balance !== '') {
+        return Number(balance);
+      }
+    } catch {}
+    return null;
+  }
+
+  async getMobileBalance() {
     try {
       const res = await this.withTokenRetry(token => networkClient.request({
         url: 'https://prod.rewardsplatform.microsoft.com/dapi/me?channel=SAAndroid&options=105',
@@ -367,27 +388,20 @@ export class RewardsApi {
         }
       }));
       const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
-      const bal = data?.response?.balance;
-      if (bal !== undefined && bal !== null && bal !== '') {
-        return Number(bal);
+      const balance = data?.response?.balance;
+      if (balance !== undefined && balance !== null && balance !== '') {
+        return Number(balance);
       }
     } catch {}
+    return null;
+  }
 
-    try {
-      const res2 = await networkClient.request({
-        url: `https://rewards.bing.com/api/getuserinfo?type=1&X-Requested-With=XMLHttpRequest&_=${Date.now()}`,
-        headers: {
-          ...pcXhrHeaders(),
-          'referer': 'https://rewards.bing.com/',
-          'x-requested-with': 'XMLHttpRequest'
-        }
-      });
-      const data2 = typeof res2 === 'string' && this.isJSON(res2) ? JSON.parse(res2) : res2;
-      const fallbackBal = data2?.dashboard?.availablePoints ?? data2?.dashboard?.userStatus?.availablePoints ?? data2?.balance;
-      if (fallbackBal !== undefined && fallbackBal !== null && fallbackBal !== '') {
-        return Number(fallbackBal);
-      }
-    } catch {}
+  async getBalance() {
+    // 网页 Cookie 是当前账号身份的主来源；移动端 Token 可能误绑到别的账号。
+    const webBalance = await this.getWebBalance();
+    if (Number.isFinite(webBalance)) return webBalance;
+    const mobileBalance = await this.getMobileBalance();
+    if (Number.isFinite(mobileBalance)) return mobileBalance;
     // 取不到余额时返回 null，避免调用方把网络失败误当成「余额归零」写库
     return null;
   }
@@ -637,6 +651,14 @@ export class RewardsApi {
    * 单看返回值分不清，所以这里直接读官网 earn 页里的 streak 模型做判定。
    */
   async getAppCheckInStatus() {
+    // 当前官网把权威连签状态放在 /dashboard；/earn 的旧 Flight 模型经常是 0/7。
+    // 必须先走 getRewardsInfo 的合并解析，否则同一次执行里会出现前后状态互相矛盾。
+    try {
+      const info = await this.getRewardsInfo(1);
+      const streak = info?.streaks?.bingapp;
+      if (streak) return streak;
+    } catch {}
+
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/earn',
@@ -720,8 +742,9 @@ export class RewardsApi {
       }
     } catch (e) {
       logger.log('🔴', `App 签入异常: ${e.message}`);
+      return { points: 0, offerId: APP_CONFIG.offerIds.dailyCheckIn, isDuplicate: false, balance: null, error: e.message };
     }
-    return null;
+    return { points: 0, offerId: APP_CONFIG.offerIds.dailyCheckIn, isDuplicate: false, balance: null, error: '接口未返回有效结果' };
   }
 
   /**

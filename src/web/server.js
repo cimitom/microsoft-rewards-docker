@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import httpProxy from 'http-proxy';
 import { fileURLToPath } from 'url';
-import configManager from '../config.js';
+import configManager, { SECRET_PLACEHOLDER } from '../config.js';
 import logger from '../logger.js';
 import taskManager from '../core/taskManager.js';
 import authManager from '../core/auth.js';
@@ -19,7 +19,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.7.3';
+const CURRENT_VERSION = '1.7.4';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -293,6 +293,7 @@ async function getNetworkPing() {
 
 export function createServer() {
   const app = express();
+  app.disable('x-powered-by');
 
   // 健康检查（免认证）：Docker HEALTHCHECK 用它，否则开启密码后会因 401 被判为不健康
   app.get('/api/health', (req, res) => {
@@ -330,12 +331,18 @@ export function createServer() {
   app.use('/novnc', express.static(process.env.NOVNC_STATIC_DIR || '/usr/share/novnc'));
   // 不使用 app.use('/websockify', ...)：express 会剥掉挂载前缀，这里保留原始 URL 再转发。
   app.use((req, res, next) => {
-    if (!String(req.url || '').startsWith('/websockify')) return next();
+    const requestUrl = String(req.url || '');
+    const isNovncPath = requestUrl.startsWith('/novnc/websockify');
+    if (!requestUrl.startsWith('/websockify') && !isNovncPath) return next();
+    if (isNovncPath) {
+      req.url = req.url.replace(/^\/novnc/, '');
+    }
     novncProxy.web(req, res);
   });
 
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  // 配置里可能包含多个账号的完整 Cookie，默认 100KB 很容易在保存时触发 413。
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
   // 0. 系统硬件与网络实时监控指标
@@ -550,14 +557,19 @@ export function createServer() {
     res.json({ success: true, data: accounts });
   });
 
-  app.post('/api/accounts', (req, res) => {
+  app.post('/api/accounts', async (req, res) => {
     try {
-      let saved = configManager.upsertAccount(req.body);
+      if (req.body?.id && accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '任务正在执行中，暂不能修改该账号凭据' });
+      }
+      const accountPayload = { ...(req.body || {}) };
+      delete accountPayload.tokenAlreadyExchanged;
+      let saved = configManager.upsertAccount(accountPayload);
       taskManager.ensureAccountStats(saved.id);
       let tokenExchanged = false;
-      if (req.body?.authCodeUrl && String(req.body.authCodeUrl).includes('code=')) {
+      if (req.body?.authCodeUrl && String(req.body.authCodeUrl).includes('code=') && req.body?.tokenAlreadyExchanged !== true) {
         try {
-          authManager.exchangeCodeForToken(req.body.authCodeUrl, saved.id, {
+          await authManager.exchangeCodeForToken(req.body.authCodeUrl, saved.id, {
             name: saved.name,
             order: saved.order
           });
@@ -567,7 +579,7 @@ export function createServer() {
           logger.log('🟡', `新建账号 [${saved.name}] 自动换取 Token 提示: ${eToken.message}`);
         }
       }
-      res.json({ success: true, data: saved, tokenExchanged });
+      res.json({ success: true, data: { id: saved.id, name: saved.name }, tokenExchanged });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
     }
@@ -580,7 +592,7 @@ export function createServer() {
       // 那样「暂停某个不存在的账号」会误操作到主账号上
       const acc = configManager.resolveAccount(req.params.id);
       if (!acc) return res.status(404).json({ success: false, message: '账号未找到' });
-      const newEnabled = !acc.enabled;
+      const newEnabled = acc.enabled === false;
       configManager.upsertAccount({ id: acc.id, enabled: newEnabled });
       res.json({ success: true, enabled: newEnabled, message: newEnabled ? '账号已继续自动巡检' : '账号已暂停巡检' });
     } catch (e) {
@@ -590,7 +602,13 @@ export function createServer() {
 
   app.delete('/api/accounts/:id', (req, res) => {
     try {
-      configManager.deleteAccount(req.params.id);
+      if (taskManager.running || accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '任务正在执行中，请先停止任务再删除账号' });
+      }
+      const deleted = configManager.deleteAccount(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ success: false, message: '账号不存在' });
+      }
       // 同步清理该账号的统计与账单，避免留下孤儿数据
       taskManager.removeAccountStats(req.params.id);
       res.json({ success: true, message: '账号已删除' });
@@ -621,6 +639,9 @@ export function createServer() {
   // 单独安全测试搜索一次（验证按键与加分，完全避免冷却限制）
   app.post('/api/tasks/single-search', async (req, res) => {
     try {
+      if (accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '已有任务正在执行，请稍后再试' });
+      }
       const accountId = req.body?.accountId || null;
       const result = await taskManager.runSingleTestSearch(accountId);
       res.json({ success: true, data: result });
@@ -632,6 +653,9 @@ export function createServer() {
   // 任务卡片点击执行：签到、阅读、搜索或打孔卡推进一次
   app.post('/api/tasks/card-action', async (req, res) => {
     try {
+      if (accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '已有任务正在执行，请稍后再试' });
+      }
       const { accountId, taskKey } = req.body || {};
       const result = await taskManager.runTaskAction(accountId, taskKey);
       res.json({ success: true, data: result });
@@ -644,6 +668,9 @@ export function createServer() {
   app.post('/api/tasks/claim-points', async (req, res) => {
     try {
       const accountId = req.body?.accountId || 'all';
+      if (accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再领取额外积分' });
+      }
       if (process.env.EPIC_DEMO === '1' || process.env.MSR_DEMO === '1') {
         let totalClaimed = 0;
         const accounts = configManager.getAccounts();
@@ -690,6 +717,9 @@ export function createServer() {
   // 3. 更新配置
   app.post('/api/config', (req, res) => {
     try {
+      if (Array.isArray(req.body?.accounts) && accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '任务正在执行中，暂不能保存账号配置' });
+      }
       const updated = configManager.update(req.body);
       scheduler.restart();
       logger.log('⚙️', '配置已更新并已生效');
@@ -704,7 +734,17 @@ export function createServer() {
     if (taskManager.running) {
       return res.json({ success: false, message: '任务正在运行中' });
     }
+    if (accountContextLock.isBusy()) {
+      return res.status(409).json({ success: false, message: '已有同步或账号操作正在执行，请稍后再启动任务' });
+    }
     const targetAccountId = req.body?.accountId || null;
+    if (targetAccountId) {
+      const targetAcc = configManager.resolveAccount(targetAccountId);
+      if (!targetAcc) return res.status(404).json({ success: false, message: '账号不存在' });
+      if (targetAcc.enabled === false) {
+        return res.status(409).json({ success: false, message: '该账号已停用，请先恢复自动巡检' });
+      }
+    }
     taskManager.runAll(true, targetAccountId);
     res.json({
       success: true,
@@ -754,13 +794,16 @@ export function createServer() {
 
   // 7. 小白一键换取 Token
   app.post('/api/auth/exchange-code', async (req, res) => {
-    const { urlOrCode, accountId, name, order } = req.body;
+    const { urlOrCode, accountId, name, order, draft } = req.body;
     if (!urlOrCode) {
       return res.status(400).json({ success: false, message: '请提供跳转链接或授权码' });
     }
+    if (accountId && accountContextLock.isBusy()) {
+      return res.status(409).json({ success: false, message: '任务正在执行中，暂不能更新该账号的移动端凭据' });
+    }
     try {
       // name/order 用于「配置向导」新建账号时带上名称与序号
-      const result = await authManager.exchangeCodeForToken(urlOrCode, accountId, { name, order });
+      const result = await authManager.exchangeCodeForToken(urlOrCode, accountId, { name, order, persist: draft !== true });
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
@@ -774,9 +817,17 @@ export function createServer() {
       return res.status(400).json({ success: false, message: '请提供 Cookie' });
     }
     try {
+      let cookieToTest = cookie;
+      if (cookie === SECRET_PLACEHOLDER) {
+        const acc = configManager.resolveAccount(accountId);
+        if (!acc?.cookie) {
+          return res.status(400).json({ success: false, message: '该账号尚未保存 Cookie' });
+        }
+        cookieToTest = acc.cookie;
+      }
       // 只做校验，不落库：以前这里会 upsertAccount，导致「测试 Cookie」按钮
       // 凭空创建出一个名为「账号 (xxx)」的账号。真正的保存由向导最后一步统一提交。
-      const status = await authManager.checkCookieStatus(cookie, accountId);
+      const status = await authManager.checkCookieStatus(cookieToTest, accountId);
       const existing = configManager.findAccount(accountId);
       if (status.valid && existing) {
         const accStats = taskManager.ensureAccountStats(existing.id);
@@ -829,7 +880,7 @@ export function createServer() {
   }
 
   app.post('/api/auth/test', async (req, res) => {
-    if (accountContextLock.isBusy()) {
+    if (!accountContextLock.tryAcquire('web-diagnosis')) {
       return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再体检（避免账号上下文串台）' });
     }
     try {
@@ -837,12 +888,14 @@ export function createServer() {
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
+    } finally {
+      accountContextLock.release('web-diagnosis');
     }
   });
 
   // 8.5 一键体检全部账号（逐个串行，避免并发触发微软风控）
   app.post('/api/auth/test-all', async (req, res) => {
-    if (accountContextLock.isBusy()) {
+    if (!accountContextLock.tryAcquire('web-diagnosis')) {
       return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再体检（避免账号上下文串台）' });
     }
     try {
@@ -875,12 +928,17 @@ export function createServer() {
       });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
+    } finally {
+      accountContextLock.release('web-diagnosis');
     }
   });
 
   // 9. 测试代理连通性及地区
   app.post('/api/proxy/test', async (req, res) => {
     const { proxyUrl, useProxy } = req.body;
+    if (accountContextLock.isBusy()) {
+      return res.status(409).json({ success: false, message: '任务正在执行中，暂不能切换代理配置' });
+    }
     if (useProxy && proxyUrl) {
       configManager.update({ network: { useProxy, proxyUrl } });
     }
@@ -954,9 +1012,18 @@ export function createServer() {
     }
   });
 
-  app.delete('/api/epic/accounts/:id', (req, res) => {
-    const ok = configManager.deleteEpicAccount(req.params.id);
-    res.json({ success: ok, message: ok ? '账号已删除' : '账号不存在' });
+  app.delete('/api/epic/accounts/:id', async (req, res) => {
+    try {
+      const accountId = req.params.id;
+      if (epicManager.running || epicManager.checking || epicManager.verifying) {
+        return res.status(409).json({ success: false, message: 'Epic 任务正在运行中，请先停止任务再删除账号' });
+      }
+      await epicManager.closeLoginWindowForAccount(accountId);
+      const ok = configManager.deleteEpicAccount(accountId);
+      res.json({ success: ok, message: ok ? '账号已删除' : '账号不存在' });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
   });
 
   // 导入会话（Cookie-Editor JSON / storageState / 原始 Cookie 串）
@@ -964,6 +1031,9 @@ export function createServer() {
     try {
       if (epicManager.running || epicManager.verifying || epicManager.checking) {
         return res.status(409).json({ success: false, message: 'Epic 任务正在运行中，请先点击停止按钮，再更新会话' });
+      }
+      if (epicManager.isLoginWindowOpen()) {
+        return res.status(409).json({ success: false, message: 'Epic 登录窗口已打开，请先保存或关闭登录窗口再导入会话' });
       }
       const acc = configManager.findEpicAccount(req.params.id);
       if (!acc) return res.status(404).json({ success: false, message: '账号不存在' });
@@ -1003,7 +1073,7 @@ export function createServer() {
 
   app.post('/api/epic/accounts/:id/login-window/close', async (req, res) => {
     try {
-      const result = await epicManager.closeLoginWindow();
+      const result = await epicManager.closeLoginWindowForAccount(req.params.id);
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
@@ -1041,8 +1111,11 @@ export function createServer() {
 
   app.post('/api/epic/claim', async (req, res) => {
     try {
-      if (epicManager.running || epicManager.checking) {
-        return res.json({ success: false, message: 'Epic 任务正在运行中，请稍后再试' });
+      if (epicManager.running || epicManager.checking || epicManager.verifying) {
+        return res.status(409).json({ success: false, message: 'Epic 任务正在运行中，请稍后再试' });
+      }
+      if (epicManager.isLoginWindowOpen()) {
+        return res.status(409).json({ success: false, message: 'Epic 登录窗口已打开，请先保存或关闭登录窗口' });
       }
       const accountId = req.body?.accountId || null;
       const data = accountId ? await epicManager.claimOne(accountId) : await epicManager.claimAll();
@@ -1084,6 +1157,7 @@ export function createServer() {
   app.post('/api/epic/settings', (req, res) => {
     try {
       const b = req.body || {};
+      const current = epicManager.getSettings();
       const num = (v, min, max, dft) => {
         const n = Number(v);
         if (!Number.isFinite(n)) return dft;
@@ -1091,12 +1165,12 @@ export function createServer() {
       };
       configManager.update({
         epic: {
-          enabled: b.enabled !== false,
-          autoClaimTime: normalizeAutoClaimTime(b.autoClaimTime),
-          checkIntervalMin: num(b.checkIntervalMin, 5, 1440, 30),
-          retryCount: num(b.retryCount, 0, 5, 2),
-          retryIntervalSec: num(b.retryIntervalSec, 10, 600, 60),
-          accountGapSec: num(b.accountGapSec, 0, 600, 20)
+          enabled: b.enabled === undefined ? current.enabled : b.enabled !== false,
+          autoClaimTime: normalizeAutoClaimTime(b.autoClaimTime === undefined ? current.autoClaimTime : b.autoClaimTime),
+          checkIntervalMin: num(b.checkIntervalMin, 5, 10080, current.checkIntervalMin),
+          retryCount: num(b.retryCount, 0, 5, current.retryCount),
+          retryIntervalSec: num(b.retryIntervalSec, 10, 600, current.retryIntervalSec),
+          accountGapSec: num(b.accountGapSec, 0, 600, current.accountGapSec)
         }
       });
       scheduler.restart(); // 让新的检查间隔立即生效
@@ -1105,6 +1179,12 @@ export function createServer() {
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
     }
+  });
+
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const status = Number(err?.status || err?.statusCode) || 500;
+    res.status(status).json({ success: false, message: err?.message || '服务器内部错误' });
   });
 
   return app;

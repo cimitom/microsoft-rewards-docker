@@ -2,6 +2,7 @@ import configManager from '../config.js';
 import networkClient from '../network.js';
 import logger from '../logger.js';
 import { APP_USER_AGENT, pcPageHeaders } from './fingerprint.js';
+import { isBalanceMismatch } from './accountIdentity.js';
 
 export const AUTH_CONFIG = {
   clientId: '0000000040170455',
@@ -94,17 +95,23 @@ export class AuthManager {
       }
 
       if (data.access_token && data.refresh_token) {
-        this.accessToken = data.access_token;
-        configManager.upsertAccount({
-          id: targetId,
-          // 新账号（配置向导草稿）需要带上名称与序号，否则会生成名为「账号 N」的占位账号
-          ...(targetAccount ? {} : { name: accountMeta.name, order: accountMeta.order }),
-          authCodeUrl: codeOrUrl,
-          accessToken: data.access_token,
-          refreshToken: data.refresh_token,
-          tokenTime: Date.now()
-        });
-        logger.log('🟢', `账号 [${displayName}] OAuth Token 换取成功并已持久化保存！`);
+        if (accountMeta.persist !== false) {
+          this.accessToken = data.access_token;
+        }
+        if (accountMeta.persist !== false) {
+          configManager.upsertAccount({
+            id: targetId,
+            // 新账号需要带上名称与序号，否则会生成名为「账号 N」的占位账号
+            ...(targetAccount ? {} : { name: accountMeta.name, order: accountMeta.order }),
+            authCodeUrl: codeOrUrl,
+            accessToken: data.access_token,
+            refreshToken: data.refresh_token,
+            tokenTime: Date.now()
+          });
+        }
+        logger.log('🟢', accountMeta.persist === false
+          ? `账号 [${displayName}] OAuth Token 换取成功（向导草稿，尚未写入配置）`
+          : `账号 [${displayName}] OAuth Token 换取成功并已持久化保存！`);
         return {
           success: true,
           accountId: targetId,
@@ -379,13 +386,25 @@ export class AuthManager {
     };
 
     const balance = cookieStatus.balance || tokenStatus.balance || 0;
+    const tokenAccountMismatch = cookieStatus.valid && tokenStatus.valid
+      && isBalanceMismatch(cookieStatus.balance, tokenStatus.balance);
+    if (tokenAccountMismatch) {
+      tokenStatus.mismatch = true;
+      tokenStatus.message += ` | ⚠️ Token 所属账号积分(${tokenStatus.balance}) 与网页端(${cookieStatus.balance}) 不一致，疑似绑定到了其他微软账号`;
+    }
     // 缺少 _U 时虽然「已登录」，但 PC 搜索不会计分，不能算完全正常
     const cookieUsable = cookieStatus.valid && !cookieStatus.warning;
-    const allValid = cookieUsable && tokenStatus.valid;
+    const allValid = cookieUsable && tokenStatus.valid && !tokenAccountMismatch;
     const partialValid = cookieStatus.valid || tokenStatus.valid;
+    const warning = !!cookieStatus.warning || tokenAccountMismatch;
+    const warningMessage = tokenAccountMismatch
+      ? `移动端 Token 与网页端 Cookie 疑似属于不同账号（余额 ${tokenStatus.balance} vs ${cookieStatus.balance}），请重新完成移动端授权`
+      : (cookieStatus.warningMessage || '');
 
     if (allValid) {
       logger.log('🟢', `账号 [${name}] 登录检测完全通过！网页端与移动端均在线，当前总积分: ${balance}`);
+    } else if (tokenAccountMismatch) {
+      logger.log('🔴', `账号 [${name}] 移动端 Token 绑定错误：Token 余额 ${tokenStatus.balance}，网页端余额 ${cookieStatus.balance}`);
     } else if (cookieStatus.valid && cookieStatus.warning) {
       logger.log('🟡', `账号 [${name}] 网页端 Cookie 异常：${cookieStatus.warningMessage}`);
     } else if (partialValid) {
@@ -405,8 +424,8 @@ export class AuthManager {
       balance,
       allValid,
       overallValid: partialValid,
-      warning: !!cookieStatus.warning,
-      warningMessage: cookieStatus.warningMessage || ''
+      warning,
+      warningMessage
     };
   }
 }

@@ -12,7 +12,6 @@ services:
     restart: unless-stopped
     ports:
       - "5308:5308"
-      - "6080:6080"
     environment:
       - TZ=Asia/Shanghai
       - PORT=5308

@@ -30,3 +30,18 @@ export function writeFileAtomic(filePath, content, options = {}) {
     throw e;
   }
 }
+
+/**
+ * 给一个可能永远不返回的 Promise 加硬超时。
+ * 用于浏览器 context.close() 这类在进程卡死时可能永久挂起的操作。
+ */
+export function withTimeout(promise, timeoutMs, message = '操作超时') {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), Math.max(1, Number(timeoutMs) || 1));
+    timer.unref?.();
+  });
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}

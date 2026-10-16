@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -129,6 +129,15 @@
   - **新增「🔍 指纹自检」**：一键用与领取任务相同的参数开一次临时浏览器，直接列出 UA / platform / `webdriver` / `window.chrome` / 插件 / WebGL 等信号并给出告警，登录再被拦时可先确认是不是浏览器自己露馅；
   - **恢复「粘贴会话」兜底入口**：内置浏览器登录始终过不了风控时，可用自己电脑上的真实浏览器登录后导入会话，完全绕开自动化检测；
   - **单元测试增至 83 个**。
+- 🛡️ **Epic 停止锁、任务卡片与账号绑定修复 (v1.7.4)**：
+  - **修复 Epic 停止后浏览器锁泄漏**：所有 Firefox/Chromium `context.close()` 均加硬超时，状态与资源锁在 `finally` 中释放；删除 Epic 账号前会先关闭对应登录窗口并清理普通/登录临时 profile；
+  - **修复移动端 Token 串号**：执行 App 签到或新闻阅读前比较网页端余额与 DAPI 余额，Token 明显属于其他微软账号时直接拦截；账号体检也会把该问题标为「需修复」；
+  - **修复 `getBalance()` 优先使用错误 Token 余额**：网页 Cookie 余额现在是主来源，只有取不到时才回退移动端；
+  - **修复 App 连签状态来源**：`getAppCheckInStatus()` 改为优先使用 `/dashboard` 权威数据，避免 `/earn` 旧模型显示 0/7 而误报签到失败；
+  - **修复任务卡片点击逻辑**：Daily Set 与活动卡片不再误跑打孔卡；动态打孔卡按任务名精确匹配；单账号 Epic 领取结果不再显示为空；
+  - **修复配置按钮逻辑**：周期预设不再重置其他 Epic 设置；清空移动端凭据会同时清空 Refresh/Access Token；向导换取 Token 改为草稿模式，取消向导不再留下半成品账号；配置中心测试已保存 Cookie 时会正确读取服务端原值；
+  - **加固浏览器交互**：兼容 noVNC `/novnc/websockify` 路径、移除宿主机 `6080` 直连端口、提升配置请求体积上限，并补齐错误响应；
+  - **单元测试增至 94 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；

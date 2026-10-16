@@ -1,5 +1,114 @@
 # 下一版本待办
 
+## v1.7.4 根因记录（已完成修复）
+
+> 以下根因分析已在 v1.7.4 修复并加入回归测试，保留作为问题定位与后续维护说明。
+
+- [x] Epic 登录窗口/活动浏览器 `close()` 卡死不再泄漏 Firefox 资源锁；删除账号会先关闭登录窗口并清理普通/登录 profile。
+- [x] Daily Set 卡片动作只执行 `dailyset` 卡片，不再误跑打孔卡；活动卡片与动态打孔卡按正确目标执行。
+- [x] 移动端 Token 归属校验：网页端余额与 DAPI 余额明显不一致时拒绝 App 签到/阅读，并在账号体检中标为异常。
+- [x] `getBalance()` 改为网页 Cookie 余额优先，避免错误 Token 覆盖当前账号余额。
+- [x] `getAppCheckInStatus()` 改为 `/dashboard` 权威状态优先，消除 `/earn` 旧数据误报。
+- [x] 配置向导换取 Token 改为草稿模式；清空移动端凭据会同时清空 Refresh/Access Token。
+- [x] Epic 周期预设只更新检测间隔，不再重置自动领取时间、重试次数等其他设置。
+- [x] noVNC 兼容 `/novnc/websockify`，并从 compose 移除可绕过 WebUI 鉴权的宿主机 `6080` 直连端口。
+- [x] 新增 `test/fixes174.test.js`，覆盖上述关键回归；当前测试总数 94。
+
+### P0 — Epic 浏览器无法停止 / 删除账号后无法再打开登录窗口
+
+**现象**：点「⏹️ 停止 Epic」无反应；删掉账号重建后，点「打开可见浏览器登录」也打不开。
+截图佐证：账号列表已空（「还没有 Epic 账号」），但浏览器状态仍显示「等待登录 / 账号：329663911」，且停止按钮一直存在。
+
+**根因 1：`closeLoginWindow()` 没有超时，而且先关浏览器、后释放锁。**
+`src/core/epic.js:283-295`
+```js
+await this.loginContext.close().catch(() => {});   // 无 timeout，Firefox 卡住就永不返回
+this.loginContext = null;                          // 永远执行不到
+...
+firefoxSlotLock.release(this.loginSlotOwner);      // 锁泄漏，后续所有 Epic 浏览器操作被永久挡住
+```
+- `stop()` 会走到这里 → 请求挂住 → 前端按钮一直转（前端 `stopEpicTask` 的 fetch 也没有超时，`app.js:1207`）
+- `openLoginWindow()` 开头也会 `await this.closeLoginWindow()` → 新开登录窗口同样挂住，表现为「无法打开浏览器」
+
+**根因 2：同样的「先 close 后释放锁」模式还有 3 处**，任一处 close 挂住都会泄漏 `firefoxSlotLock`：
+`epic.js:363-365`（指纹自检）、`epic.js:1144-1145`（会话校验）、`epic.js:1257-1262`（账号领取）。
+
+**根因 3：删除账号完全不通知 EpicManager。**
+`src/web/server.js:957` 只调 `configManager.deleteEpicAccount()`，`src/config.js:434-446` 只删配置 + `fs.rmSync` 删 profile 目录。
+于是：登录窗口继续开着、`loginAccountId` 指向已删除账号、锁不释放、UI 继续显示已删账号的「等待登录」；
+而且 `rmSync` 在 Firefox 仍占用该 profile 时执行，可能失败或留下不一致状态。
+
+**修复方向**
+- 给所有 `context.close()` 加超时（例如 15s），超时后强制继续
+- 状态清理与锁释放放进 `finally`，不要排在 close 之后
+- `stop()` 直接清空 `loginContext` / `loginAccountId` / 锁，把 close 变成「尽力而为」的后台动作
+- 删除账号时先 `epicManager.closeLoginWindow()` 并等待释放锁，再删配置与 profile
+- 前端 `stopEpicTask` 的 fetch 加超时与「已发出停止指令」的兜底提示
+
+**验证方式**：新增单测模拟 `context.close()` 永不 resolve，断言 `stop()` 仍能返回、锁已释放、`loginContext` 已清空。
+
+### P1 — 点击「每日活动集 (Daily Set)」卡片进度不涨
+
+**根因：`runTaskAction` 根本没有 `dailySet` 分支，请求掉进了通用打孔卡分支。**
+- Daily Set 卡片的 key 是 `dailySet`（`src/core/taskManager.js:45`），前端直接用 `stats.tasks` 的 key 作为 `taskKey`（`app.js:1849`）
+- `runTaskAction` 只有 `sign` / `read` / `search` 三个分支，其余全部走 `else`（`taskManager.js:688/719/743/747`）
+- `else` 里查的是 `getQuestPunchCards()`（打孔卡），而 `isDesktop` / `isHalloween` / `isMonthly` 三个判断对 `dailySet` 全为 false，于是 `quests.find(q => !q.done)` 会**随便挑一个未完成的打孔卡**去执行
+- 结果：点 Daily Set 实际去推进打孔卡，Daily Set 的 0/3 当然不动
+
+对照：完整任务流程里 Daily Set 是走 `discoverCards()` + `claimCard()` 的（`taskManager.js:985-1045`，`api.js:973` 把它归为 `dailyset` 分类），卡片点击路径完全没接这条线。
+
+**修复方向**：为 `dailySet` 增加独立分支，复用 `discoverCards()` 过滤 `category === 'dailyset'` 后逐个 `claimCard`，只执行一轮（不循环），执行完 `syncAccountOfficialStatus` 并返回前后进度。
+
+**验证方式**：单测覆盖「有可完成活动」「活动已全部完成」「活动未解锁」三个分支，断言只点击一次且不会误伤打孔卡。
+
+### P1 — 点击「每日双端签入」提示移动端签到失败
+
+**现象**：明细里出现移动端相关的失败说明，卡片仍显示「官网 App 连签 0/7 天（今日未签）」。
+
+**根因 1（已用容器持久化数据确认，账号绑定错误）**：XDZ 的移动端 Refresh Token 实际属于另一个微软账号。
+2026-10-16 直接交叉核验 `/Volumes/nvme21-189XXXX9332/docker/microsoft-rewards/data/config.json`：
+
+| 账号 | 网页端显示名 | 网页端余额 | 同一 Refresh Token 的 DAPI 余额 |
+| --- | --- | ---: | ---: |
+| XDZ | dezhen xu | 450 | 663 |
+| wangheqiang530@hotmail.com | 贺强 王 | 663 | 663 |
+| WHQ | 贺强 王 | 51723 | 51723 |
+
+- XDZ 的 DAPI Token 余额与 `wangheqiang530@hotmail.com` 完全一致，均为 663；与 XDZ 网页端余额相差 213。
+- 对 XDZ 调用 `signApp()` 返回 `{"points":0,"offerId":"Gamification_Sapphire_DailyCheckIn","isDuplicate":false,"balance":663}`，证明请求签到了 `wangheqiang530@hotmail.com`，不是 XDZ。
+- 因此 XDZ 的 `必应应用连续打卡` 会一直停留在 0/7。修复不能只重试接口，必须在配置向导中为 XDZ 重新完成移动端授权，并绑定回 `dezhen xu`。
+
+**根因 2（诊断性缺陷，确凿）**：`getAppCheckInStatus()` 只读取 `/earn` 旧数据，而当前权威状态在 `/dashboard`。
+`src/core/api.js:639-662`
+- 2026-10-15 20:22 的日志中，`/dashboard` 同步显示 XDZ 已完成 2/7 天，但签到后的 `getAppCheckInStatus()` 从 `/earn` 读到 0/7，于是误报「App 端签到未生效」。
+- `getRewardsInfo()` 已改为合并 `/earn` + `/dashboard`，但 `getAppCheckInStatus()` 没有同步修正，导致同一次执行里前后状态互相矛盾。
+- 修复方向：让 `getAppCheckInStatus()` 复用 `getRewardsInfo().streaks.bingapp`，或至少以 `/dashboard` 为优先、`/earn` 仅作兜底。
+
+**根因 3（错误呈现，确凿）**：`sign` 分支把每一处失败都吞成布尔/null，用户看不到真实原因。
+`src/core/taskManager.js:694-708`
+```js
+const tokenOk = await authManager.refreshToken(false, acc.id).catch(() => false);
+if (tokenOk) {
+  const appRes = await rewardsApi.signApp().catch(() => null);
+  ... 否则 → 'App 端签到未返回明确结果'
+} else {
+  result.details.push('移动端 Token 未就绪，跳过 App 签到');   // ← 与「接口报错」混为一谈
+}
+```
+- `signApp()` 内部任何异常都只写日志并返回 `null`（`api.js:716` 打「🔴 App 签入异常」）
+- 前端徽章无条件显示绿色的「执行完成」（`app.js:1155`），**部分失败被呈现为成功**
+
+**修复方向**
+- 在卡片动作执行前做移动端 Token 归属校验；余额不一致时直接提示「移动端授权绑定到了其他账号」，不要把它当成普通签到失败
+- 区分并如实上报：Token 缺失 / Token 刷新失败 / Token 归属错误 / 接口异常 / 已签到，五类分别给不同文案
+- `signApp()` 返回结构化错误而不是 `null`，把失败原因带回到弹窗
+- 前端在存在失败明细时不要用绿色「执行完成」，改用警告态
+
+**验证方式**
+- 单测覆盖五类分支的文案与徽章状态
+- 增加 Token 余额与网页端余额不一致的回归测试，断言不会把签到算到当前账号
+- 为 XDZ 重新授权后，实测 DAPI 余额应与网页端余额一致，且 `必应应用连续打卡` 能推进
+
 ## 已完成于 v1.7.3
 
 - [x] 修复「有新版却不提示更新」：更新检查改读 tags 取语义化版本最大值，CI 打 tag 时自动创建 GitHub Release。

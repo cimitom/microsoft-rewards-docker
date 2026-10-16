@@ -12,6 +12,7 @@ import configManager from '../config.js';
 import { browserSlotLock } from './contextLock.js';
 import { readBrowserSession, writeBrowserSession } from './browserSession.js';
 import { SearchStagnationGuard } from './searchStagnation.js';
+import { withTimeout } from '../fsUtil.js';
 import {
   PC_USER_AGENT,
   SEC_CH_UA,
@@ -29,6 +30,8 @@ class BrowserManager extends EventEmitter {
     this.shouldStop = false;
     // 是否持有浏览器资源锁（由 launchBrowser/closeBrowser 维护）
     this.slotHeld = false;
+    this.slotOwner = null;
+    this.closeTimeoutMs = Math.max(10, Number(process.env.BROWSER_CLOSE_TIMEOUT_MS) || 15000);
     // 当前绑定的账号（会话持久化需要它来定位文件与校验凭据指纹）
     this.sessionAccount = null;
     this.state = {
@@ -120,13 +123,18 @@ class BrowserManager extends EventEmitter {
     if (!execPath) {
       throw new Error('未检测到 Chromium 或 Edge 浏览器内核，请确保安装了 Chromium');
     }
+    if (this.slotHeld) {
+      throw new Error('浏览器实例已经启动，不能并发启动第二个实例');
+    }
 
     // 抢浏览器资源锁：Epic 领取也走同一把锁，避免两个 Chromium 同时跑把 NAS 内存打满
-    const gotSlot = await browserSlotLock.acquire('rewards-browser', 180000);
+    const slotOwner = `rewards-browser:${acc?.id || 'default'}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const gotSlot = await browserSlotLock.acquire(slotOwner, 180000);
     if (!gotSlot) {
       throw new Error('浏览器资源正被其它任务占用（Epic 领取或另一个搜索流程），请稍后重试');
     }
     this.slotHeld = true;
+    this.slotOwner = slotOwner;
 
     this.updateState({
       status: 'starting',
@@ -226,16 +234,23 @@ class BrowserManager extends EventEmitter {
       return { browser, context };
     } catch (e) {
       // 启动过程中失败也必须把锁还回去，否则后续所有浏览器任务都会被卡住
-      if (browser) await browser.close().catch(() => {});
-      this.releaseBrowserSlot();
+      try {
+        if (browser) {
+          await withTimeout(Promise.resolve().then(() => browser.close()), this.closeTimeoutMs, '浏览器启动失败后的清理超时').catch(() => {});
+        }
+      } finally {
+        this.releaseBrowserSlot();
+      }
       throw e;
     }
   }
 
   releaseBrowserSlot() {
     if (!this.slotHeld) return;
+    const owner = this.slotOwner;
     this.slotHeld = false;
-    browserSlotLock.release('rewards-browser');
+    this.slotOwner = null;
+    if (owner) browserSlotLock.release(owner);
   }
 
   /**
@@ -292,24 +307,31 @@ class BrowserManager extends EventEmitter {
 
   async closeBrowser() {
     try {
-      if (this.context) await this.context.close().catch(() => {});
-      if (this.browser) await this.browser.close().catch(() => {});
+      if (this.context) {
+        await withTimeout(Promise.resolve().then(() => this.context.close()), this.closeTimeoutMs, '关闭浏览器上下文超时').catch(() => {});
+      }
+      if (this.browser) {
+        await withTimeout(Promise.resolve().then(() => this.browser.close()), this.closeTimeoutMs, '关闭浏览器进程超时').catch(() => {});
+      }
     } catch {}
-    this.browser = null;
-    this.context = null;
-    this.page = null;
-    this.cdpSessions = [];
-    this.sessionAccount = null;
-    this.releaseBrowserSlot();
-    this.updateState({
-      status: 'idle',
-      activeAccountId: null,
-      activeAccountName: '未启动',
-      currentQuery: '',
-      nextSearchIn: 0,
-      memoryMB: 0,
-      lastAction: '浏览器已彻底关闭，内存完全释放 (0 内存占用)'
-    });
+    try {
+      this.browser = null;
+      this.context = null;
+      this.page = null;
+      this.cdpSessions = [];
+      this.sessionAccount = null;
+    } finally {
+      this.releaseBrowserSlot();
+      this.updateState({
+        status: 'idle',
+        activeAccountId: null,
+        activeAccountName: '未启动',
+        currentQuery: '',
+        nextSearchIn: 0,
+        memoryMB: 0,
+        lastAction: '浏览器已彻底关闭，内存完全释放 (0 内存占用)'
+      });
+    }
   }
 
   delay(ms) {
