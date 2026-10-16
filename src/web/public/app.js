@@ -1504,7 +1504,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.4';
+  const current = updateInfo?.currentVersion || '1.7.5';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1559,8 +1559,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.4'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.4'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.5'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.5'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -3682,13 +3682,14 @@ function openEpicModal(accountId) {
   const openLoginBtn = document.getElementById('btn-epic-open-login');
   const saveLoginBtn = document.getElementById('btn-epic-save-login');
   const status = document.getElementById('epic-login-status');
-  if (openLoginBtn) openLoginBtn.disabled = !acc;
+  // 新账号点击登录时先自动保存草稿，不能留下一个看起来可点、实际无响应的按钮。
+  if (openLoginBtn) openLoginBtn.disabled = false;
   if (saveLoginBtn) saveLoginBtn.disabled = !acc;
   // 会话导入是兜底路径，每次打开都清空，避免把上一次的粘贴内容误提交
   const sessionInput = document.getElementById('epic-session-input');
   if (sessionInput) sessionInput.value = '';
   const importBtn = document.getElementById('btn-epic-import-session');
-  if (importBtn) importBtn.disabled = !acc;
+  if (importBtn) importBtn.disabled = false;
   if (status) {
     status.innerText = acc
       ? (acc.hasSession
@@ -3750,12 +3751,54 @@ async function saveEpicAccount() {
   }
 }
 
+async function ensureEpicAccountSaved() {
+  const nameEl = document.getElementById('epic-account-name');
+  if (!nameEl) throw new Error('Epic 账号表单未就绪');
+  let accountId = nameEl.dataset.accountId || '';
+  if (accountId) return accountId;
+
+  const name = nameEl.value.trim();
+  if (!name) throw new Error('请先填写账号备注名称');
+
+  const res = await fetch('/api/epic/accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  }).then(r => r.json());
+  if (!res.success || !res.data?.id) {
+    throw new Error(res.message || '账号保存失败');
+  }
+
+  accountId = res.data.id;
+  nameEl.dataset.accountId = accountId;
+  const title = document.getElementById('epic-modal-title');
+  if (title) title.innerText = `编辑 Epic 账号：${name}`;
+  const saveLoginBtn = document.getElementById('btn-epic-save-login');
+  const importBtn = document.getElementById('btn-epic-import-session');
+  if (saveLoginBtn) saveLoginBtn.disabled = false;
+  if (importBtn) importBtn.disabled = false;
+  await fetchEpicAccounts();
+  return accountId;
+}
+
 async function openEpicLoginWindow() {
-  const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
+  let accountId = document.getElementById('epic-account-name')?.dataset.accountId;
   if (!accountId) {
-    openEpicActionModal('请先保存账号', '请先填写账号备注名称并保存，然后再打开可见浏览器登录。', ['保存账号', '打开登录窗口'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '需要先保存', cls: 'warn' } });
-    return;
+    openEpicActionModal('正在准备 Epic 账号', '正在保存账号备注并准备打开 Firefox...', ['保存账号', '启动 Firefox', '打开登录页'], 0);
+    startActionProgressTicker(10, 35, 8, '正在保存账号备注...');
+    try {
+      accountId = await ensureEpicAccountSaved();
+      stopActionProgressTicker();
+    } catch (e) {
+      stopActionProgressTicker();
+      updateEpicActionModal({
+        progress: 100,
+        badge: { text: '无法继续', cls: 'warn' },
+        message: e.message,
+        result: `无法打开登录窗口：${e.message}`
+      });
+      return;
+    }
   }
   openEpicActionModal('正在打开 Epic 登录窗口', '正在容器内启动 Firefox 并打开 Epic 登录页...', ['启动 Firefox', '打开登录页', '等待手动登录'], 0);
   startActionProgressTicker(15, 75, 10, '正在启动 Firefox 登录窗口...');
@@ -3862,12 +3905,16 @@ async function loadEpicFingerprint() {
 
 // ===== Epic 会话导入（内置登录被风控拦住时的兜底） =====
 async function importEpicSession() {
-  const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
+  let accountId = document.getElementById('epic-account-name')?.dataset.accountId;
   const session = document.getElementById('epic-session-input')?.value.trim();
   if (!accountId) {
-    openEpicActionModal('请先保存账号', '请先填写账号名称并保存，然后再导入会话。', ['保存账号', '导入会话'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '需要先保存', cls: 'warn' } });
-    return;
+    try {
+      accountId = await ensureEpicAccountSaved();
+    } catch (e) {
+      openEpicActionModal('无法导入会话', e.message, ['保存账号', '导入会话'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '无法继续', cls: 'warn' }, result: e.message });
+      return;
+    }
   }
   if (!session) {
     openEpicActionModal('没有可导入的内容', '请先粘贴 storageState JSON 或 Cookie 字符串。', ['粘贴会话', '重新导入'], 0);

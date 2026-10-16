@@ -12,6 +12,7 @@ import configManager from '../config.js';
 import { browserSlotLock } from './contextLock.js';
 import { readBrowserSession, writeBrowserSession } from './browserSession.js';
 import { SearchStagnationGuard } from './searchStagnation.js';
+import { isQuestSubtaskCompleted } from './questStatus.js';
 import { withTimeout } from '../fsUtil.js';
 import {
   PC_USER_AGENT,
@@ -644,7 +645,7 @@ class BrowserManager extends EventEmitter {
 
           while (!this.shouldStop) {
             // 提取该打孔卡内当前所有未完成、已解锁的子活动列表
-            const subtasks = await page.evaluate(() => {
+            const scannedSubtasks = await page.evaluate(() => {
               const headings = [...document.querySelectorAll('h3')].filter(h => {
                 const t = h.innerText.trim();
                 return t && !t.includes('条款和条件') && !t.includes('Terms');
@@ -660,10 +661,10 @@ class BrowserManager extends EventEmitter {
                   container = container.parentElement;
                 }
                 const rawText = container?.innerText || '';
-                const isCompleted = rawText.includes('已完成')
-                  || rawText.includes('Complete')
-                  || rawText.includes('Completed')
-                  || !!container?.querySelector('svg path[d*="2.919"]'); // 绿色对勾 SVG
+                const hasSuccessIcon = !!container?.querySelector(
+                  '[class*="bg-statusSuccessRewardsBg"], [class*="statusSuccessRewards"], [data-testid*="complete" i]'
+                );
+                const hasEmptyCircle = !!container?.querySelector('[class*="border-ctrlChoiceBaseStrokeRest"]');
 
                 const links = [...(container?.querySelectorAll('a[href], button') || [])].filter(a => {
                   const disabled = a.getAttribute('aria-disabled') === 'true' || a.getAttribute('data-disabled') === 'true' || a.disabled;
@@ -674,7 +675,7 @@ class BrowserManager extends EventEmitter {
                   return true;
                 });
 
-                if (links.length > 0 && !isCompleted) {
+                if (links.length > 0) {
                   const link = links[0];
                   link.setAttribute('data-msr-subtask', String(i + 1));
                   items.push({
@@ -682,12 +683,16 @@ class BrowserManager extends EventEmitter {
                     title: h.innerText.trim(),
                     text: (link.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40),
                     href: link.getAttribute('href') || '',
-                    tag: link.tagName
+                    tag: link.tagName,
+                    rawText,
+                    hasSuccessIcon,
+                    hasEmptyCircle
                   });
                 }
               }
               return items;
             });
+            const subtasks = scannedSubtasks.filter(item => !isQuestSubtaskCompleted(item));
 
             // 寻找下一个尚未点击的子任务
             const target = subtasks.find(s => !clickedUrls.has(s.href || s.text || s.title));

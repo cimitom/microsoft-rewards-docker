@@ -576,11 +576,18 @@ export class RewardsApi {
    */
   extractQuests(cleanText) {
     const quests = [];
-    const seenTitles = new Set();
+    const questIndexByKey = new Map();
+
+    const canonicalQuestKey = (title) => {
+      const text = String(title || '').toLowerCase();
+      if (/halloween|万圣节/.test(text)) return 'halloween';
+      if (/桌面|rewardsapp/.test(text)) return 'desktop';
+      if (/亮点|fy27|monthly/.test(text)) return 'monthly';
+      return `title:${text.replace(/\s+/g, '')}`;
+    };
 
     const addQuest = (title, curP, maxP, chunk) => {
-      if (!title || seenTitles.has(title) || title.includes('开始使用 Rewards')) return;
-      seenTitles.add(title);
+      if (!title || title.includes('开始使用 Rewards')) return;
       let expText = '';
       const expM = chunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^\"]+)/);
       if (expM) {
@@ -605,7 +612,9 @@ export class RewardsApi {
       else if (isDesktop) icon = '🖥️';
       else if (title.includes('秋') || title.includes('亮点')) icon = '🍁';
 
-      quests.push({
+      const key = canonicalQuestKey(title);
+      const existingIndex = questIndexByKey.get(key);
+      const next = {
         title,
         progress: curP,
         max: maxP,
@@ -614,7 +623,25 @@ export class RewardsApi {
         available: true,
         done: curP >= maxP,
         icon
-      });
+      };
+
+      if (existingIndex === undefined) {
+        questIndexByKey.set(key, quests.length);
+        quests.push(next);
+        return;
+      }
+
+      // 同一活动在 Flight 数据里可能同时出现中英文标题。
+      // 必须合并为一张卡，并取较高的真实进度，不能被 0/6 的英文副本覆盖。
+      const existing = quests[existingIndex];
+      existing.progress = Math.max(Number(existing.progress || 0), Number(next.progress || 0));
+      existing.max = Math.max(Number(existing.max || 0), Number(next.max || 0));
+      existing.done = existing.progress >= existing.max;
+      existing.points = Math.max(Number(existing.points || 0), Number(next.points || 0));
+      if (!existing.expiresText && next.expiresText) existing.expiresText = next.expiresText;
+      const chineseScore = (value) => /[\u4e00-\u9fff]/.test(String(value || '')) ? 2 : 1;
+      if (chineseScore(next.title) > chineseScore(existing.title)) existing.title = next.title;
+      if (next.icon && !existing.icon) existing.icon = next.icon;
     };
 
     // 1. Flight stream 模式：标题 + 任务进度
@@ -913,7 +940,7 @@ export class RewardsApi {
         if (seen.has(questId) || questId.includes('newuser_onboarding')) continue;
         seen.add(questId);
         const matched = allQuests.find(q => {
-          if (questId.includes('Halloween') && q.title.includes('Halloween')) return true;
+          if (questId.includes('Halloween') && /Halloween|万圣节/i.test(q.title)) return true;
           if (questId.includes('RewardsApp') && (q.title.includes('桌面') || q.title.includes('RewardsApp'))) return true;
           if (questId.includes('FY27') && (q.title.includes('亮点') || q.title.includes('FY27'))) return true;
           return false;

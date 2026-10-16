@@ -19,7 +19,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.7.4';
+const CURRENT_VERSION = '1.7.5';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -743,6 +743,10 @@ export function createServer() {
       if (!targetAcc) return res.status(404).json({ success: false, message: '账号不存在' });
       if (targetAcc.enabled === false) {
         return res.status(409).json({ success: false, message: '该账号已停用，请先恢复自动巡检' });
+      }
+      const blockReason = taskManager.getAccountBlockReason(targetAcc);
+      if (blockReason) {
+        return res.status(409).json({ success: false, message: `账号凭据异常，已拒绝执行：${blockReason}` });
       }
     }
     taskManager.runAll(true, targetAccountId);

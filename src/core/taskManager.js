@@ -312,11 +312,29 @@ export class TaskManager {
         //    阅读进度来自移动端 DAPI，Token 绑定错误时这份数据属于另一个账号，
         //    绝不能拿它覆盖当前网页 Cookie 账号的阅读状态。
         let mobileTrusted = true;
-        if (accCfg.refreshToken && info.readMax > 0) {
+        if (accCfg.refreshToken) {
           const binding = await this.checkMobileAccountBinding(accCfg, info.balance).catch(() => null);
           mobileTrusted = !!binding?.tokenOk && !binding?.mismatch;
           if (!mobileTrusted && binding?.mismatch) {
             logger.log('🔴', `${binding.message}，本次不采用移动端阅读进度`, accCfg.name || accountId);
+            accStats.executionBlockReason = binding.message;
+            this.recordAccountCredentialBlock(accCfg, binding, info.balance);
+          } else if (binding && !binding.tokenOk) {
+            logger.log('🔴', `移动端 Token 异常，已标记该账号暂停执行：${binding.message}`, accCfg.name || accountId);
+            accStats.executionBlockReason = binding.message;
+            this.recordAccountCredentialBlock(accCfg, binding, info.balance);
+          } else if (mobileTrusted && /移动端 Token/i.test(accCfg.authDiagnosis?.warningMessage || '')) {
+            delete accStats.executionBlockReason;
+            configManager.recordAuthDiagnosis(accCfg.id, {
+              cookieValid: true,
+              tokenValid: true,
+              overallValid: true,
+              warning: false,
+              warningMessage: '',
+              balance: info.balance,
+              cookieMessage: '',
+              tokenMessage: ''
+            });
           }
         }
         if (info.readMax > 0 && mobileTrusted) {
@@ -633,6 +651,11 @@ export class TaskManager {
     try {
       for (const acc of targets) {
         try {
+          const blockReason = this.getAccountBlockReason(acc);
+          if (blockReason) {
+            logger.log('🛡️', `账号凭据异常，已跳过额外积分领取：${blockReason}`, acc.name);
+            continue;
+          }
           rewardsApi.setCurrentAccount(acc);
           const pts = await browserManager.claimDashboardPoints(acc);
           if (pts > 0) {
@@ -665,6 +688,10 @@ export class TaskManager {
     }
     try {
       rewardsApi.setCurrentAccount(acc);
+      const blockReason = await this.getLiveAccountBlockReason(acc);
+      if (blockReason) {
+        throw new Error(`账号凭据异常，已拒绝执行：${blockReason}`);
+      }
       const result = await browserManager.singleTestSearch(acc);
       // 搜索完成后同步一次最新官网数据（同一持有者，可重入）
       await this.syncAccountOfficialStatus(acc, { owned: true });
@@ -696,6 +723,50 @@ export class TaskManager {
     };
   }
 
+  /** 已持久化的账号异常原因：定时任务和手动操作都应优先检查它。 */
+  getAccountBlockReason(acc) {
+    if (!acc?.cookie && !acc?.refreshToken) return '未配置 Cookie 或移动端 Token';
+    const diagnosis = acc?.authDiagnosis;
+    if (diagnosis?.warning && diagnosis.warningMessage) return diagnosis.warningMessage;
+    if (diagnosis?.overallValid === false) return diagnosis.warningMessage || 'Cookie 或 Token 状态异常';
+    return '';
+  }
+
+  recordAccountCredentialBlock(acc, binding, balance = 0) {
+    if (!acc?.id || !binding?.message) return;
+    configManager.recordAuthDiagnosis(acc.id, {
+      cookieValid: !!acc.cookie,
+      tokenValid: false,
+      overallValid: false,
+      warning: true,
+      warningMessage: binding.message,
+      balance,
+      cookieMessage: '',
+      tokenMessage: binding.message
+    });
+  }
+
+  /**
+   * 手动执行前的实时校验：只要 Cookie/Token 任一异常，直接拒绝，
+   * 不再盲目打开浏览器或提交任何任务。
+   */
+  async getLiveAccountBlockReason(acc) {
+    const stored = this.getAccountBlockReason(acc);
+    if (stored) return stored;
+    if (!acc?.cookie || !acc?.refreshToken) return '';
+
+    const info = await rewardsApi.getRewardsInfo(1).catch(() => null);
+    if (!info) return '无法读取微软官网状态，Cookie 可能已失效或网络异常';
+
+    const binding = await this.checkMobileAccountBinding(acc, info.balance).catch(() => null);
+    if (!binding?.tokenOk) return binding?.message || '移动端 Token 未就绪或刷新失败';
+    if (binding.mismatch) {
+      this.recordAccountCredentialBlock(acc, binding, info.balance);
+      return binding.message;
+    }
+    return '';
+  }
+
   /**
    * WebUI 任务卡片点击执行：每次只执行该卡片对应的一次动作。
    * 支持 sign / read / search / 打孔卡类任务。
@@ -710,6 +781,10 @@ export class TaskManager {
 
     try {
       rewardsApi.setCurrentAccount(acc);
+      const blockReason = await this.getLiveAccountBlockReason(acc);
+      if (blockReason) {
+        throw new Error(`账号凭据异常，已拒绝执行：${blockReason}`);
+      }
       const before = this.getStatus(acc.id).stats || {};
       const result = {
         taskKey,
@@ -1000,7 +1075,16 @@ export class TaskManager {
     logger.log('👤', `>>> 开始执行账号 [${accountName}] 的自动化打卡任务 <<<`, accountName);
 
     // 1. 运行前先从官方同步一次真实进度（确保增量起点100%准确）
-    await this.syncAccountOfficialStatus(accCfg, { owned: true });
+    const initialSync = await this.syncAccountOfficialStatus(accCfg, { owned: true });
+    const initialBlockReason = this.getAccountBlockReason(accCfg) || accStats.executionBlockReason;
+    if (initialBlockReason) {
+      logger.log('🛡️', `账号凭据异常，已跳过本次自动化任务：${initialBlockReason}`, accountName);
+      return;
+    }
+    if (!initialSync) {
+      logger.log('🛡️', '无法读取微软官网状态，已跳过本次自动化任务，避免盲目重试', accountName);
+      return;
+    }
 
     // 2. 检查是否所有任务今日均已达标完成
     const taskValues = Object.values(accStats.tasks || {});
@@ -1462,12 +1546,19 @@ export class TaskManager {
       // 否则它会在没有凭据的情况下执行，可能误用到别的账号的会话
       const allAccounts = configManager.getAccounts()
         .filter(a => a.enabled !== false && (a.cookie || a.refreshToken));
+      const blockedAccounts = allAccounts
+        .map(acc => ({ acc, reason: this.getAccountBlockReason(acc) }))
+        .filter(item => item.reason);
+      for (const { acc, reason } of blockedAccounts) {
+        logger.log('🛡️', `账号凭据异常，定时任务已跳过 [${acc.name || acc.id}]：${reason}`, '', acc.name || acc.id);
+      }
+      const runnableAccounts = allAccounts.filter(acc => !this.getAccountBlockReason(acc));
       const targetList = (targetAccountId && targetAccountId !== 'all')
-        ? allAccounts.filter(a => a.id === targetAccountId)
-        : allAccounts;
+        ? runnableAccounts.filter(a => a.id === targetAccountId)
+        : runnableAccounts;
 
       if (targetList.length === 0) {
-        logger.log('🟡', '没有可执行的已启用账号');
+        logger.log('🟡', blockedAccounts.length > 0 ? '所有账号均因凭据异常被跳过，未执行任何任务' : '没有可执行的已启用账号');
         return false;
       }
 

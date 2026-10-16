@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -138,6 +138,13 @@
   - **修复配置按钮逻辑**：周期预设不再重置其他 Epic 设置；清空移动端凭据会同时清空 Refresh/Access Token；向导换取 Token 改为草稿模式，取消向导不再留下半成品账号；配置中心测试已保存 Cookie 时会正确读取服务端原值；
   - **加固浏览器交互**：兼容 noVNC `/novnc/websockify` 路径、移除宿主机 `6080` 直连端口、提升配置请求体积上限，并补齐错误响应；
   - **单元测试增至 94 个**。
+- 🎃 **打孔卡重复项与异常账号拦截修复 (v1.7.5)**：
+  - **修复 Halloween 打孔卡进度被覆盖**：同一活动的中英文 Flight 数据会合并为一张卡并取真实较高进度，不再出现官网 `5/6`、面板 `0/6`；
+  - **修复子任务误判完成**：不再把描述里的 `(1/5 天已完成)` 当成整个子任务完成，能够继续识别并点击唯一可执行的“开始搜索”；
+  - **修复月度打孔卡点击**：按任务名精确匹配目标，点击可执行项后会回读官网状态；实测“十月必看五大亮点”可从 `2/5` 推进到 `3/5`；
+  - **异常凭据账号统一拦截**：Token 绑定错误、Cookie/Token 失效或诊断异常的账号会跳过定时任务，手动运行、卡片操作和单次测搜会直接拒绝并显示具体原因；
+  - **修复 Epic 新建账号登录按钮无响应**：新账号点击“打开可见浏览器登录”时会先自动保存备注账号，再启动 Firefox 登录窗口；
+  - **单元测试增至 99 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；
