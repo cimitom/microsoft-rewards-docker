@@ -43,6 +43,18 @@ test('getRewardsInfo 解析官网「今日积分」与余额', async () => {
   });
 });
 
+test('getRewardsInfo 遇到多份「今日积分」Flight 数据时取最大值，不被首个 0 覆盖', async () => {
+  const html = `
+<script>self.__next_f.push([1,"a:\\"children\\":\\"今日积分\\",\\"b\\":{\\"className\\":\\"text-pageHeader\\",\\"children\\":\\"0\\"}"])</script>
+<script>self.__next_f.push([1,"b:\\"children\\":\\"今日积分\\",\\"c\\":{\\"className\\":\\"text-pageHeader\\",\\"children\\":\\"112\\"}"])</script>
+<script>self.__next_f.push([1,"c:\\"balance\\":781"])</script>
+`;
+  await withStubbedNetwork(html, async () => {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.equal(info.todayPoints, 112, '不能采用旧 Flight 中的隐藏 0');
+  });
+});
+
 test('getRewardsInfo 解析必应应用连签真实状态', async () => {
   await withStubbedNetwork(EARN_FIXTURE, async () => {
     const info = await rewardsApi.getRewardsInfo(1);

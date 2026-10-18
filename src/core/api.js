@@ -462,11 +462,21 @@ export class RewardsApi {
         // 这是唯一权威的「今日已增」来源，比「各任务积分求和」可靠得多
         // （旧实现求和会把没做的任务也算进去，实测能虚高几十点）。
         let todayPoints = null;
-        const todayMatch = clean.match(/"children":"今日积分"[\s\S]{0,1600}?"className":"text-pageHeader","children":"(\d+)"/)
-          || clean.match(/今日积分<\/p>[\s\S]{0,1200}?class="text-pageHeader">(\d+)</);
-        if (todayMatch) {
-          const n = parseInt(todayMatch[1], 10);
-          if (Number.isFinite(n)) todayPoints = n;
+        const todayPointValues = [];
+        const todayPointPatterns = [
+          /"children":"(?:今日积分|Points earned today|Today(?:'|&#39;)s points)"[\s\S]{0,1600}?"className":"text-pageHeader","children":"([\d,]+)"/g,
+          /(?:今日积分|Points earned today|Today(?:'|&#39;)s points)<\/p>[\s\S]{0,1200}?class="text-pageHeader">([\d,]+)</g
+        ];
+        for (const pattern of todayPointPatterns) {
+          for (const match of clean.matchAll(pattern)) {
+            const n = parseInt(String(match[1]).replace(/,/g, ''), 10);
+            if (Number.isFinite(n)) todayPointValues.push(n);
+          }
+        }
+        // 页面里可能同时存在多个同名卡片（如隐藏模板或旧 Flight 数据）。
+        // 旧实现只取第一个，遇到首个值为 0 时会把真实今日积分覆盖成 0。
+        if (todayPointValues.length > 0) {
+          todayPoints = Math.max(...todayPointValues);
         }
 
         // 如果页面未取到有效余额，尝试通过移动端 DAPI 接口获取真实账户余额

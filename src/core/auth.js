@@ -283,13 +283,13 @@ export class AuthManager {
 
         // 6. 检查是否存在必应搜索关键登录标头 _U
         const hasU = cookie.includes('_U=');
-        const uWarning = hasU ? '' : ' | ⚠️缺少 _U 登录标头，必应搜索无法关联账号计分！请在电脑登录 cn.bing.com 重新抓取完整 Cookie';
+        const uWarning = hasU ? '' : ' | ⚠️缺少 _U 登录标头，必应搜索无法关联账号计分！请在电脑登录 rewards.bing.com/dashboard 重新抓取完整 Cookie';
 
         return {
           valid: true,
           hasU,
           warning: !hasU,
-          warningMessage: hasU ? '' : '缺少 _U 登录标头：必应搜索无法关联账号计分，请在电脑登录 cn.bing.com 后重新抓取完整 Cookie',
+          warningMessage: hasU ? '' : '缺少 _U 登录标头：必应搜索无法关联账号计分，请在电脑登录 rewards.bing.com/dashboard 后重新抓取完整 Cookie',
           balance,
           userName: userName || '微软用户',
           streakDays,

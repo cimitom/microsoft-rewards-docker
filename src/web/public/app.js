@@ -417,11 +417,7 @@ function initUIEvents() {
   document.getElementById('btn-close-guide').addEventListener('click', () => closeModal('guide-modal'));
   document.getElementById('btn-finish-guide').addEventListener('click', () => closeModal('guide-modal'));
 
-  // 顶部与任务清单栏的快捷编辑当前账号按钮
-  document.getElementById('btn-edit-active-account')?.addEventListener('click', () => {
-    const targetId = selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || null);
-    if (targetId) openQuickAddAccountModal(targetId);
-  });
+  // 任务清单栏的快捷编辑当前账号按钮
   document.getElementById('btn-edit-current-account-header')?.addEventListener('click', () => {
     const targetId = selectedAccountId !== 'all' ? selectedAccountId : (currentConfig?.accounts?.[0]?.id || null);
     if (targetId) openQuickAddAccountModal(targetId);
@@ -1504,7 +1500,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.6';
+  const current = updateInfo?.currentVersion || '1.7.7';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1559,8 +1555,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.6'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.6'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.7'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.7'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -1776,11 +1772,6 @@ function renderDashboard(data) {
     } else {
       scopeBadge.innerHTML = `👤 当前账号：${escapeHtml(stats.name || selectedAccountId)}`;
     }
-  }
-
-  const btnEditActive = document.getElementById('btn-edit-active-account');
-  if (btnEditActive) {
-    btnEditActive.style.display = isAllMode ? 'none' : 'inline-flex';
   }
 
   // 运行按钮提示
@@ -2965,7 +2956,7 @@ async function runSingleAccountDiagnosis(accountId) {
       pillCookie.innerText = '已登录 · 需修复';
       detailCookie.innerHTML = `
         <div style="color:#F59E0B;">状态：⚠️ 身份认证有效，但 Cookie 不完整 —— ${escapeHtml(cookie.warningMessage || '缺少 _U 登录标头')}</div>
-        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：在电脑登录 cn.bing.com 后重新抓取完整 Cookie（必须包含 _U），否则 PC 搜索不会计分。</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：在电脑登录 rewards.bing.com/dashboard 后重新抓取完整 Cookie（必须包含 _U），否则 PC 搜索不会计分。</div>
       `;
     } else if (cookie.valid) {
       pillCookie.className = 'diag-status-pill pill-ok';
@@ -2979,7 +2970,7 @@ async function runSingleAccountDiagnosis(accountId) {
       pillCookie.innerText = '未登录 / 失效';
       detailCookie.innerHTML = `
         <div style="color:#F87171;">状态：❌ ${escapeHtml(cookie.message || 'Cookie 缺失或已失效')}</div>
-        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：在电脑登录 rewards.bing.com，按 F12 复制完整 Cookie 粘贴到配置中心。</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：在电脑登录 rewards.bing.com/dashboard，按 F12 复制完整 Cookie 粘贴到配置中心。</div>
       `;
     }
 

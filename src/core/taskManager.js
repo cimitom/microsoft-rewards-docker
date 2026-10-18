@@ -91,6 +91,14 @@ export class TaskManager {
             if (!baseStats.accounts[accId]) {
               baseStats.accounts[accId] = this.createDefaultAccountStats(accId, oldAcc.name || accId);
             }
+            // 昨日收盘余额就是今日起始余额。旧实现把 startBalance 清成 0，
+            // 等第一次同步再取余额，会把当天在首次同步前产生的积分永久漏掉。
+            const previousBalance = Number(oldAcc.balance);
+            if (Number.isFinite(previousBalance) && previousBalance > 0) {
+              baseStats.accounts[accId].balance = previousBalance;
+              baseStats.accounts[accId].startBalance = previousBalance;
+              baseStats.accounts[accId].startBalanceDate = today;
+            }
             for (const [k, oldTask] of Object.entries(oldAcc.tasks || {})) {
               if (oldTask && (oldTask.isPunchCard || k === 'desktopApp' || k === 'monthlyQuest' || k.startsWith('quest_'))) {
                 baseStats.accounts[accId].tasks[k] = { ...oldTask };
@@ -217,17 +225,55 @@ export class TaskManager {
   applyEarned(accStats, officialTodayPoints) {
     if (!accStats) return;
     const official = Number(officialTodayPoints);
-    if (Number.isFinite(official) && official >= 0) {
-      accStats.earned = official;
-      accStats.earnedSource = 'official';
-      return;
-    }
-    const start = Number(accStats.startBalance);
+    const hasOfficial = Number.isFinite(official) && official >= 0;
+
+    let start = Number(accStats.startBalance);
     const now = Number(accStats.balance);
-    if (accStats.startBalanceDate === this.getTodayNum() && Number.isFinite(start) && Number.isFinite(now) && start > 0) {
-      accStats.earned = Math.max(0, now - start);
-      accStats.earnedSource = 'balance-delta';
+    const todayNum = this.getTodayNum();
+    const todayStr = historyManager.formatDate(new Date());
+
+    // 兼容旧版本已经写坏的本日起点：如果昨天收盘余额高于当前记录的起点，
+    // 以昨天收盘余额为准，避免把「账号本身已有余额」误算成今日新增。
+    if (accStats.startBalanceDate === todayNum) {
+      const previousClose = historyManager.getLatestBalanceBefore(accStats.id, todayStr);
+      if (previousClose > 0 && (!Number.isFinite(start) || start < previousClose)) {
+        start = previousClose;
+        accStats.startBalance = previousClose;
+      }
     }
+
+    const hasBalanceDelta = accStats.startBalanceDate === todayNum
+      && Number.isFinite(start)
+      && Number.isFinite(now)
+      && start > 0;
+    const balanceDelta = hasBalanceDelta ? Math.max(0, now - start) : null;
+
+    let earned = null;
+    let source = '';
+    if (hasOfficial && official > 0) {
+      earned = official;
+      source = 'official';
+    } else if (balanceDelta !== null && balanceDelta > 0) {
+      // 官网卡片偶发显示 0（尤其页面同时存在多份 Flight 数据时），
+      // 余额差是可信的兜底，不能再把这个 0 当成权威值覆盖已有正数。
+      earned = balanceDelta;
+      source = 'balance-delta';
+    } else if (hasOfficial) {
+      earned = 0;
+      source = 'official';
+    }
+
+    if (earned === null) return;
+
+    // 同一日内只增不减：后续同步失败、账号上下文短暂串台或官网返回 0，
+    // 都不能把已经确认到账的今日积分抹掉。
+    const previousEarned = Math.max(0, Number(accStats.earned) || 0);
+    if (previousEarned > earned) {
+      earned = previousEarned;
+      source = accStats.earnedSource || source;
+    }
+    accStats.earned = earned;
+    accStats.earnedSource = source;
   }
 
   updateTask(key, partial, accountId = null) {

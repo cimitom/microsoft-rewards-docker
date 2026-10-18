@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.7.6</span>
+            <span class="version-label" id="version-label">v1.7.7</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -85,9 +85,6 @@
         </button>
         <button id="btn-check-account" class="btn btn-secondary btn-sm" title="体检当前选中的账号">
           <span>🔍</span> 账号体检
-        </button>
-        <button id="btn-edit-active-account" class="btn btn-secondary btn-sm" title="编辑当前选中的账号信息与 Cookie 凭据" style="display: none;">
-          <span>✏️</span> 编辑账号
         </button>
         <button id="btn-guide" class="btn btn-secondary btn-sm" title="添加新账号配置向导">
           <span>💡</span> 配置向导
@@ -516,7 +513,7 @@
           <h3 class="step-title">第二步：配置必应网页端 Cookie</h3>
           <p class="step-desc">该 Cookie 用于「必应 PC 搜索（60分）」、「每日活动集 Daily Set」与「桌面专享任务」。</p>
           <div class="step-action-box">
-            <p>在电脑浏览器中登录 <a href="https://cn.bing.com" target="_blank" style="color:#38BDF8;">cn.bing.com</a>（PC 搜索实际访问的站点），按 <code>F12</code> 打开控制台，在【网络/Network】或【应用程序/Application】中复制 Cookie 字符串，粘贴在下方：</p>
+            <p>在电脑浏览器中登录 <a href="https://rewards.bing.com/dashboard" target="_blank" style="color:#38BDF8;">rewards.bing.com/dashboard</a>，按 <code>F12</code> 打开控制台，在【网络/Network】或【应用程序/Application】中复制 Cookie 字符串，粘贴在下方：</p>
             <textarea id="guide-cookie-input" class="form-textarea" rows="4" placeholder="粘贴完整的 Cookie 字符串（必须包含 _U，否则 PC 搜索不计分）"></textarea>
             <button id="guide-btn-test-cookie" class="btn btn-secondary" style="margin-top: 8px;">测试 Cookie 有效性</button>
             <div id="guide-cookie-result" class="hint-msg"></div>
@@ -645,7 +642,7 @@
             <label class="form-label">必应网页端 Cookie (针对当前选中的账号)</label>
             <div class="input-with-btn">
               <div class="secret-field">
-                <input type="password" id="cfg-cookie" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴浏览器 cn.bing.com 的完整 Cookie（须含 _U）">
+                <input type="password" id="cfg-cookie" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴浏览器 rewards.bing.com/dashboard 的完整 Cookie（须含 _U）">
                 <button type="button" class="secret-toggle" data-target="cfg-cookie" title="显示 / 隐藏 Cookie">👁</button>
               </div>
               <button type="button" id="btn-test-modal-cookie" class="btn btn-secondary btn-sm" title="测试该 Cookie 有效性与余额">测试有效性</button>
@@ -983,7 +980,7 @@
             <label class="form-label" style="margin-bottom: 0;">必应网页端 Cookie (可选)</label>
             <button type="button" class="btn btn-danger-soft btn-sm" id="btn-quick-clear-cookie" style="display: none; padding: 2px 8px; font-size: 11px;">清空已有 Cookie</button>
           </div>
-          <textarea id="quick-add-cookie" class="form-textarea" rows="3" placeholder="粘贴该账号 cn.bing.com 的 Cookie（须含 _U）"></textarea>
+          <textarea id="quick-add-cookie" class="form-textarea" rows="3" placeholder="粘贴该账号 rewards.bing.com/dashboard 的 Cookie（须含 _U）"></textarea>
           <small class="form-hint" id="quick-add-cookie-hint">编辑账号时留空表示保留原 Cookie。</small>
         </div>
         <div class="form-group">

@@ -347,7 +347,7 @@ class BrowserManager extends EventEmitter {
     logger.log('🔍', `启动无头浏览器执行「单次安全验证搜索」...`, '', accName);
 
     if (acc?.cookie && !acc.cookie.includes('_U=')) {
-      logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请前往 cn.bing.com 登录后重新抓取完整 Cookie`, '', accName);
+      logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请前往 rewards.bing.com/dashboard 登录后重新抓取完整 Cookie`, '', accName);
     }
 
     try {

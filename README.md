@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.6-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.7-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -121,7 +121,7 @@
 - 🔧 **更新检查、Cookie 文案、Epic 定时与指纹加固 (v1.7.3)**：
   - **修复「有新版却不提示更新」**：更新检查原先读 GitHub 的 `releases/latest`，但发布流程只推 tag 不建 Release，最新 Release 停在 `v1.6.2`，导致 `v1.6.3~v1.7.2` 之间的用户比较出来永远是「无需更新」。现在改为直接读 tags 列表取语义化版本最大值，并在 CI 里补上「打 tag 时自动创建 Release」，让已经装在别人机器上的旧版也能收到提示；
   - **更新检查失败不再伪装成「已是最新」**：以前 GitHub 被墙或限流时会静默回退成「已是最新版本」，让「检查失败」和「真的没更新」长得一模一样；现在如实显示检查失败与失败原因；
-  - **修正 Cookie 向导文案**：原文写「登录 `rewards.bing.com` 获取 Cookie」，但 PC 搜索实际访问的是 `cn.bing.com`，登录身份 Cookie `_U` 也由该站点下发；同时删掉「必须包含 `_U` 或 `KievRPSSecAuth`」里对 `KievRPSSecAuth` 的错误承诺 —— 代码只认 `_U`，`KievRPSSecAuth` 不能替代它；
+  - **修正 Cookie 向导文案**：统一从 `https://rewards.bing.com/dashboard` 获取完整 Cookie，并删掉「必须包含 `_U` 或 `KievRPSSecAuth`」里对 `KievRPSSecAuth` 的错误承诺 —— 代码只认 `_U`，`KievRPSSecAuth` 不能替代它；
   - **Epic 自动领取新增「自动领取时间」**：到设定时间之前一律暂停，容器重启不再立刻跑一轮（旧逻辑里 `lastCheckAt` 是内存值、重启即归零，间隔限制完全失效）；
   - **Epic 登录窗口改用干净会话**：不再把账号里已失效的旧 `storageState` 注入登录上下文，并改用独立的临时 profile，避免带着矛盾会话去登录（Epic 官方排障同样建议清空站点数据后重登）；
   - **`navigator.webdriver` 补丁不再可被识别**：对齐 getter 的 `toString`，现在返回 `function webdriver() { [native code] }` 而不是 `() => false`；
@@ -150,6 +150,13 @@
   - **完整体检即时恢复执行**：账号体检确认双端有效时，会同步清除旧的运行阻断标记并持久化；
   - **回归测试覆盖**：新增 Token 从绑定错误恢复后自动解除阻断的测试，防止问题复发；
   - **单元测试增至 100 个**。
+- 📈 **每日积分汇总与 Cookie 引导修复 (v1.7.7)**：
+  - **修复账号历史积分长期显示 0**：跨日继承昨日收盘余额，官网“今日积分”同时存在多份数据时取真实最大值，不再被隐藏的 0 覆盖；
+  - **修复历史账单被后续同步抹掉**：同一天已确认的今日积分只增不减，晚间同步或短暂账号上下文异常不会再把 `+112` 覆盖成 `0`；
+  - **自动修复旧历史**：已有记录中“积分为 0 但余额较前一日增长”的日期会按余额差回填，全部账号汇总同步采用修复后的值；
+  - **移除重复编辑入口**：删除顶部工具条中重复的“编辑账号”按钮，保留任务进度清单里的“编辑此账号”；
+  - **修正 Cookie 获取地址**：配置向导、输入提示和诊断文案统一指向 `https://rewards.bing.com/dashboard`；
+  - **单元测试增至 110 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；
@@ -300,7 +307,7 @@ npm test
 > ✨ 提示：系统会自动捕获并持久化保存 Refresh Token，后续系统会**永久自动无感续期**，无需再次操作。
 
 ### 步骤 2：网页端 Cookie 配置
-1. 在电脑浏览器登录 [cn.bing.com](https://cn.bing.com)（**不是** `rewards.bing.com`：PC 搜索实际访问的是 `cn.bing.com`，登录身份 Cookie `_U` 由该站点下发）；
+1. 在电脑浏览器登录 [rewards.bing.com/dashboard](https://rewards.bing.com/dashboard)；
 2. 按 `F12` 打开开发者工具，在【网络 / Network】中抓取任意请求的 `Cookie`，或者直接在【应用程序 / Application -> Cookies】中复制完整 Cookie 文本；
 3. **确认 Cookie 串里包含 `_U=...`**。没有 `_U` 时，网页端能登录、但 PC 搜索不会计分（`KievRPSSecAuth` 不能替代 `_U`）；
 4. 粘贴至输入框，点击 **「测试 Cookie 有效性」**，确认显示“Cookie 有效”即可。

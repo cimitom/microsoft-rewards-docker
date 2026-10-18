@@ -94,6 +94,51 @@ class HistoryManager {
   }
 
   /**
+   * 读取单个账号的历史，并修复旧版本在当天后续同步时写坏的 0。
+   *
+   * 修复只在「原记录为 0，且余额相对上一条有效记录确实增长」时进行；
+   * 用余额差回填比用任务积分求和更准确（活动卡片积分可能包含未到账项目）。
+   */
+  getAccountHistory(accountId) {
+    const raw = this.load().accounts?.[accountId] || {};
+    const result = {};
+    let previousBalance = 0;
+
+    for (const dateStr of Object.keys(raw).sort()) {
+      const rec = raw[dateStr];
+      if (!rec || typeof rec !== 'object') continue;
+      const balance = Number(rec.balance || 0);
+      let earned = Math.max(0, Number(rec.earned || 0));
+      let earnedInferred = false;
+
+      if (earned === 0 && previousBalance > 0 && balance > previousBalance) {
+        earned = balance - previousBalance;
+        earnedInferred = true;
+      }
+
+      result[dateStr] = {
+        ...rec,
+        earned,
+        ...(earnedInferred ? { earnedInferred: true } : {})
+      };
+      if (balance > 0) previousBalance = balance;
+    }
+
+    return result;
+  }
+
+  /** 获取指定日期之前最近一条有效余额，用于校准今日起始余额。 */
+  getLatestBalanceBefore(accountId, beforeDate) {
+    const raw = this.load().accounts?.[accountId] || {};
+    for (const dateStr of Object.keys(raw).sort().reverse()) {
+      if (dateStr >= beforeDate) continue;
+      const balance = Number(raw[dateStr]?.balance || 0);
+      if (balance > 0) return balance;
+    }
+    return 0;
+  }
+
+  /**
    * 从各账号的任务项汇总真实积分分解。
    * 旧实现按固定模板把 earned 拆成「签到10/阅读30/搜索(earned-80)/活动集30/Quiz10」，
    * 属于编造数据——历史图表悬停看到的明细与真实情况完全无关。
@@ -120,12 +165,19 @@ class HistoryManager {
     if (!history.accounts[accountId]) {
       history.accounts[accountId] = {};
     }
+    const previous = history.accounts[accountId][dateStr] || {};
+    const incomingEarned = Math.max(0, Number(data.earned || 0));
+    const incomingBalance = Number(data.balance || 0);
+    const incomingBreakdown = Array.isArray(data.breakdown) ? data.breakdown : [];
     history.accounts[accountId][dateStr] = {
       date: dateStr,
       timestamp: Date.now(),
-      earned: data.earned || 0,
-      balance: data.balance || 0,
-      breakdown: Array.isArray(data.breakdown) ? data.breakdown : []
+      // 今日积分只增不减，避免晚间的补偿同步用错误 0 覆盖白天已确认的积分。
+      earned: Math.max(Math.max(0, Number(previous.earned || 0)), incomingEarned),
+      balance: incomingBalance > 0 ? incomingBalance : Number(previous.balance || 0),
+      breakdown: incomingBreakdown.length > 0
+        ? incomingBreakdown
+        : (Array.isArray(previous.breakdown) ? previous.breakdown : [])
     };
     this.scheduleFlush();
   }
@@ -135,12 +187,18 @@ class HistoryManager {
    */
   recordGlobalDay(dateStr, data) {
     const history = this.load();
+    const previous = history.global[dateStr] || {};
+    const incomingEarned = Math.max(0, Number(data.earned || 0));
+    const incomingBalance = Number(data.balance || 0);
+    const incomingBreakdown = Array.isArray(data.breakdown) ? data.breakdown : [];
     history.global[dateStr] = {
       date: dateStr,
       timestamp: Date.now(),
-      earned: data.earned || 0,
-      balance: data.balance || 0,
-      breakdown: Array.isArray(data.breakdown) ? data.breakdown : []
+      earned: Math.max(Math.max(0, Number(previous.earned || 0)), incomingEarned),
+      balance: incomingBalance > 0 ? incomingBalance : Number(previous.balance || 0),
+      breakdown: incomingBreakdown.length > 0
+        ? incomingBreakdown
+        : (Array.isArray(previous.breakdown) ? previous.breakdown : [])
     };
     this.scheduleFlush();
   }
@@ -172,7 +230,7 @@ class HistoryManager {
       const accSt = taskManagerStats.accounts?.[accountId] || taskManagerStats;
       currentBalance = accSt.balance || 0;
       currentEarned = accSt.earned || 0;
-      accountHistoryMap = history.accounts?.[accountId] || {};
+      accountHistoryMap = this.getAccountHistory(accountId);
     }
 
     for (let i = days - 1; i >= 0; i--) {
@@ -189,7 +247,7 @@ class HistoryManager {
         const accountsBreakdown = [];
 
         for (const [accId, accHist] of Object.entries(history.accounts || {})) {
-          const rec = accHist?.[dateKey];
+          const rec = this.getAccountHistory(accId)?.[dateKey];
           if (!rec) continue;
           const earned = Number(rec.earned || 0);
           const balance = Number(rec.balance || 0);
