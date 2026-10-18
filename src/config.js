@@ -55,6 +55,7 @@ const DEFAULT_CONFIG = {
     searchStagnantLimit: 10, // 停滞保护：连续多少次搜索官网进度不涨就主动停手
     searchApi: 'baidu.official', // 'offline' | 'baidu.official' | 'hot.nntool.cc' | 'hot.cnxiaobai.com'
     searchEngineMode: 'browser', // 'browser' (Playwright 真机拟人) | 'http' (轻量HTTP)
+    accountGapSec: 180, // 多账号自动化连续执行时的安全隔离间隔（秒，默认 180 秒即 3 分钟）
     keepRunning: true // 全部完成后，手动再次执行时是否仍完整跑一遍（定时任务每账号每天只排一次）
   },
   schedule: {

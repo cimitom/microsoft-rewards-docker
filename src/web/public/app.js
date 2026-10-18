@@ -45,8 +45,6 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchHistory(7);
   initLogStream();
   checkVersionUpdate();
-  // 首次打开自动触发官网真实完成度同步（解决新部署到 NAS 时任务全显为 0 的问题）
-  fetch('/api/status/sync', { method: 'POST' }).then(() => fetchStatus()).catch(() => {});
   setInterval(fetchStatus, 4000); // 4秒轮询一次任务状态
   setInterval(fetchSystemMetrics, 4000); // 4秒轮询硬件与网络延时
   setInterval(fetchBrowserStatus, 2500); // 2.5秒轮询无头浏览器状态
@@ -240,7 +238,7 @@ function initUIEvents() {
       const res = await fetch('/api/status/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedAccountId !== 'all' ? selectedAccountId : null })
+        body: JSON.stringify({ accountId: selectedAccountId !== 'all' ? selectedAccountId : null, force: true })
       }).then(r => r.json());
       stopActionProgressTicker();
       if (res.success && res.data) {
@@ -455,7 +453,7 @@ function initUIEvents() {
       const res = await fetch('/api/status/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: targetId })
+        body: JSON.stringify({ accountId: targetId, force: true })
       }).then(r => r.json());
       stopActionProgressTicker();
       if (res.success) {
@@ -1500,7 +1498,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.7';
+  const current = updateInfo?.currentVersion || '1.7.8';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1555,8 +1553,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.7'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.7'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.8'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.8'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -2141,7 +2139,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
         const res = await fetch('/api/status/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountId: acc.id })
+          body: JSON.stringify({ accountId: acc.id, force: true })
         }).then(r => r.json());
         stopActionProgressTicker();
         if (res.success) {
@@ -2522,6 +2520,8 @@ function populateSettingsForm() {
   if (jitterEl) jitterEl.value = c.tasks?.searchJitterSec ?? 30;
   const stagnantEl = document.getElementById('cfg-search-stagnant');
   if (stagnantEl) stagnantEl.value = c.tasks?.searchStagnantLimit ?? 10;
+  const gapEl = document.getElementById('cfg-account-gap');
+  if (gapEl) gapEl.value = c.tasks?.accountGapSec ?? 180;
   updateSearchRhythmHint();
   document.getElementById('cfg-search-engine').value = c.tasks?.searchEngineMode || 'browser';
   document.getElementById('cfg-search-api').value = c.tasks?.searchApi || 'baidu.official';
@@ -2684,6 +2684,7 @@ async function saveSettingsFromModal() {
       searchIntervalSec: searchRhythm.interval,
       searchJitterSec: searchRhythm.jitter,
       searchStagnantLimit: readSearchStagnantLimit(),
+      accountGapSec: Math.max(15, parseInt(document.getElementById('cfg-account-gap')?.value, 10) || 180),
       searchEngineMode: document.getElementById('cfg-search-engine')?.value || 'browser',
       searchApi: document.getElementById('cfg-search-api')?.value || 'baidu.official'
     },
@@ -3036,9 +3037,9 @@ async function runSingleAccountDiagnosis(accountId) {
   }
 }
 
-// 全部账号：逐个串行体检，避免并发触发微软风控
+// 全部账号：逐个串行体检，并在账号间严格执行安全防风控强制间隔
 async function runAllAccountDiagnosis() {
-  const accounts = currentConfig?.accounts || [];
+  const accounts = (currentConfig?.accounts || []).filter(a => a.enabled !== false);
   document.getElementById('diag-banner').style.display = 'none';
   document.getElementById('diag-cards').style.display = 'none';
   document.querySelector('.diag-summary-box').style.display = 'none';
@@ -3049,18 +3050,60 @@ async function runAllAccountDiagnosis() {
   if (accounts.length === 0) {
     setDiagLoading(false);
     document.getElementById('diag-all-summary').style.display = 'block';
-    document.getElementById('diag-all-summary').innerText = '当前没有可体检的账号。';
+    document.getElementById('diag-all-summary').innerText = '当前没有可体检的启用账号。';
     return;
   }
 
-  setDiagLoading(true, '正在批量体检所有账号，请稍候...');
+  const results = [];
+  const gapSec = Math.max(15, parseInt(document.getElementById('cfg-account-gap')?.value, 10) || (currentConfig?.tasks?.accountGapSec ?? 30));
+
   try {
-    const res = await fetch('/api/auth/test-all', { method: 'POST' }).then(r => r.json());
-    if (res.success && res.data?.results) {
-      renderAllAccountDiagnosisResults(res.data.results);
-    } else {
-      throw new Error(res.message || '体检接口异常');
+    for (let i = 0; i < accounts.length; i++) {
+      const acc = accounts[i];
+      setDiagLoading(true, `正在检测账号登录状态 (${i + 1}/${accounts.length}): ${acc.name || acc.id}...`);
+      try {
+        const res = await fetch('/api/auth/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId: acc.id, force: true })
+        }).then(r => r.json());
+
+        if (res.success && res.data) {
+          results.push(res.data);
+        } else {
+          results.push({
+            accountId: acc.id,
+            accountName: acc.name || acc.id,
+            cookie: { valid: false, message: res.message || '体检未通过' },
+            token: { valid: false, message: res.message || '体检未通过' },
+            overallValid: false,
+            allValid: false,
+            balance: 0,
+            error: res.message || '接口返回失败'
+          });
+        }
+      } catch (e) {
+        results.push({
+          accountId: acc.id,
+          accountName: acc.name || acc.id,
+          cookie: { valid: false, message: e.message },
+          token: { valid: false, message: e.message },
+          overallValid: false,
+          allValid: false,
+          balance: 0,
+          error: e.message
+        });
+      }
+
+      // 多账号体检强制安全隔离倒计时：在界面清晰展示等待时间
+      if (i < accounts.length - 1) {
+        for (let s = gapSec; s > 0; s--) {
+          setDiagLoading(true, `🛡️ 多账号防风控隔离：等待 ${s} 秒后检测下一个账号 (${i + 2}/${accounts.length}: ${accounts[i + 1].name || accounts[i + 1].id})...`);
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
     }
+    renderAllAccountDiagnosisResults(results);
   } catch (e) {
     const summaryBox = document.getElementById('diag-all-summary');
     summaryBox.style.display = 'block';

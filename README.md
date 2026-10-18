@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.7-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.8-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -157,6 +157,12 @@
   - **移除重复编辑入口**：删除顶部工具条中重复的“编辑账号”按钮，保留任务进度清单里的“编辑此账号”；
   - **修正 Cookie 获取地址**：配置向导、输入提示和诊断文案统一指向 `https://rewards.bing.com/dashboard`；
   - **单元测试增至 110 个**。
+- 🛡️ **账号防风控与多账号安全隔离加固 (v1.7.8)**：
+  - **消除假余额导致的误报标红**：修复流式骨架回退读取静态 Cookie 中旧积分（如 `rc=502`）导致误触发“Token 绑定到其他账号”的风控误杀 Bug，优先读取真实仪表盘并直接纠偏；
+  - **刷新网页彻底静音**：完全移除页面加载与刷新时无条件向微软发起的全量测活同步，页面载入仅读取本地缓存，零外部网络请求；
+  - **多账号体检强制安全隔离与倒计时**：全量体检不再瞬间高频遍历所有账号，重构为带安全间隔的串行队列，并在模态框中实时呈现安全隔离倒计时提示；
+  - **多账号连续执行与同步强制错峰**：新增 `tasks.accountGapSec` 配置（默认 180 秒即 3 分钟），批量执行打卡与全量同步在切换不同账号时均严格休眠隔离，并在服务端引入 5 分钟全量同步防抖冷却；
+  - **单元测试增至 113 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
   - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；

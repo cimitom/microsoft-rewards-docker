@@ -254,10 +254,9 @@ export class AuthManager {
         // 2. 提取当前总积分余额
         const balMatch = clean.match(/"balance":(\d+)/) 
           || clean.match(/"availablePoints":(\d+)/)
-          || cookie.match(/rc=(\d+)/) 
-          || cookie.match(/rb=(\d+)/);
+          || clean.match(/class="text-pageHeader">([\d,]+)</);
         if (balMatch) {
-          balance = parseInt(balMatch[1], 10);
+          balance = parseInt(String(balMatch[1]).replace(/,/g, ''), 10);
         }
 
         // 3. 提取连续签到打卡天数
@@ -387,6 +386,7 @@ export class AuthManager {
 
     const balance = cookieStatus.balance || tokenStatus.balance || 0;
     const tokenAccountMismatch = cookieStatus.valid && tokenStatus.valid
+      && Number(cookieStatus.balance) > 0 && Number(tokenStatus.balance) > 0
       && isBalanceMismatch(cookieStatus.balance, tokenStatus.balance);
     if (tokenAccountMismatch) {
       tokenStatus.mismatch = true;

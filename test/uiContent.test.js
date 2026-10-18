@@ -20,6 +20,6 @@ test('Cookie 配置向导统一使用 rewards.bing.com/dashboard', () => {
 });
 
 test('发布版本号在 package 与 Web 服务端保持一致', () => {
-  assert.equal(packageJson.version, '1.7.7');
-  assert.match(serverJs, /const CURRENT_VERSION = '1\.7\.7';/);
+  assert.equal(packageJson.version, '1.7.8');
+  assert.match(serverJs, /const CURRENT_VERSION = '1\.7\.8';/);
 });

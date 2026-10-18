@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.7.7</span>
+            <span class="version-label" id="version-label">v1.7.8</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -749,6 +749,11 @@
               <label style="font-size:11.5px; color:var(--text-sub); display:block; margin-bottom:4px;">停滞保护：连续多少次搜索没有加分就主动停手</label>
               <input type="number" id="cfg-search-stagnant" class="form-input" min="1" max="50" step="1" value="10">
               <small class="form-hint">搜索额度已到顶或账号被限流时，继续搜只会白白增加风控暴露面。达到该次数即主动结束本轮搜索，未打满的额度留到下次执行。</small>
+            </div>
+            <div style="margin-top:10px;">
+              <label style="font-size:11.5px; color:var(--text-sub); display:block; margin-bottom:4px;">🛡️ 多账号连续执行安全隔离间隔（秒）</label>
+              <input type="number" id="cfg-account-gap" class="form-input" min="15" max="1800" step="15" value="180">
+              <small class="form-hint">批量或连续执行不同账号时的强制等待时间（默认 180 秒即 3 分钟，执行时带有随机浮动），防止同一 IP 短时间内频繁切换账号触发微软风控。</small>
             </div>
             <small class="form-hint" id="cfg-search-rhythm-hint">--</small>
           </div>

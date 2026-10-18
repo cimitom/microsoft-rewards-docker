@@ -19,7 +19,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.7.7';
+const CURRENT_VERSION = '1.7.8';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -279,7 +279,7 @@ function compareVersions(a, b) {
 }
 
 async function getNetworkPing() {
-  if (Date.now() - lastPingTime < 8000) return lastPingMs;
+  if (Date.now() - lastPingTime < 30000) return lastPingMs;
   const start = Date.now();
   try {
     await fetch('https://cn.bing.com/favicon.ico', { method: 'HEAD', signal: AbortSignal.timeout(2500) });
@@ -511,13 +511,16 @@ export function createServer() {
   });
 
   // 1.2 主动从微软官网同步真实完成进度
+  let lastSyncAllTime = 0;
   app.post('/api/status/sync', async (req, res) => {
     try {
       const accountId = req.body?.accountId || null;
+      const force = req.body?.force === true;
       // 有任务正在执行时不允许同步：同步会切换全局账号上下文，
       // 把正在跑的任务算到别的账号头上。此时直接返回当前缓存状态。
       const busy = accountContextLock.isBusy();
       let skipped = false;
+      let skipReason = '';
       if (accountId && accountId !== 'all') {
         const accCfg = configManager.resolveAccount(accountId);
         if (!accCfg) {
@@ -526,13 +529,23 @@ export function createServer() {
         skipped = busy;
         if (!busy) await taskManager.syncAccountOfficialStatus(accCfg);
       } else {
-        skipped = busy;
-        if (!busy) await taskManager.syncAllOfficialStatus();
+        const now = Date.now();
+        const COOLDOWN_MS = 3 * 60 * 1000; // 3分钟全量同步冷却
+        if (!force && (now - lastSyncAllTime < COOLDOWN_MS)) {
+          skipped = true;
+          skipReason = `全量同步冷却中（剩余 ${Math.ceil((COOLDOWN_MS - (now - lastSyncAllTime)) / 1000)} 秒），直接返回本地缓存以保护账号安全`;
+        } else {
+          skipped = busy;
+          if (!busy) {
+            lastSyncAllTime = now;
+            await taskManager.syncAllOfficialStatus();
+          }
+        }
       }
       res.json({
         success: true,
         skipped,
-        message: skipped ? '任务正在执行中，已跳过同步以避免账号上下文串台' : '',
+        message: skipReason || (skipped ? '任务正在执行中，已跳过同步以避免账号上下文串台' : ''),
         data: taskManager.getStatus(accountId || 'all')
       });
     } catch (e) {
@@ -887,12 +900,29 @@ export function createServer() {
     return result;
   }
 
+  let lastTestAllTime = 0;
+  const accountTestTimes = new Map();
+
   app.post('/api/auth/test', async (req, res) => {
     if (!accountContextLock.tryAcquire('web-diagnosis')) {
       return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再体检（避免账号上下文串台）' });
     }
     try {
-      const result = await runAccountDiagnosis(req.body?.accountId || null);
+      const targetAccountId = req.body?.accountId || null;
+      const force = req.body?.force === true;
+      const now = Date.now();
+      const lastTime = accountTestTimes.get(targetAccountId || 'default') || 0;
+      if (!force && now - lastTime < 15000) {
+        const remaining = Math.ceil((15000 - (now - lastTime)) / 1000);
+        return res.json({
+          success: true,
+          cached: true,
+          message: `账号体检刚完成，请等待 ${remaining} 秒后再次检测以防风控`,
+          data: configManager.resolveAccount(targetAccountId)?.authDiagnosis || {}
+        });
+      }
+      accountTestTimes.set(targetAccountId || 'default', now);
+      const result = await runAccountDiagnosis(targetAccountId);
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
@@ -908,8 +938,44 @@ export function createServer() {
     }
     try {
       const accounts = configManager.getAccounts();
+      const force = req.body?.force === true;
+      const now = Date.now();
+      const COOLDOWN_MS = 5 * 60 * 1000;
+      if (!force && (now - lastTestAllTime < COOLDOWN_MS)) {
+        const remainingSec = Math.ceil((COOLDOWN_MS - (now - lastTestAllTime)) / 1000);
+        const cachedResults = accounts.map(a => {
+          const d = a.authDiagnosis || {};
+          return {
+            accountId: a.id,
+            accountName: a.name || a.id,
+            cookie: { valid: d.cookieValid !== false, message: d.cookieMessage || '' },
+            token: { valid: d.tokenValid !== false, message: d.tokenMessage || '' },
+            overallValid: d.overallValid !== false,
+            allValid: d.cookieValid && d.tokenValid && !d.warning,
+            warning: d.warning,
+            warningMessage: d.warningMessage,
+            balance: d.balance || 0,
+            cached: true
+          };
+        });
+        return res.json({
+          success: true,
+          cached: true,
+          message: `全量体检冷却中（剩余 ${remainingSec} 秒），已返回最近体检记录以保护账号安全。如需单独复查，请切换为单账号体检。`,
+          data: {
+            results: cachedResults,
+            total: cachedResults.length,
+            validCount: cachedResults.filter(r => r.allValid).length
+          }
+        });
+      }
+
+      lastTestAllTime = now;
       const results = [];
-      for (const acc of accounts) {
+      const globalCfg = configManager.get();
+      const baseGap = Math.max(15, Math.min(60, Number(globalCfg.tasks?.accountGapSec ?? 30) || 30));
+      for (let i = 0; i < accounts.length; i++) {
+        const acc = accounts[i];
         try {
           results.push(await runAccountDiagnosis(acc.id));
         } catch (e) {
@@ -923,6 +989,14 @@ export function createServer() {
             balance: 0,
             error: e.message
           });
+        }
+        if (i < accounts.length - 1) {
+          const jitter = Math.floor(baseGap * 0.2);
+          const gapSec = rewardsApi.randomRange(baseGap, baseGap + jitter);
+          logger.log('⏳', `多账号体检安全防风控隔离：等待 ${gapSec} 秒后检测下一个账号 [${accounts[i + 1].name || accounts[i + 1].id}]...`);
+          for (let s = gapSec; s > 0; s--) {
+            await rewardsApi.delay(1000);
+          }
         }
       }
       const validCount = results.filter(r => r.allValid).length;

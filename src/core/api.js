@@ -450,12 +450,23 @@ export class RewardsApi {
         const balMatch = clean.match(/"balance":(\d+)/) || clean.match(/"availablePoints":(\d+)/);
         if (balMatch) {
           balance = parseInt(balMatch[1], 10);
-        } else {
-          const cookieStr = networkClient.getCookieString('https://rewards.bing.com');
-          const mCookieBal = cookieStr.match(/rc=(\d+)/) || cookieStr.match(/rb=(\d+)/);
-          if (mCookieBal) {
-            balance = parseInt(mCookieBal[1], 10);
+        } else if (cleanDash) {
+          const dashBalMatch = cleanDash.match(/"balance":(\d+)/)
+            || cleanDash.match(/"availablePoints":(\d+)/)
+            || cleanDash.match(/class="text-pageHeader">([\d,]+)</);
+          if (dashBalMatch) {
+            balance = parseInt(String(dashBalMatch[1]).replace(/,/g, ''), 10);
           }
+        }
+
+        // 官方页面偶发未取到有效余额时，尝试通过移动端 DAPI 接口获取真实账户余额。
+        // 绝不能回退到用户配置里的静态 Cookie（如 rc=502&rb=502）：那是过去保存配置时的历史快照，
+        // 拿旧快照当当前余额会触发「Token 余额与网页端不一致」的虚假风控告警，导致账号变红。
+        if (!balance || balance <= 0) {
+          try {
+            const tokenBal = await this.getBalance();
+            if (tokenBal > 0) balance = tokenBal;
+          } catch {}
         }
 
         // 官方「今日积分」：earn 页顶部那张卡片直接展示的真实今日增量。
@@ -477,14 +488,6 @@ export class RewardsApi {
         // 旧实现只取第一个，遇到首个值为 0 时会把真实今日积分覆盖成 0。
         if (todayPointValues.length > 0) {
           todayPoints = Math.max(...todayPointValues);
-        }
-
-        // 如果页面未取到有效余额，尝试通过移动端 DAPI 接口获取真实账户余额
-        if (balance === 0) {
-          try {
-            const tokenBal = await this.getBalance();
-            if (tokenBal > 0) balance = tokenBal;
-          } catch {}
         }
 
         const todayDetails = [];

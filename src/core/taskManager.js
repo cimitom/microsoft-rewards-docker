@@ -359,7 +359,8 @@ export class TaskManager {
         //    绝不能拿它覆盖当前网页 Cookie 账号的阅读状态。
         let mobileTrusted = true;
         if (accCfg.refreshToken) {
-          const binding = await this.checkMobileAccountBinding(accCfg, info.balance).catch(() => null);
+          const effectiveWebBalance = Number(info.balance) > 0 ? Number(info.balance) : (Number(accStats.balance) > 0 ? Number(accStats.balance) : null);
+          const binding = await this.checkMobileAccountBinding(accCfg, effectiveWebBalance).catch(() => null);
           mobileTrusted = !!binding?.tokenOk && !binding?.mismatch;
           if (!mobileTrusted && binding?.mismatch) {
             logger.log('🔴', `${binding.message}，本次不采用移动端阅读进度`, accCfg.name || accountId);
@@ -561,9 +562,21 @@ export class TaskManager {
     if (!accountContextLock.tryAcquire('web-sync')) return this.computeSummary();
     try {
       const accounts = configManager.getAccounts().filter(a => a.enabled !== false && (a.cookie || a.refreshToken));
-      for (const acc of accounts) {
+      const globalCfg = configManager.get();
+      const baseGap = Math.max(15, Math.min(60, Number(globalCfg.tasks?.accountGapSec ?? 30) || 30));
+      for (let i = 0; i < accounts.length; i++) {
+        const acc = accounts[i];
         // 外层已持有 web-sync 锁，这里用 owned 明确告知，不再重复加/解锁
         await this.syncAccountOfficialStatus(acc, { owned: true });
+        // 多账号全量同步安全隔离延时：避免同一 IP 短时间内连续探测多个账号
+        if (i < accounts.length - 1) {
+          const jitter = Math.floor(baseGap * 0.25);
+          const gapSec = rewardsApi.randomRange(baseGap, baseGap + jitter);
+          logger.log('⏳', `多账号同步安全隔离：等待 ${gapSec} 秒后同步下一个账号 [${accounts[i + 1].name || accounts[i + 1].id}]...`);
+          for (let s = gapSec; s > 0 && !this.running; s--) {
+            await rewardsApi.delay(1000);
+          }
+        }
       }
       return this.computeSummary();
     } finally {
@@ -1642,9 +1655,14 @@ export class TaskManager {
 
         // 多账号之间安全随机延时隔离防风控
         if (i < targetList.length - 1 && this.running) {
-          const gapSec = rewardsApi.randomRange(12, 25);
-          logger.log('⏳', `多账号安全防风控隔离：等待 ${gapSec} 秒后切换下一个账号...`);
-          await rewardsApi.delay(gapSec * 1000);
+          const baseGap = Math.max(15, Number(globalCfg.tasks?.accountGapSec ?? 180) || 180);
+          const jitter = Math.floor(baseGap * 0.25);
+          const gapSec = rewardsApi.randomRange(baseGap, baseGap + jitter);
+          const gapMin = (gapSec / 60).toFixed(1);
+          logger.log('⏳', `多账号安全防风控隔离：等待 ${gapMin} 分钟 (${gapSec} 秒) 后切换下一个账号...`);
+          for (let s = gapSec; s > 0 && this.running; s--) {
+            await rewardsApi.delay(1000);
+          }
         }
       }
 
