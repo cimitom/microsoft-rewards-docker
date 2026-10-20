@@ -195,3 +195,66 @@ test('人机验证未通过时不把未登录状态保存成已登录', async ()
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'challenge');
 });
+
+test('商城登录态未确认时不能把 unknown 当成登录成功', async () => {
+  const { em } = makeManager();
+  em.waitForStoreLoginState = async () => ({ loggedIn: false, state: 'unknown' });
+  const page = {
+    locator: () => ({ first() { return this; }, getAttribute: async () => null }),
+    goto: async () => {}
+  };
+  const r = await em.detectLoginCompleted(page);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'login-unconfirmed');
+});
+
+test('保存前必须能从隔离上下文恢复 Epic 登录态', async () => {
+  ensureAccount();
+  const { em } = makeManager();
+  em.detectLoginCompleted = async () => ({ ok: true });
+  em.loginContext = {
+    pages: () => [{}],
+    storageState: async () => ({ cookies: [{ name: 'EPIC_SSO', value: 'test' }], origins: [] })
+  };
+  em.loginAccountId = ACCOUNT_ID;
+  em.verifyLoginStorageState = async () => ({
+    ok: false,
+    message: '保存的会话无法恢复商城登录态'
+  });
+
+  const r = await em.saveLoginWindow(ACCOUNT_ID);
+  assert.equal(r.saved, false);
+  assert.equal(r.reason, 'storage_state_not_reproducible');
+  assert.equal(em.isLoginWindowOpen(), true, '验证失败时必须保留登录窗口供用户重试');
+});
+
+test('Epic 登录态以账号 JSON 接口为准，不依赖慢页面的 isloggedin 属性', async () => {
+  const { em } = makeManager();
+  const context = {
+    request: {
+      get: async () => ({
+        status: () => 200,
+        headers: () => ({ 'content-type': 'application/json; charset=utf-8' }),
+        json: async () => ({ id: 'account-id', displayName: 'WHQ' })
+      })
+    }
+  };
+  const state = await em.checkEpicAccountSession(context);
+  assert.equal(state.valid, true);
+  assert.equal(state.account.displayName, 'WHQ');
+});
+
+test('Epic 账号接口返回 HTML 403 时标记为人机验证而不是会话失效', async () => {
+  const { em } = makeManager();
+  const context = {
+    request: {
+      get: async () => ({
+        status: () => 403,
+        headers: () => ({ 'content-type': 'text/html; charset=UTF-8' })
+      })
+    }
+  };
+  const state = await em.checkEpicAccountSession(context);
+  assert.equal(state.valid, false);
+  assert.equal(state.state, 'challenge');
+});

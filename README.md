@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.11-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.12-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -169,6 +169,13 @@
   - **领取流程保持不变**：免费游戏领取仍使用 Playwright Firefox，登录成功后保存的 storageState 可正常复用；
   - **新增 Chromium 可执行文件探测与回归测试**，删除账号时会同时清理 Chromium 登录 profile；
   - **单元测试增至 128 个**。
+- 🐢 **Epic 慢页面登录与领取误判修复 (v1.7.12)**：
+  - **登录态改用 Epic 账号 JSON 接口确认**：不再依赖慢网络下长时间为空的 `egs-navigation[isloggedin]`，页面未水合时也不会误判“未登录”或“登录成功”；
+  - **保存前隔离复验会话**：用刚捕获的 storageState 新建浏览器上下文，重新请求账号接口，确认会话可复现后才写入配置；
+  - **领取前先校验账号接口**：商品页还在加载时出现的“登录”链接不会再被误判为会话失效；
+  - **商品页等待逻辑修复**：账号已确认登录时，遇到早期登录链接会继续等待“获取”按钮，而不是立即失败；
+  - **Chromium 登录关闭 QUIC**，减少部分 NAS 网络中 QUIC 被阻断造成的额外等待；
+  - **单元测试增至 132 个**。
 - 🧊 **搜索真实性、打孔卡状态机与账号暂停 (v1.7.9)**：
   - **搜索进度只认官网**：删除本地“每次搜索 +3 分”和 `max(本地, 官网)` 的假进度，官网不涨就保持 0/15、0/30、0/60，不再虚报打满；
   - **搜索停滞保护收紧为 5 次**：连续 5 次官网无增长立即停止当日搜索，避免新号观察期或搜索限流时持续空跑；

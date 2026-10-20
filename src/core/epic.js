@@ -285,7 +285,18 @@ export class EpicManager {
       return { saved: false, reason: detected.reason, message: detected.message };
     }
 
-    const storageState = await context.storageState();
+    const capturedState = await context.storageState();
+    const verified = await this.verifyLoginStorageState(capturedState);
+    if (!verified.ok) {
+      logger.log('🟡', `Epic 登录会话尚未真正生效：${verified.message}`, '', configManager.findEpicAccount(accountId)?.name);
+      return {
+        saved: false,
+        reason: 'storage_state_not_reproducible',
+        message: verified.message
+      };
+    }
+
+    const storageState = verified.storageState;
     configManager.updateEpicAccount(accountId, {
       storageState,
       sessionValid: true,
@@ -294,7 +305,128 @@ export class EpicManager {
       lastSessionImportAt: Date.now()
     });
     await this.closeLoginWindow();
-    return { saved: true, cookieCount: storageState.cookies?.length || 0, message: '登录凭据已保存到内置 Firefox profile' };
+    return { saved: true, cookieCount: storageState.cookies?.length || 0, message: '登录凭据已保存到内置 Chromium profile' };
+  }
+
+  async readStoreLoginFlag(page, timeout = 2000) {
+    const nav = page.locator('egs-navigation').first();
+    const value = await nav.getAttribute('isloggedin', { timeout }).catch(() => null);
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return null;
+  }
+
+  /**
+   * Epic 商城页面在慢网络下可能长时间处于骨架屏，`isloggedin` 也会一直为 false。
+   * 账号门户的 JSON 接口才是更可靠的登录态来源，并且与页面水合速度无关。
+   */
+  async checkEpicAccountSession(context) {
+    if (!context?.request) {
+      return { valid: false, state: 'unknown', message: '浏览器上下文不可用' };
+    }
+    try {
+      const response = await context.request.get('https://www.epicgames.com/id/api/account', {
+        headers: {
+          accept: 'application/json',
+          referer: 'https://www.epicgames.com/account/personal'
+        },
+        timeout: 15000
+      });
+      const status = response.status();
+      const contentType = String(response.headers()['content-type'] || '');
+      if (status === 200 && contentType.includes('json')) {
+        const data = await response.json().catch(() => null);
+        if (data?.id || data?.displayName) {
+          return { valid: true, state: 'logged-in', account: data };
+        }
+      }
+      if (status === 401 || (status === 403 && contentType.includes('json'))) {
+        return { valid: false, state: 'invalid', message: 'Epic 登录态已失效' };
+      }
+      if (status === 403 || status === 429) {
+        return { valid: false, state: 'challenge', message: `Epic 账号接口返回 HTTP ${status}` };
+      }
+      return { valid: false, state: 'unknown', message: `Epic 账号接口返回 HTTP ${status}` };
+    } catch (e) {
+      return { valid: false, state: 'unknown', message: e.message };
+    }
+  }
+
+  async waitForStoreLoginState(page, timeout = 30000) {
+    const deadline = Date.now() + timeout;
+    let lastState = { state: 'unknown', text: '' };
+    let lastApiCheckAt = 0;
+    while (Date.now() < deadline) {
+      if (Date.now() - lastApiCheckAt >= 2500) {
+        lastApiCheckAt = Date.now();
+        const auth = await this.checkEpicAccountSession(page.context?.());
+        if (auth.valid) {
+          return { loggedIn: true, state: 'logged-in', account: auth.account };
+        }
+        if (auth.state === 'challenge') {
+          return { loggedIn: false, state: 'challenge' };
+        }
+      }
+      if (await this.readStoreLoginFlag(page, 1200) === true) {
+        return { loggedIn: true, state: 'logged-in' };
+      }
+
+      lastState = await this.detectPageState(page);
+      if (lastState.state === 'challenge') {
+        return { loggedIn: false, state: 'challenge', text: lastState.text };
+      }
+      if (lastState.state === 'login') {
+        return { loggedIn: false, state: 'login', text: lastState.text };
+      }
+      await this.delay(700);
+    }
+    return {
+      loggedIn: false,
+      state: lastState.state || 'unknown',
+      text: lastState.text || ''
+    };
+  }
+
+  /**
+   * 用刚捕获的 storageState 新建隔离上下文，重新打开商城确认登录态。
+   * 防止页面尚未水合完成时把 unknown 状态误判为登录成功。
+   */
+  async verifyLoginStorageState(storageState) {
+    const browser = this.loginContext?.browser?.();
+    if (!browser) {
+      return { ok: false, message: '登录窗口浏览器不可用，无法验证保存的会话' };
+    }
+
+    let context = null;
+    try {
+      context = await browser.newContext({
+        storageState,
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        viewport: { width: 1366, height: 768 }
+      });
+      const auth = await this.checkEpicAccountSession(context);
+      if (auth.valid) {
+        return { ok: true, storageState: await context.storageState() };
+      }
+      if (auth.state === 'challenge') {
+        return { ok: false, message: 'Epic 账号接口仍有人机验证，请稍后再保存' };
+      }
+      return {
+        ok: false,
+        message: `保存的会话无法恢复 Epic 登录态：${auth.message || '账号接口未确认登录'}`
+      };
+    } catch (e) {
+      return { ok: false, message: `验证保存的会话失败：${e.message}` };
+    } finally {
+      if (context) {
+        await withTimeout(
+          Promise.resolve().then(() => context.close()),
+          this.closeTimeoutMs,
+          '关闭 Epic 会话验证上下文超时'
+        ).catch(() => {});
+      }
+    }
   }
 
   /**
@@ -302,23 +434,33 @@ export class EpicManager {
    * 与人机验证一样，识别不出来时宁可提示用户重试，也不要把未登录状态当成已登录保存。
    */
   async detectLoginCompleted(page) {
-    const nav = page.locator('egs-navigation').first();
-    if (await nav.getAttribute('isloggedin', { timeout: 5000 }).catch(() => null) === 'true') {
+    const auth = await this.checkEpicAccountSession(page.context?.());
+    if (auth.valid) {
+      return { ok: true };
+    }
+    if (auth.state === 'challenge') {
+      return { ok: false, reason: 'challenge', message: 'Epic 账号接口触发人机验证，请稍后重试' };
+    }
+    if (await this.readStoreLoginFlag(page, 5000) === true) {
       return { ok: true };
     }
     await page.goto(`${STORE_BASE}/free-games`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
-    if (await nav.getAttribute('isloggedin', { timeout: 8000 }).catch(() => null) === 'true') {
+    const state = await this.waitForStoreLoginState(page, 30000);
+    if (state.loggedIn) {
       return { ok: true };
     }
 
-    const state = await this.detectPageState(page);
-    if (state.state === 'login') {
-      return { ok: false, reason: 'not-logged-in', message: '尚未检测到 Epic 登录完成，请在可见浏览器中完成登录后再保存' };
-    }
     if (state.state === 'challenge') {
       return { ok: false, reason: 'challenge', message: '商店正在人机验证，暂时无法确认登录状态，请稍后重试' };
     }
-    return { ok: true };
+    if (state.state === 'login') {
+      return { ok: false, reason: 'not-logged-in', message: '尚未检测到 Epic 登录完成，请在可见浏览器中完成登录后再保存' };
+    }
+    return {
+      ok: false,
+      reason: 'login-unconfirmed',
+      message: 'Epic 商城尚未确认登录态，请等待页面完全加载并显示账号后再保存'
+    };
   }
 
   async closeLoginWindow() {
@@ -486,6 +628,7 @@ export class EpicManager {
           '--disable-dev-shm-usage',
           '--no-first-run',
           '--no-default-browser-check',
+          '--disable-quic',
           '--window-size=1366,768',
           '--window-position=0,0'
         ],
@@ -539,10 +682,17 @@ export class EpicManager {
 
   async detectPageState(page) {
     const title = await page.title().catch(() => '');
+    const pageUrl = page.url();
     const text = await this.readPageText(page);
     const combined = `${title}\n${text}`;
 
     if (isEpicChallengeText(combined)) return { state: 'challenge', text: combined };
+    if (
+      /\/id\/login(?:[/?#]|$)/i.test(pageUrl)
+      || /登录您的 Epic Games 账户|sign in to your epic games account/i.test(title)
+    ) {
+      return { state: 'login', text: combined };
+    }
 
     for (const frame of page.frames().slice(0, 20)) {
       const owned = await frame.locator('text=已在库中').count().catch(() => 0);
@@ -552,14 +702,7 @@ export class EpicManager {
       if (await getBtn.count().catch(() => 0) > 0 && await getBtn.isVisible().catch(() => false)) {
         return { state: 'product', text: combined };
       }
-
-      const loginEntry = frame.getByRole('link', { name: /登录|Sign in|Log in/ }).first();
-      if (await loginEntry.count().catch(() => 0) > 0 && await loginEntry.isVisible().catch(() => false)) {
-        return { state: 'login', text: combined };
-      }
     }
-
-    if (isEpicLoginText(combined)) return { state: 'login', text: combined };
     return { state: 'unknown', text: combined };
   }
 
@@ -1035,6 +1178,20 @@ export class EpicManager {
     }
 
     try {
+      const auth = context ? await this.checkEpicAccountSession(context) : { valid: true };
+      if (!auth.valid) {
+        if (auth.state === 'challenge') {
+          result.status = 'blocked';
+          result.code = 'challenge';
+          result.message = `Epic 账号接口触发人机验证（${auth.message || 'HTTP 403'}）`;
+        } else {
+          result.code = 'auth_expired';
+          result.authValid = false;
+          result.message = auth.message || 'Epic 登录态已失效，请重新登录';
+        }
+        return result;
+      }
+
       this.updateState({
         status: 'navigating',
         progress: 20,
@@ -1056,10 +1213,15 @@ export class EpicManager {
       }
 
       if (pageState.state === 'login') {
-        result.code = 'auth_expired';
-        result.authValid = false;
-        result.message = 'Epic 登录态已失效，请重新导入会话';
-        return result;
+        // 商城页面很慢时，登录链接可能在页面水合完成前短暂出现。
+        // 账号接口已经确认有效，此时继续等待商品按钮，不能据此直接判定掉登录。
+        pageState = await this.waitForPageState(page, ['product', 'owned', 'challenge'], 30000);
+        if (pageState.state === 'challenge' || pageState.state === 'login' || pageState.state === 'unknown') {
+          result.status = 'blocked';
+          result.code = 'page_timeout';
+          result.message = `商城商品页加载超时（当前按钮：${await this.visibleButtonTexts(page)}）`;
+          return result;
+        }
       }
 
       // 已在库中：本次无需领取
@@ -1227,31 +1389,29 @@ export class EpicManager {
       context = launched.context;
       this.activeContext = context;
       this.activeAccountId = accountId;
-      const page = launched.page;
-      let pageState = await this.navigateEpicPage(page, STORE_HOME, 20000);
-      if (pageState.state === 'challenge') {
-        pageState = await this.dismissChallengeOverlay(page);
-      }
 
       let valid = null;
       let blocked = false;
       let message = '';
-      if (pageState.state === 'challenge') {
+      const auth = await this.checkEpicAccountSession(context);
+      if (auth.state === 'challenge') {
         blocked = true;
-        message = '商店人机验证未通过，暂时无法判断会话是否有效';
-      } else if (pageState.state === 'login') {
-        valid = false;
-        message = '未登录或会话已失效，请重新导入 Cookie';
-      } else {
+        message = 'Epic 账号接口触发人机验证，暂时无法判断会话是否有效';
+      } else if (auth.valid) {
         valid = true;
         message = '会话有效（已登录）';
+      } else {
+        valid = false;
+        message = auth.message || 'Epic 登录态已失效，请重新登录';
       }
 
       const patch = {
         lastVerifyAt: Date.now(),
-        lastVerifyMessage: message,
-        storageState: await context.storageState()
+        lastVerifyMessage: message
       };
+      if (valid !== false) {
+        patch.storageState = await context.storageState();
+      }
       if (valid !== null) patch.sessionValid = valid;
       configManager.updateEpicAccount(accountId, patch);
       this.updateState({ status: 'done', progress: 100, lastAction: message });

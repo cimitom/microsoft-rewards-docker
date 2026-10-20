@@ -1505,7 +1505,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.11';
+  const current = updateInfo?.currentVersion || '1.7.12';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1560,8 +1560,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.11'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.11'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.12'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.12'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -4003,8 +4003,8 @@ async function openEpicLoginWindow() {
 async function saveEpicLoginWindow() {
   const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
   if (!accountId) return;
-  openEpicActionModal('正在保存 Epic 登录凭据', '正在检测登录状态并保存 Chromium storageState...', ['检测登录状态', '保存 Cookie 与 profile', '关闭登录窗口'], 0);
-  startActionProgressTicker(20, 85, 10, '正在检测 Epic 登录状态...');
+  openEpicActionModal('正在保存 Epic 登录凭据', '正在通过 Epic 账号接口检测并复验登录态...', ['检测登录状态', '隔离复验会话', '保存 Cookie 与 profile', '关闭登录窗口'], 0);
+  startActionProgressTicker(20, 85, 10, '正在通过 Epic 账号接口复验登录态...');
   try {
     const res = await fetch(`/api/epic/accounts/${accountId}/login-window/save`, { method: 'POST' }).then(r => r.json());
     stopActionProgressTicker();
@@ -4015,7 +4015,7 @@ async function saveEpicLoginWindow() {
       const status = document.getElementById('epic-login-status');
       if (status) status.innerText = `登录凭据已保存，共 ${res.data.cookieCount || 0} 条 Cookie。`;
       updateEpicActionModal({
-        activeIndex: 3,
+        activeIndex: 4,
         progress: 100,
         badge: { text: '已保存', cls: 'ok' },
         message: 'Epic 登录凭据已保存',
@@ -4024,9 +4024,9 @@ async function saveEpicLoginWindow() {
     } else {
       updateEpicActionModal({
         progress: 100,
-        badge: { text: '尚未登录', cls: 'warn' },
+        badge: { text: '登录未确认', cls: 'warn' },
         message: res.data?.message || '尚未检测到登录完成',
-        result: '请在可见浏览器小窗中完成 Epic 登录后再点击保存。'
+        result: res.data?.message || '请等待可见浏览器中的商城页面完全加载并显示账号后，再点击保存。'
       });
     }
   } catch (e) {

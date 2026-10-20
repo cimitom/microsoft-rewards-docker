@@ -1,5 +1,14 @@
 # 下一版本待办
 
+## 已完成于 v1.7.12
+
+- [x] Epic 登录态改用 `/id/api/account` JSON 接口确认，不依赖慢页面的 `isloggedin`。
+- [x] 保存登录凭据前用隔离浏览器上下文复验 storageState。
+- [x] 领取前先校验账号接口，修复商品页早期登录链接导致的 `auth_expired` 误判。
+- [x] 商品页登录链接出现时继续等待“获取”按钮，不再立即判定掉登录。
+- [x] Chromium 登录窗口关闭 QUIC，减少受限网络中的连接等待。
+- [x] 新增 v1.7.12 回归测试，测试总数 132。
+
 ## 已完成于 v1.7.11
 
 - [x] Epic 人工登录窗口从 Firefox 切换到 Chromium + Patchright，规避 `captcha_invalid`。
