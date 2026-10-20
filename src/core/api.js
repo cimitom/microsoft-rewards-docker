@@ -530,7 +530,7 @@ export class RewardsApi {
           expiresText: '',
           available: false
         };
-        const monthlyQuest = quests.find(q => !q.title.includes('桌面') && !q.title.includes('RewardsApp')) || null;
+        const monthlyQuest = quests.find(q => /亮点|FY27|Monthly/i.test(q.title)) || null;
 
         // 印章进度提取 (如 8/12)
         let stampsProgress = 0, stampsMax = 12;
@@ -584,12 +584,91 @@ export class RewardsApi {
     return null;
   }
 
+  normalizeQuestTitle(title) {
+    return String(title || '')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  extractQuestCards(cleanText) {
+    const text = String(cleanText || '');
+    const cards = [];
+    const byId = new Map();
+    const hrefRe = /"href"\s*:\s*"\/earn\/quest\/([^"?]+)(?:\?[^"]*)?"/g;
+    const titlePatterns = [
+      /"alt"\s*:\s*"([^"]+)"/g,
+      /"text-globalBody2Strong"\s*,\s*"children"\s*:\s*"([^"]+)"/g,
+      /<h3[^>]*>([^<]+)<\/h3>/gi
+    ];
+    const ignoredTitles = new Set(['今日积分', '任务', '查看']);
+    const decode = (value) => String(value || '')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .trim();
+    const findNearestTitleBeforeProgress = (chunk) => {
+      let best = '';
+      for (const pattern of titlePatterns) {
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(chunk)) !== null) {
+          const title = decode(match[1]).replace(/\s+/g, ' ').trim();
+          if (title && !ignoredTitles.has(title) && !/^\$undefined$/.test(title)) best = title;
+        }
+      }
+      return best;
+    };
+
+    let hrefMatch;
+    while ((hrefMatch = hrefRe.exec(text)) !== null) {
+      const questId = hrefMatch[1];
+      if (!questId || questId.includes('newuser_onboarding')) continue;
+      const chunk = text.slice(hrefMatch.index, Math.min(text.length, hrefMatch.index + 30000));
+      const progressMatch = chunk.match(/"children"\s*:\s*"(\d+)\s*\/\s*(\d+)\s*个任务"/)
+        || chunk.match(/(\d+)\s*\/\s*(\d+)\s*个任务/);
+      const titleRegion = progressMatch ? chunk.slice(0, progressMatch.index) : chunk.slice(0, 10000);
+      const title = findNearestTitleBeforeProgress(titleRegion);
+      const progress = progressMatch ? Number(progressMatch[1]) : 0;
+      const max = progressMatch ? Number(progressMatch[2]) : 0;
+      const previous = byId.get(questId);
+      if (!previous) {
+        const card = {
+          questId,
+          title,
+          progress,
+          max,
+          done: max > 0 && progress >= max,
+          url: `https://rewards.bing.com/earn/quest/${questId}`
+        };
+        byId.set(questId, card);
+        cards.push(card);
+      } else {
+        if (!previous.title && title) previous.title = title;
+        if (!previous.max && max > 0) {
+          previous.progress = progress;
+          previous.max = max;
+          previous.done = progress >= max;
+        }
+      }
+    }
+    return cards;
+  }
+
   /**
    * 从 Flight 数据流或 HTML 中动态提取全部「任务」区打孔卡
    */
   extractQuests(cleanText) {
     const quests = [];
     const questIndexByKey = new Map();
+    const cards = this.extractQuestCards(cleanText).filter(card => card.title && card.max > 0);
 
     const canonicalQuestKey = (title) => {
       const text = String(title || '').toLowerCase();
@@ -657,15 +736,20 @@ export class RewardsApi {
       if (next.icon && !existing.icon) existing.icon = next.icon;
     };
 
+    // 0. 当前 Next.js Flight 数据：按 href 精确关联标题与进度
+    for (const card of cards) {
+      addQuest(card.title, card.progress, card.max, '');
+    }
+
     // 1. Flight stream 模式：标题 + 任务进度
     const flightRegex = /\"text-globalBody2Strong\",\"children\":\"([^\"]+)\"[\s\S]{0,1500}?\"children\":\"(\d+)\/(\d+)\s*个任务\"/g;
     let m;
-    while ((m = flightRegex.exec(cleanText)) !== null) {
+    while (cards.length === 0 && (m = flightRegex.exec(cleanText)) !== null) {
       addQuest(m[1], parseInt(m[2], 10), parseInt(m[3], 10), cleanText.slice(Math.max(0, m.index - 500), m.index + 1500));
     }
 
     // 2. HTML 标题标签备用模式 (h1 / h2 / h3)
-    if (quests.length === 0) {
+    if (cards.length === 0 && quests.length === 0) {
       const htmlRegex = /<h[1-3][^>]*>([^<]+)<\/h[1-3]>[\s\S]{0,1200}?(\d+)\/(\d+)\s*个任务/gi;
       while ((m = htmlRegex.exec(cleanText)) !== null) {
         addQuest(m[1].trim(), parseInt(m[2], 10), parseInt(m[3], 10), cleanText.slice(Math.max(0, m.index - 200), m.index + 1500));
@@ -946,23 +1030,37 @@ export class RewardsApi {
       const clean = String(html).replace(/\\"/g, '"').replace(/\\u0026/g, '&');
       const seen = new Set();
       const allQuests = this.extractQuests(clean);
-      const hrefRe = /"href":"\/earn\/quest\/([^"]+)"/g;
-      let m;
-      while ((m = hrefRe.exec(clean)) !== null) {
-        const questId = m[1];
+      const cards = this.extractQuestCards(clean);
+      for (const card of cards) {
+        const questId = card.questId;
         if (seen.has(questId) || questId.includes('newuser_onboarding')) continue;
         seen.add(questId);
-        const matched = allQuests.find(q => {
-          if (questId.includes('Halloween') && /Halloween|万圣节/i.test(q.title)) return true;
-          if (questId.includes('RewardsApp') && (q.title.includes('桌面') || q.title.includes('RewardsApp'))) return true;
-          if (questId.includes('FY27') && (q.title.includes('亮点') || q.title.includes('FY27'))) return true;
-          return false;
-        });
+        const normalizedTitle = this.normalizeQuestTitle(card.title);
+        let matched = normalizedTitle
+          ? allQuests.find(q => this.normalizeQuestTitle(q.title) === normalizedTitle)
+          : null;
+        if (!matched && questId.includes('Halloween')) {
+          matched = allQuests.find(q => /Halloween|万圣节/i.test(q.title));
+        }
+        if (!matched && questId.includes('RewardsApp')) {
+          matched = allQuests.find(q => /桌面|RewardsApp/i.test(q.title));
+        }
+        if (!matched && questId.includes('BingMonthlyPC')) {
+          matched = allQuests.find(q => /亮点|FY27|Monthly/i.test(q.title));
+        }
+        if (!matched && /Duolingo/i.test(questId)) {
+          matched = allQuests.find(q => /Duolingo/i.test(q.title));
+        }
+        const progress = card.max > 0 ? card.progress : Number(matched?.progress ?? 0);
+        const max = card.max > 0 ? card.max : Number(matched?.max ?? 0);
+        const done = card.max > 0 ? card.done : !!matched?.done;
         quests.push({
           questId,
-          title: matched?.title || questId,
-          url: `https://rewards.bing.com/earn/quest/${questId}`,
-          done: matched ? matched.done : false
+          title: card.title || matched?.title || questId,
+          url: card.url,
+          progress,
+          max,
+          done
         });
       }
     } catch (e) {

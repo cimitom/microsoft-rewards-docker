@@ -30,6 +30,20 @@ import {
   buildUserAgentMetadata
 } from './fingerprint.js';
 
+export function classifyBingLoginState(signals = {}) {
+  const userName = [signals.idN, signals.idA, signals.idName]
+    .map(value => String(value || '').trim())
+    .find(Boolean) || null;
+  const signInVisible = signals.signInVisible === true;
+  return {
+    userName,
+    signInVisible,
+    isGuest: !userName && signInVisible,
+    status: userName ? 'logged-in' : (signInVisible ? 'guest' : 'unknown'),
+    cookieHasU: signals.cookieHasU === true
+  };
+}
+
 class BrowserManager extends EventEmitter {
   constructor() {
     super();
@@ -352,19 +366,18 @@ class BrowserManager extends EventEmitter {
    */
   async getBingLoginState(page) {
     try {
-      return await page.evaluate(() => {
-        const userEl = document.querySelector('#id_n, #id_a, .id_name');
+      const signals = await page.evaluate(() => {
+        const textOf = (selector) => (document.querySelector(selector)?.textContent || '').trim();
         const signInBtn = document.querySelector('#id_s, #id_l, a[href*="account.live.com"], a[href*="login.live.com"]');
-        const userName = userEl ? (userEl.textContent || '').trim() : '';
-        const signInVisible = !!signInBtn;
         return {
-          userName: userName || null,
-          signInVisible,
-          isGuest: signInVisible && !userName,
-          status: userName ? 'logged-in' : (signInVisible ? 'guest' : 'unknown'),
+          idN: textOf('#id_n'),
+          idA: textOf('#id_a'),
+          idName: textOf('.id_name'),
+          signInVisible: !!signInBtn,
           cookieHasU: /(?:^|;\s*)_U=/.test(document.cookie || '')
         };
       });
+      return classifyBingLoginState(signals);
     } catch {
       return { userName: null, signInVisible: false, isGuest: false, status: 'unknown', cookieHasU: false };
     }

@@ -23,6 +23,22 @@ const LOGIN_TEXT_RE = /sign in|log in|登录|登入/i;
 export const EPIC_ORDER_BUTTON_RE = /添加到库|添加至库|加入库|Add to Library|下订单|下单|确认订单|结账|Place Order|Checkout/i;
 export const EPIC_SUCCESS_TEXT_RE = /已添加到库|已加入库|已拥有|谢谢|感谢|订单已提交|Added to your library|In Library|Thanks|Thank you|Order confirmed/i;
 
+/**
+ * Playwright Firefox 默认把 cookieBehavior 设为 4（拒绝跨站跟踪 Cookie）。
+ * Epic 登录依赖 hCaptcha + Talon 的跨站 Cookie；被拦截时会表现为验证码加载慢，
+ * 验证完成后却直接返回“服务暂时不可用”，连密码页都进不去。
+ *
+ * HTTP/3 在部分 NAS/容器网络中会被阻断，Firefox 先尝试 QUIC 再回退也会显著拖慢验证码。
+ */
+export const EPIC_FIREFOX_PREFS = Object.freeze({
+  'network.cookie.cookieBehavior': 0,
+  'network.cookie.cookieBehavior.pbmode': 0,
+  'privacy.trackingprotection.enabled': false,
+  'privacy.trackingprotection.pbmode.enabled': false,
+  'network.http.http3.enable': false,
+  'network.dns.disableIPv6': true
+});
+
 function safeProfileId(accountId) {
   return String(accountId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_');
 }
@@ -322,6 +338,14 @@ export class EpicManager {
       await closePromise;
     } finally {
       if (this.loginClosePromise === closePromise) this.loginClosePromise = null;
+      if (this.state.status === 'login_window') {
+        this.updateState({
+          status: 'idle',
+          progress: 0,
+          accountName: '',
+          lastAction: 'Epic 登录窗口已关闭'
+        });
+      }
     }
     return { closed: true };
   }
@@ -440,6 +464,7 @@ export class EpicManager {
       viewport: { width: 1366, height: 768 },
       locale: 'zh-CN',
       timezoneId: 'Asia/Shanghai',
+      firefoxUserPrefs: EPIC_FIREFOX_PREFS,
       extraHTTPHeaders: FIREFOX_HEADERS,
       ...(cleanSession ? {} : {
         storageState: {
