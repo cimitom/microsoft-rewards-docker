@@ -59,5 +59,5 @@ test('阈值会被夹到合法区间', () => {
   assert.equal(normalizeStagnantLimit(999), STAGNANT_LIMIT_MAX);
   assert.equal(normalizeStagnantLimit('abc'), STAGNANT_LIMIT_DEFAULT);
   assert.equal(normalizeStagnantLimit(undefined), STAGNANT_LIMIT_DEFAULT);
-  assert.equal(normalizeStagnantLimit(7), 7);
+  assert.equal(normalizeStagnantLimit(7), STAGNANT_LIMIT_MAX);
 });

@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.8-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.9-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -57,7 +57,7 @@
 - 🥷 **反检测与稳定性升级 (v1.6.2)**：
   - **浏览器驱动换成 patchright**：Playwright 最容易被识别的特征不是 `navigator.webdriver`，而是 CDP 的 `Runtime.enable` / `Console.enable` 泄漏和 `--enable-automation` 启动参数。patchright 是 Playwright 的补丁分支（API 完全一致），从协议层把这些抹掉了；
   - **每个账号持久化浏览器会话**：Cookie 与 localStorage 跨次复用，不再是「一个全新浏览器里凭空出现登录态」。写回时剔除 `_U` 身份 Cookie，并绑定账号凭据指纹 —— 换账号或重新登录后旧会话自动作废，杜绝串号；
-  - **搜索停滞保护**：连续 N 次搜索官网进度不涨就主动停手（默认 10 次，可在配置中心调整）。当天搜索额度已到顶时不再空跑，既省执行窗口，也减少风控暴露面；
+  - **搜索停滞保护**：连续 5 次搜索官网进度不涨就主动停手。当天搜索额度已到顶或账号搜索未计分时不再空跑，既省执行窗口，也减少风控暴露面；
   - **单元测试增至 41 个**（新增会话持久化与停滞保护回归）。
 - 💎 **排版全面重构与待领取积分直达 (全新 v1.6.3)**：
   - **待领取额外积分直达**：第三张 Hero 卡片升级为「待领取额外积分」，支持实时统计并点击一键领取官网赠分；
@@ -157,6 +157,16 @@
   - **移除重复编辑入口**：删除顶部工具条中重复的“编辑账号”按钮，保留任务进度清单里的“编辑此账号”；
   - **修正 Cookie 获取地址**：配置向导、输入提示和诊断文案统一指向 `https://rewards.bing.com/dashboard`；
   - **单元测试增至 110 个**。
+- 🧊 **搜索真实性、打孔卡状态机与账号暂停 (v1.7.9)**：
+  - **搜索进度只认官网**：删除本地“每次搜索 +3 分”和 `max(本地, 官网)` 的假进度，官网不涨就保持 0/15、0/30、0/60，不再虚报打满；
+  - **搜索停滞保护收紧为 5 次**：连续 5 次官网无增长立即停止当日搜索，避免新号观察期或搜索限流时持续空跑；
+  - **单次测搜返回真实结果**：展示登录态、最终结果页、搜索前后官网进度与是否计分；
+  - **打孔卡通用状态机**：支持“激活 → 继续搜索”、外部浏览、测验与多日 1/5 任务；同一天只执行一次，冷却中自动跳过并继续处理后续子任务；
+  - **只记录官网确认步骤**：点击、打开新标签页但官网未变化时只记“已尝试”，不增加任务进度，不再出现重复的 `step: 6`；
+  - **暂停账号完全冻结自动流程**：暂停后不自动执行、不自动刷新 Token/Cookie，保留全部数据与浏览器会话；手动体检与手动刷新进度仍可用；
+  - **四色账号状态**：🔵 运行中、🟡 已暂停、🔴 Token/Cookie 失效、🟢 正常，账号胶囊与概览卡统一口径；
+  - **浏览器会话不再被 Token 轮换误删**：会话指纹改用 `_U`/`MUID`/`WLS` 等稳定身份字段；
+  - **单元测试增至 122 个**。
 - 🛡️ **账号防风控与多账号安全隔离加固 (v1.7.8)**：
   - **消除假余额导致的误报标红**：修复流式骨架回退读取静态 Cookie 中旧积分（如 `rc=502`）导致误触发“Token 绑定到其他账号”的风控误杀 Bug，优先读取真实仪表盘并直接纠偏；
   - **刷新网页彻底静音**：完全移除页面加载与刷新时无条件向微软发起的全量测活同步，页面载入仅读取本地缓存，零外部网络请求；

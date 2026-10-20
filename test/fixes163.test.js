@@ -144,8 +144,8 @@ test('TaskManager recordPunchCardSteps 记录多步时间戳且支持同天多�
 
   const now = Date.now();
   tm.recordPunchCardSteps(accId, [
-    { title: '十月必看五大亮点', stepName: '服装季来了', at: now - 3600000 },
-    { title: '十月必看五大亮点', stepName: '热门玩具与礼物创意', at: now }
+    { title: '十月必看五大亮点', stepName: '服装季来了', at: now - 3600000, progressAfter: 1, verified: true },
+    { title: '十月必看五大亮点', stepName: '热门玩具与礼物创意', at: now, progressAfter: 2, verified: true }
   ]);
 
   const st = tm.ensureAccountStats(accId);
@@ -156,6 +156,18 @@ test('TaskManager recordPunchCardSteps 记录多步时间戳且支持同天多�
   assert.equal(mQuest.stepLogs[0].name, '服装季来了');
   assert.equal(mQuest.stepLogs[1].name, '热门玩具与礼物创意');
   assert.ok(mQuest.stepLogs[1].at > mQuest.stepLogs[0].at);
+});
+
+test('TaskManager recordPunchCardSteps 不把未确认的点击计入官网进度', () => {
+  const tm = new TaskManager();
+  const accId = 'acc_test_unverified_steps';
+  tm.ensureAccountStats(accId);
+  tm.recordPunchCardSteps(accId, [
+    { title: '十月必看五大亮点', stepName: '未确认点击', progressAfter: 1, verified: false }
+  ]);
+  const quest = tm.ensureAccountStats(accId).tasks.monthlyQuest;
+  assert.equal(quest.progress, 0);
+  assert.equal(quest.stepLogs.length, 0);
 });
 
 test('getRewardsInfo 动态解析多打孔卡（包含万圣节 A 50-point Halloween treat）', async () => {

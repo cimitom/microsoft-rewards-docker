@@ -305,6 +305,11 @@ export class TaskManager {
    */
   async syncAccountOfficialStatus(accCfg, options = {}) {
     if (!accCfg?.cookie && !accCfg?.refreshToken) return null;
+    if (accCfg.enabled === false && options.allowPaused !== true) {
+      // 自动同步/自动任务遇到暂停账号必须直接返回；手动刷新和手动体检
+      // 会显式传 allowPaused=true，这是用户明确允许的两个例外。
+      return null;
+    }
     // owned=true 表示调用方（任务执行）已经持有账号上下文锁，可以安全切换上下文。
     // 否则如果此刻有任务在跑，直接跳过 —— 抢走全局 Cookie/Token 上下文会把
     // 正在执行的任务算到别的账号头上。
@@ -343,6 +348,7 @@ export class TaskManager {
           const pcCur = Number(info.pc.progress || 0);
           const pcMax = Number(info.pc.max || 60);
           const isPcDone = pcMax > 0 && pcCur >= pcMax;
+          const prevSearch = accStats.tasks.search || {};
           accStats.tasks.search = {
             name: "必应 PC 搜索任务",
             progress: pcCur,
@@ -350,7 +356,10 @@ export class TaskManager {
             points: pcCur,
             unit: "分",
             icon: "🔍",
-            done: isPcDone
+            done: isPcDone,
+            statusMessage: isPcDone || pcCur > Number(prevSearch.progress || 0)
+              ? ''
+              : (prevSearch.statusMessage || '')
           };
         }
 
@@ -360,7 +369,9 @@ export class TaskManager {
         let mobileTrusted = true;
         if (accCfg.refreshToken) {
           const effectiveWebBalance = Number(info.balance) > 0 ? Number(info.balance) : (Number(accStats.balance) > 0 ? Number(accStats.balance) : null);
-          const binding = await this.checkMobileAccountBinding(accCfg, effectiveWebBalance).catch(() => null);
+          const binding = await this.checkMobileAccountBinding(accCfg, effectiveWebBalance, {
+            allowPaused: options.allowPaused === true
+          }).catch(() => null);
           mobileTrusted = !!binding?.tokenOk && !binding?.mismatch;
           if (!mobileTrusted && binding?.mismatch) {
             logger.log('🔴', `${binding.message}，本次不采用移动端阅读进度`, accCfg.name || accountId);
@@ -421,7 +432,14 @@ export class TaskManager {
 
             const prevTask = accStats.tasks[questKey] || {};
             const prevLogs = Array.isArray(prevTask.stepLogs) ? prevTask.stepLogs : [];
-            const updatedLogs = [...prevLogs];
+            const updatedLogs = [];
+            const seenSteps = new Set();
+            for (const log of prevLogs) {
+              const step = Number(log?.step);
+              if (!Number.isFinite(step) || seenSteps.has(step)) continue;
+              seenSteps.add(step);
+              updatedLogs.push(log);
+            }
             const qProgress = Number(q.progress ?? 0);
             const qMax = Number(q.max ?? (isDesktop ? 8 : (isHalloween ? 6 : 5))) || 1;
 
@@ -455,7 +473,12 @@ export class TaskManager {
               available: q.available !== false,
               done: qProgress >= qMax,
               stepLogs: updatedLogs,
-              isPunchCard: true
+              isPunchCard: true,
+              // 子任务冷却/尝试记录必须跨官网同步保留，否则每次刷新都会忘掉
+              // “今天已经搜索过，等待明日”。
+              subtaskState: prevTask.subtaskState && typeof prevTask.subtaskState === 'object'
+                ? prevTask.subtaskState
+                : {}
             };
           });
 
@@ -557,17 +580,22 @@ export class TaskManager {
     return null;
   }
 
-  async syncAllOfficialStatus() {
+  async syncAllOfficialStatus(options = {}) {
     // 任务执行期间不做同步，避免与执行流程争抢账号上下文
     if (!accountContextLock.tryAcquire('web-sync')) return this.computeSummary();
     try {
-      const accounts = configManager.getAccounts().filter(a => a.enabled !== false && (a.cookie || a.refreshToken));
+      const accounts = configManager.getAccounts().filter(a => (
+        options.allowPaused === true || a.enabled !== false
+      ) && (a.cookie || a.refreshToken));
       const globalCfg = configManager.get();
       const baseGap = Math.max(15, Math.min(60, Number(globalCfg.tasks?.accountGapSec ?? 30) || 30));
       for (let i = 0; i < accounts.length; i++) {
         const acc = accounts[i];
         // 外层已持有 web-sync 锁，这里用 owned 明确告知，不再重复加/解锁
-        await this.syncAccountOfficialStatus(acc, { owned: true });
+        await this.syncAccountOfficialStatus(acc, {
+          owned: true,
+          allowPaused: options.allowPaused === true
+        });
         // 多账号全量同步安全隔离延时：避免同一 IP 短时间内连续探测多个账号
         if (i < accounts.length - 1) {
           const jitter = Math.floor(baseGap * 0.25);
@@ -594,9 +622,11 @@ export class TaskManager {
     let doneTasksCount = 0;
     let stampsProgress = 0;
     let stampsMax = 12;
+    let pausedAccounts = 0;
 
     const accountsList = accountsCfg.map(cfgAcc => {
       const st = this.ensureAccountStats(cfgAcc.id);
+      if (cfgAcc.enabled === false) pausedAccounts++;
       totalEarned += Number(st.earned || 0);
       totalBalance += Number(st.balance || 0);
       totalClaimable += Number(st.claimablePoints || 0);
@@ -636,6 +666,8 @@ export class TaskManager {
 
     return {
       totalAccounts: accountsList.length,
+      pausedAccounts,
+      activeAccounts: Math.max(0, accountsList.length - pausedAccounts),
       totalEarned,
       totalBalance,
       totalClaimable,
@@ -700,6 +732,25 @@ export class TaskManager {
     browserManager.stop();
   }
 
+  isAccountPaused(accountId) {
+    if (!accountId) return false;
+    return configManager.findAccount(accountId)?.enabled === false;
+  }
+
+  /**
+   * 运行中暂停账号：停止当前浏览器动作，剩余阶段由 runSingleAccount 的检查点跳过。
+   * 其他账号的批次执行不受影响。
+   */
+  pauseAccount(accountId) {
+    if (!accountId) return false;
+    if (this.runningAccountId === accountId) {
+      logger.log('⏸️', `账号 [${configManager.findAccount(accountId)?.name || accountId}] 已暂停，正在停止当前任务`, '', configManager.findAccount(accountId)?.name || accountId);
+      browserManager.stop();
+      return true;
+    }
+    return false;
+  }
+
   /**
    * 领取 Dashboard 待领取额外积分
    */
@@ -743,6 +794,7 @@ export class TaskManager {
     // 那样「测试副账号」可能实际跑在主账号上。
     const acc = configManager.resolveAccount(accountId);
     if (!acc) throw new Error('未找到对应账号');
+    if (acc.enabled === false) throw new Error('账号已暂停，请先启用后再执行测搜');
     // 注意持有者标识必须与任务执行（'task-run'）不同：
     // 同一个标识会被当成「重入」而放行，那样任务跑着的时候照样能抢上下文。
     if (!accountContextLock.tryAcquire('web-action')) {
@@ -754,10 +806,25 @@ export class TaskManager {
       if (blockReason) {
         throw new Error(`账号凭据异常，已拒绝执行：${blockReason}`);
       }
+      const beforeInfo = await rewardsApi.getRewardsInfo(1).catch(() => null);
       const result = await browserManager.singleTestSearch(acc);
       // 搜索完成后同步一次最新官网数据（同一持有者，可重入）
       await this.syncAccountOfficialStatus(acc, { owned: true });
-      return result;
+      const afterInfo = await rewardsApi.getRewardsInfo(1).catch(() => null);
+      const beforeProgress = Number(beforeInfo?.pc?.progress);
+      const afterProgress = Number(afterInfo?.pc?.progress);
+      const credited = Number.isFinite(beforeProgress) && Number.isFinite(afterProgress)
+        ? afterProgress > beforeProgress
+        : null;
+      return {
+        ...result,
+        before: Number.isFinite(beforeProgress) ? { progress: beforeProgress, max: Number(beforeInfo?.pc?.max || 0) } : null,
+        after: Number.isFinite(afterProgress) ? { progress: afterProgress, max: Number(afterInfo?.pc?.max || 0) } : null,
+        credited,
+        message: credited === false
+          ? '搜索已提交，但官网进度没有增加；该账号可能处于搜索观察期、搜索限流或市场不匹配'
+          : (credited === true ? '搜索已提交，官网进度已增加' : result.message)
+      };
     } finally {
       accountContextLock.release('web-action');
     }
@@ -768,8 +835,10 @@ export class TaskManager {
    * 网页端余额与 DAPI 余额明显不一致时，Token 很可能属于另一个微软账号，
    * 必须直接拦住，不能把签到/阅读算到别人头上。
    */
-  async checkMobileAccountBinding(acc, webBalance = null) {
-    const tokenOk = await authManager.refreshToken(false, acc.id).catch(() => false);
+  async checkMobileAccountBinding(acc, webBalance = null, options = {}) {
+    const tokenOk = await authManager.refreshToken(false, acc.id, {
+      allowPaused: options.allowPaused === true
+    }).catch(() => false);
     if (!tokenOk) {
       return { tokenOk: false, mobileBalance: null, mismatch: false, message: '移动端 Token 未就绪或刷新失败' };
     }
@@ -787,6 +856,7 @@ export class TaskManager {
 
   /** 已持久化的账号异常原因：定时任务和手动操作都应优先检查它。 */
   getAccountBlockReason(acc) {
+    if (acc?.enabled === false) return '账号已暂停';
     if (!acc?.cookie && !acc?.refreshToken) return '未配置 Cookie 或移动端 Token';
     const diagnosis = acc?.authDiagnosis;
     if (diagnosis?.warning && diagnosis.warningMessage) return diagnosis.warningMessage;
@@ -813,6 +883,7 @@ export class TaskManager {
    * 不再盲目打开浏览器或提交任何任务。
    */
   async getLiveAccountBlockReason(acc) {
+    if (acc?.enabled === false) return '账号已暂停';
     const stored = this.getAccountBlockReason(acc);
     if (stored) return stored;
     if (!acc?.cookie || !acc?.refreshToken) return '';
@@ -836,6 +907,7 @@ export class TaskManager {
   async runTaskAction(accountId, taskKey) {
     const acc = configManager.resolveAccount(accountId);
     if (!acc) throw new Error('未找到对应账号');
+    if (acc.enabled === false) throw new Error('账号已暂停，请先启用后再执行任务');
     if (!taskKey) throw new Error('缺少任务标识');
     if (!accountContextLock.tryAcquire('web-action')) {
       throw new Error('已有任务正在执行，请稍后再试（避免账号上下文串台）');
@@ -1043,7 +1115,22 @@ export class TaskManager {
           result.alreadyDone = true;
           result.message = '当前暂无可完成的任务（按钮可能尚未解锁或已完成）';
         } else {
-          const questRes = await browserManager.runQuestPunchCards(acc, [quest]);
+          const taskState = before?.tasks?.[taskKey] || {};
+          const questRes = await browserManager.runQuestPunchCards(acc, [{
+            ...quest,
+            runtimeState: taskState.subtaskState && typeof taskState.subtaskState === 'object'
+              ? taskState.subtaskState
+              : {}
+          }]);
+          if (questRes?.subtaskUpdates && Object.keys(questRes.subtaskUpdates).length > 0) {
+            const task = this.ensureAccountStats(acc.id).tasks?.[taskKey];
+            if (task) {
+              task.subtaskState = {
+                ...(task.subtaskState && typeof task.subtaskState === 'object' ? task.subtaskState : {}),
+                ...questRes.subtaskUpdates
+              };
+            }
+          }
           if (questRes?.details?.length) {
             this.recordPunchCardSteps(acc.id, questRes.details);
             result.details.push(...questRes.details.map(d => d.stepName || '完成一个子任务'));
@@ -1051,7 +1138,9 @@ export class TaskManager {
           await this.syncAccountOfficialStatus(acc, { owned: true });
           result.message = questRes?.completed > 0
             ? `已推进 ${questRes.completed} 个可完成子任务`
-            : '已刷新任务状态，当前没有可点击完成的按钮';
+            : (questRes?.attempted > 0
+                ? `已尝试 ${questRes.attempted} 个子任务，官网未确认进度，已进入冷却`
+                : '已刷新任务状态，当前没有可点击完成的按钮');
         }
       }
 
@@ -1107,14 +1196,21 @@ export class TaskManager {
       const task = targetTask;
       if (task) {
         if (!Array.isArray(task.stepLogs)) task.stepLogs = [];
-        const nextStep = (task.progress || 0) + 1;
+        if (d.verified !== true) continue;
+        const max = Number(task.max || 1) || 1;
+        const step = Number(d.progressAfter);
+        if (!Number.isFinite(step) || step <= 0 || step > max) continue;
+        if (task.stepLogs.some(log => Number(log?.step) === step)) continue;
         task.stepLogs.push({
-          step: nextStep,
+          step,
           at: d.at || Date.now(),
-          name: d.stepName || `第 ${nextStep} 步`
+          name: d.stepName || `第 ${step} 步`
         });
-        task.progress = Math.min(task.max || nextStep, nextStep);
-        if (task.progress >= task.max) task.done = true;
+        task.stepLogs.sort((a, b) => Number(a.step) - Number(b.step));
+        // progressAfter 来自回读后的官网页面；这里只吸收官网确认过的进度，
+        // 不再按“点击一次 +1”伪造完成。
+        task.progress = Math.max(Number(task.progress || 0), Math.min(max, step));
+        task.done = task.progress >= max;
       }
     }
     this.saveStats();
@@ -1126,6 +1222,10 @@ export class TaskManager {
   async runSingleAccount(accCfg, globalCfg, options = {}) {
     const accountId = accCfg.id;
     const accountName = accCfg.name || accountId;
+    if (this.isAccountPaused(accountId)) {
+      logger.log('⏸️', `账号 [${accountName}] 已暂停，跳过自动执行`, '', accountName);
+      return;
+    }
     this.runningAccountId = accountId;
     const accStats = this.ensureAccountStats(accountId);
 
@@ -1234,7 +1334,7 @@ export class TaskManager {
       await this.syncAccountOfficialStatus(accCfg, { owned: true });
     }
 
-    if (!this.running) return;
+    if (!this.running || this.isAccountPaused(accountId)) return;
 
     // 2. 新闻资讯自动阅读 (严格增量模式：缺几篇读几篇)
     if (globalCfg.tasks?.read && tokenOk && this.running) {
@@ -1249,7 +1349,7 @@ export class TaskManager {
         const remaining = Math.min(max - cur, 10);
         logger.log('📖', `今日还需阅读 ${remaining} 篇新闻资讯 (当前进度 ${cur}/${max})`, accountName);
         let okCount = 0;
-        for (let i = 0; i < remaining && this.running; i++) {
+        for (let i = 0; i < remaining && this.running && !this.isAccountPaused(accountId); i++) {
           const res = await rewardsApi.doReadArticle();
           if (res && !res.isDuplicate) {
             okCount++;
@@ -1275,7 +1375,7 @@ export class TaskManager {
       }
     }
 
-    if (!this.running) return;
+    if (!this.running || this.isAccountPaused(accountId)) return;
 
     // 3. 活动卡片 / 每日活动集 / 桌面端打孔卡（三个真正独立的开关）
     const wantDailySet = globalCfg.tasks?.dailySet !== false;
@@ -1303,7 +1403,7 @@ export class TaskManager {
         }
 
         for (const card of cards) {
-          if (!this.running) break;
+          if (!this.running || this.isAccountPaused(accountId)) break;
           logger.log('🧩', `执行卡片打卡: [${card.kind}] ${card.title} (+${card.points}分)`, accountName);
           await rewardsApi.randomDelay(2500, 5000);
           const claimed = await rewardsApi.claimCard(card);
@@ -1369,7 +1469,7 @@ export class TaskManager {
       }
     }
 
-    if (!this.running) return;
+    if (!this.running || this.isAccountPaused(accountId)) return;
 
     // 4. 必应 PC 搜索任务与仪表盘同步
     const info = await rewardsApi.getRewardsInfo();
@@ -1394,15 +1494,20 @@ export class TaskManager {
     if (globalCfg.tasks?.search && this.running) {
       const curSearch = info?.pc?.progress || 0;
       const maxSearch = info?.pc?.max || 60;
-      // 本地实时进度：官方页面刷新有延迟，用它兜底避免进度倒退
-      let liveSearch = curSearch;
-      const applySearchProgress = (completed) => {
-        liveSearch = Math.max(liveSearch, Math.min(maxSearch, curSearch + completed * 3));
+      let lastOfficialSearch = Number(curSearch) || 0;
+      let searchAttempted = 0;
+      // 进度只接受官网读数。读不到时保持原值，绝不按“每次 +3”估算。
+      const applySearchProgress = (completed, total, meta = {}) => {
+        searchAttempted = Math.max(searchAttempted, Number(completed) || 0);
+        const official = Number(meta.officialProgress);
+        if (!Number.isFinite(official)) return;
+        lastOfficialSearch = official;
         this.updateTask('search', {
-          progress: liveSearch,
+          progress: official,
           max: maxSearch,
-          points: liveSearch,
-          done: liveSearch >= maxSearch
+          points: official,
+          done: official >= maxSearch,
+          statusMessage: official >= maxSearch ? '' : `官网进度 ${official}/${maxSearch}，等待计分确认`
         }, accountId);
       };
       logger.log('🔍', `当前 PC 搜索配额: ${curSearch}/${maxSearch}`, accountName);
@@ -1415,7 +1520,7 @@ export class TaskManager {
         const searchMode = globalCfg.tasks?.searchEngineMode || 'browser';
         const hasBrowser = !!browserManager.getExecutablePath();
 
-        // 停滞保护：每搜完一次读一次官网真实进度，连续多次不涨就主动停手。
+        // 停滞保护：每搜完一次读一次官网真实进度，连续 5 次不涨就主动停手。
         // 搜索额度到顶（或账号被限流）时，继续搜只会白白增加风控暴露面。
         const probeSearchProgress = async () => {
           const probe = await rewardsApi.getRewardsInfo();
@@ -1423,44 +1528,55 @@ export class TaskManager {
           return Number.isFinite(p) ? p : null;
         };
         const stagnantLimit = normalizeStagnantLimit(globalCfg.tasks?.searchStagnantLimit);
+        let searchRun = null;
 
         if (searchMode === 'browser' && hasBrowser) {
           try {
-            await browserManager.runPacedSearch(accCfg, neededPoints, {
-              // 每搜完一次就刷新进度，否则整个搜索过程界面都不动
+            searchRun = await browserManager.runPacedSearch(accCfg, neededPoints, {
               onProgress: applySearchProgress,
               probeProgress: probeSearchProgress,
-              stagnantLimit
+              stagnantLimit,
+              initialProgress: curSearch
             });
           } catch (e) {
             logger.log('🟡', `无头浏览器运行异常: ${e.message}，正在切换为轻量协议兜底`, '', accountName);
-            await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
+            searchRun = await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
               probeProgress: probeSearchProgress,
               stagnantLimit
             });
           }
         } else {
-          await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
+          searchRun = await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
             probeProgress: probeSearchProgress,
             stagnantLimit
           });
         }
 
         const afterInfo = await rewardsApi.getRewardsInfo();
-        const official = afterInfo?.pc?.progress || 0;
-        // 官方页面可能尚未刷新，取官方值与本地实时值的较大者，避免进度倒退
-        const finalSearch = Math.max(official, liveSearch, curSearch);
+        const officialValue = Number(afterInfo?.pc?.progress);
+        const finalSearch = Number.isFinite(officialValue) ? officialValue : Math.max(curSearch, lastOfficialSearch);
+        const noCredit = finalSearch <= curSearch && (searchRun?.completed || searchAttempted) > 0;
         this.updateTask('search', {
           progress: finalSearch,
           max: maxSearch,
           points: finalSearch,
-          done: finalSearch >= maxSearch
+          done: finalSearch >= maxSearch,
+          statusMessage: finalSearch >= maxSearch
+            ? ''
+            : (noCredit
+                ? '搜索请求已执行，但官网连续未计分；本轮已停止，建议 24 小时后再试'
+                : `官网进度 ${finalSearch}/${maxSearch}，等待计分确认`)
         }, accountId);
-        logger.addTimeline(accountName, `PC 搜索打卡完成，当前配额 ${finalSearch}/${maxSearch}`);
+        if (noCredit) {
+          logger.log('🟡', `PC 搜索请求已执行，但官网进度仍为 ${finalSearch}/${maxSearch}，本轮不再空跑`, '', accountName);
+          logger.addTimeline(accountName, `PC 搜索未计分，官网仍为 ${finalSearch}/${maxSearch}`);
+        } else {
+          logger.addTimeline(accountName, `PC 搜索结束，官网配额 ${finalSearch}/${maxSearch}`);
+        }
       }
     }
 
-    if (!this.running) return;
+    if (!this.running || this.isAccountPaused(accountId)) return;
 
     // 4.5 任务区打孔卡 (如「十月必看五大亮点」这类每天解锁一个的任务)
     //     旧版本完全没处理这类任务，导致官网上长期停在 0/5。
@@ -1483,17 +1599,47 @@ export class TaskManager {
           cur.lastQuestCheckTime = Date.now();
           try {
             const quests = await rewardsApi.getQuestPunchCards();
-            const pendingQuests = quests.filter(q => !q.done);
+            const findTaskForQuest = (quest) => {
+              const title = String(quest?.title || '');
+              return Object.values(cur.tasks || {}).find(t => {
+                if (!t || !(t.isPunchCard || t.name === title)) return false;
+                const name = String(t.name || '');
+                return name === title || name.includes(title) || title.includes(name);
+              }) || null;
+            };
+            const pendingQuests = quests.filter(q => !q.done).map(q => {
+              const task = findTaskForQuest(q);
+              return {
+                ...q,
+                runtimeState: task?.subtaskState && typeof task.subtaskState === 'object'
+                  ? task.subtaskState
+                  : {}
+              };
+            });
             if (pendingQuests.length > 0) {
               const questRes = await browserManager.runQuestPunchCards(accCfg, pendingQuests);
+              // 持久化“今日已尝试/冷却到明日”的子任务状态，避免同一天反复点击。
+              for (const quest of pendingQuests) {
+                const task = findTaskForQuest(quest);
+                if (!task) continue;
+                const updates = questRes.subtaskUpdates && typeof questRes.subtaskUpdates === 'object'
+                  ? questRes.subtaskUpdates
+                  : {};
+                task.subtaskState = {
+                  ...(task.subtaskState && typeof task.subtaskState === 'object' ? task.subtaskState : {}),
+                  ...updates
+                };
+              }
               if (questRes.completed > 0) {
                 logger.addTimeline(accountName, `任务打孔卡推进 ${questRes.completed} 项`);
                 if (questRes.details && questRes.details.length > 0) {
                   this.recordPunchCardSteps(accountId, questRes.details);
                 }
-                // 同步一次官网真实状态
-                await this.syncAccountOfficialStatus(accCfg, { owned: true });
+              } else if (questRes.attempted > 0) {
+                logger.log('🟡', `任务打孔卡已尝试 ${questRes.attempted} 项，官网未确认进度，已进入冷却`, '', accountName);
               }
+              // 无论是否推进，都同步一次官网真实状态。
+              await this.syncAccountOfficialStatus(accCfg, { owned: true });
             }
             this.saveStats();
           } catch (e) {
@@ -1503,7 +1649,7 @@ export class TaskManager {
       }
     }
 
-    if (!this.running) return;
+    if (!this.running || this.isAccountPaused(accountId)) return;
 
     // 5. 连签检测与额外积分检测
     //    视觉搜索补签只在任务执行期尝试（每账号每天一次），读取进度的同步流程不再触发
@@ -1533,9 +1679,10 @@ export class TaskManager {
 
   async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, onProgress = null, options = {}) {
     const accountName = accCfg.name || accCfg.id;
-    const { probeProgress = null, stagnantLimit = 10 } = options;
+    const { probeProgress = null, stagnantLimit = 5, probeDelayMs = 12000 } = options;
     // 与拟人模式共用同一套停滞保护
     const stagnation = new SearchStagnationGuard(stagnantLimit);
+    stagnation.observe(Number(curSearch) || 0);
     // 每次搜索最多 +3 分，上限 20 次可覆盖单账号 60 分上限；
     // 旧实现写死最多 7 次（21 分），轻量模式下永远打不满搜索任务。
     const searchCount = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
@@ -1547,39 +1694,58 @@ export class TaskManager {
     const intervalSec = Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
     logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accountName);
 
-    for (let i = 0; i < searchCount && this.running; i++) {
+    let completed = 0;
+    let lastOfficial = Number(curSearch) || 0;
+    let stoppedByStagnation = false;
+    for (let i = 0; i < searchCount && this.running && !this.isAccountPaused(accCfg.id); i++) {
       const word = await rewardsApi.getHotSearchWord();
       logger.log('🔍', `[搜索 ${i + 1}/${searchCount}] 关键词: "${word}"`, '', accountName);
       await rewardsApi.doSearchOnce(word);
+      completed++;
 
-      // 轻量模式同样实时刷新进度
+      await rewardsApi.delay(Math.max(5000, Number(probeDelayMs) || 12000));
+      let official = null;
+      if (typeof probeProgress === 'function') {
+        try {
+          official = await probeProgress();
+        } catch {}
+      }
+      if (Number.isFinite(Number(official))) lastOfficial = Number(official);
+
+      // 轻量模式同样只回调官网进度，不做本地 +3 估算。
       if (typeof onProgress === 'function') {
         try {
-          onProgress(i + 1);
+          onProgress(i + 1, searchCount, {
+            officialProgress: Number.isFinite(Number(official)) ? Number(official) : null,
+            delta: Number.isFinite(Number(official)) ? Number(official) - Number(curSearch || 0) : 0
+          });
         } catch {}
       }
 
       // 停滞保护：连续 N 次搜索官网进度不涨就停手
-      if (typeof probeProgress === 'function' && i < searchCount - 1) {
-        let official = null;
-        try {
-          official = await probeProgress();
-        } catch {}
+      if (typeof probeProgress === 'function') {
         const result = stagnation.observe(official);
         if (result.stagnant) {
-          logger.log('🛑', `连续 ${result.stagnantCount} 次搜索官网进度没有增加（停留在 ${result.bestProgress} 分），判定搜索额度已到顶，主动停止本轮搜索以免触发风控`, '', accountName);
+          stoppedByStagnation = true;
+          logger.log('🛑', `连续 ${result.stagnantCount} 次搜索官网进度没有增加（停留在 ${result.bestProgress} 分），主动停止本轮搜索`, '', accountName);
           break;
         }
       }
 
+      if (i === searchCount - 1) break;
       const waitSec = intervalSec + rewardsApi.randomRange(0, jitterSec);
       logger.log('⏳', `等待 ${waitSec} 秒...`, '', accountName);
       // 按 1 秒切片等待，让「停止」按钮能立即生效。
       // 旧实现是一次性 await 整个间隔，最长要等 900+300 秒才停得下来。
-      for (let s = waitSec; s > 0 && this.running; s--) {
+      for (let s = waitSec; s > 0 && this.running && !this.isAccountPaused(accCfg.id); s--) {
         await rewardsApi.delay(1000);
       }
     }
+    return {
+      completed,
+      officialProgress: lastOfficial,
+      stoppedByStagnation
+    };
   }
 
   /**
@@ -1639,6 +1805,10 @@ export class TaskManager {
       const failures = [];
       for (let i = 0; i < targetList.length && this.running; i++) {
         const acc = targetList[i];
+        if (configManager.findAccount(acc.id)?.enabled === false) {
+          logger.log('⏸️', `账号 [${acc.name || acc.id}] 已暂停，跳过本批次剩余任务`, '', acc.name || acc.id);
+          continue;
+        }
         try {
           await this.runSingleAccount(acc, globalCfg, { manual });
         } catch (e) {
@@ -1652,6 +1822,7 @@ export class TaskManager {
             );
           } catch {}
         }
+        this.runningAccountId = null;
 
         // 多账号之间安全随机延时隔离防风控
         if (i < targetList.length - 1 && this.running) {

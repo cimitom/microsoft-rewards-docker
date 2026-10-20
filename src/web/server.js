@@ -19,7 +19,7 @@ import { accountContextLock } from '../core/contextLock.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.7.8';
+const CURRENT_VERSION = '1.7.9';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -527,7 +527,8 @@ export function createServer() {
           return res.status(404).json({ success: false, message: '账号未找到' });
         }
         skipped = busy;
-        if (!busy) await taskManager.syncAccountOfficialStatus(accCfg);
+        // 手动刷新进度是暂停账号明确允许的例外，可刷新 Token 以读取最新官网数据。
+        if (!busy) await taskManager.syncAccountOfficialStatus(accCfg, { allowPaused: true });
       } else {
         const now = Date.now();
         const COOLDOWN_MS = 3 * 60 * 1000; // 3分钟全量同步冷却
@@ -538,7 +539,8 @@ export function createServer() {
           skipped = busy;
           if (!busy) {
             lastSyncAllTime = now;
-            await taskManager.syncAllOfficialStatus();
+            // 手动全量刷新也允许包含暂停账号；自动任务不会调用这里。
+            await taskManager.syncAllOfficialStatus({ allowPaused: true });
           }
         }
       }
@@ -560,6 +562,7 @@ export function createServer() {
       name: a.name,
       order: a.order !== undefined ? Number(a.order) : 999,
       enabled: a.enabled !== false,
+      pausedAt: a.pausedAt || 0,
       hasCookie: !!a.cookie,
       hasToken: !!a.refreshToken,
       hasAuthCodeUrl: !!a.authCodeUrl,
@@ -606,8 +609,23 @@ export function createServer() {
       const acc = configManager.resolveAccount(req.params.id);
       if (!acc) return res.status(404).json({ success: false, message: '账号未找到' });
       const newEnabled = acc.enabled === false;
-      configManager.upsertAccount({ id: acc.id, enabled: newEnabled });
-      res.json({ success: true, enabled: newEnabled, message: newEnabled ? '账号已继续自动巡检' : '账号已暂停巡检' });
+      const updated = configManager.setAccountEnabled(acc.id, newEnabled);
+      if (!newEnabled) taskManager.pauseAccount(acc.id);
+      logger.log(
+        newEnabled ? '🟢' : '⏸️',
+        newEnabled
+          ? `账号 [${updated.name || updated.id}] 已启用，数据与凭据保持不变`
+          : `账号 [${updated.name || updated.id}] 已暂停：停止自动任务与自动 Token 刷新，数据保留`,
+        '',
+        updated.name || updated.id
+      );
+      res.json({
+        success: true,
+        enabled: newEnabled,
+        paused: !newEnabled,
+        pausedAt: updated.pausedAt || 0,
+        message: newEnabled ? '账号已启用' : '账号已暂停'
+      });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
     }
@@ -656,6 +674,10 @@ export function createServer() {
         return res.status(409).json({ success: false, message: '已有任务正在执行，请稍后再试' });
       }
       const accountId = req.body?.accountId || null;
+      const targetAcc = accountId ? configManager.resolveAccount(accountId) : null;
+      if (targetAcc?.enabled === false) {
+        return res.status(409).json({ success: false, message: '账号已暂停，请先启用后再执行测搜' });
+      }
       const result = await taskManager.runSingleTestSearch(accountId);
       res.json({ success: true, data: result });
     } catch (e) {
@@ -670,6 +692,10 @@ export function createServer() {
         return res.status(409).json({ success: false, message: '已有任务正在执行，请稍后再试' });
       }
       const { accountId, taskKey } = req.body || {};
+      const targetAcc = accountId ? configManager.resolveAccount(accountId) : null;
+      if (targetAcc?.enabled === false) {
+        return res.status(409).json({ success: false, message: '账号已暂停，请先启用后再执行任务' });
+      }
       const result = await taskManager.runTaskAction(accountId, taskKey);
       res.json({ success: true, data: result });
     } catch (e) {
@@ -681,12 +707,15 @@ export function createServer() {
   app.post('/api/tasks/claim-points', async (req, res) => {
     try {
       const accountId = req.body?.accountId || 'all';
+      if (accountId !== 'all' && configManager.resolveAccount(accountId)?.enabled === false) {
+        return res.status(409).json({ success: false, message: '账号已暂停，请先启用后再领取积分' });
+      }
       if (accountContextLock.isBusy()) {
         return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再领取额外积分' });
       }
       if (process.env.EPIC_DEMO === '1' || process.env.MSR_DEMO === '1') {
         let totalClaimed = 0;
-        const accounts = configManager.getAccounts();
+        const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
         const targets = accountId === 'all' ? accounts : accounts.filter(a => a.id === accountId);
         for (const a of targets) {
           const st = taskManager.ensureAccountStats(a.id);
@@ -860,9 +889,12 @@ export function createServer() {
   });
 
   // 8. 全面测试账户状态并在 Docker 中完成体检（结果落盘，供账号卡片展示）
-  async function runAccountDiagnosis(accountId) {
+  async function runAccountDiagnosis(accountId, options = {}) {
     const targetAccountId = accountId || null;
-    const result = await authManager.testAccount(targetAccountId);
+    // 手动体检是暂停账号明确允许的例外，需要允许刷新 Token 才能得到真实结果。
+    const result = await authManager.testAccount(targetAccountId, {
+      allowPaused: options.allowPaused === true
+    });
     // 获取当前网络出口信息
     const [ipInfo, regionPass] = await Promise.all([
       rewardsApi.getIPInfo(),
@@ -922,7 +954,7 @@ export function createServer() {
         });
       }
       accountTestTimes.set(targetAccountId || 'default', now);
-      const result = await runAccountDiagnosis(targetAccountId);
+      const result = await runAccountDiagnosis(targetAccountId, { allowPaused: true });
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
@@ -977,7 +1009,7 @@ export function createServer() {
       for (let i = 0; i < accounts.length; i++) {
         const acc = accounts[i];
         try {
-          results.push(await runAccountDiagnosis(acc.id));
+          results.push(await runAccountDiagnosis(acc.id, { allowPaused: true }));
         } catch (e) {
           results.push({
             accountId: acc.id,

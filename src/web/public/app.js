@@ -197,6 +197,7 @@ function initUIEvents() {
   document.getElementById('btn-run')?.addEventListener('click', runTasks);
   document.getElementById('btn-stop')?.addEventListener('click', stopTasks);
   document.getElementById('btn-run-single-header')?.addEventListener('click', runTasks);
+  document.getElementById('btn-toggle-account-header')?.addEventListener('click', toggleSelectedAccount);
   document.getElementById('btn-stop-single-header')?.addEventListener('click', stopTasks);
 
   // 版本与状态复合胶囊点击检测更新
@@ -1127,7 +1128,13 @@ async function runTaskCardAction(accountId, taskKey, taskName = taskKey) {
     return;
   }
 
-  const accName = currentConfig?.accounts?.find(a => a.id === targetId)?.name || targetId;
+  const targetStatus = (currentStatus?.summary?.accountsList || []).find(a => a.id === targetId);
+  const accName = targetStatus?.name || currentConfig?.accounts?.find(a => a.id === targetId)?.name || targetId;
+  if (targetStatus?.enabled === false) {
+    openEpicActionModal('账号已暂停', `账号 [${accName}] 当前已暂停，请先启用后再执行任务。`, ['检查账号状态'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '已暂停', cls: 'warn' }, result: '暂停账号不会自动执行任务，但数据与凭据仍保留。' });
+    return;
+  }
   const isSearch = taskKey === 'search';
   openEpicActionModal(
     `${taskName} · ${accName}`,
@@ -1498,7 +1505,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.8';
+  const current = updateInfo?.currentVersion || '1.7.9';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1553,8 +1560,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.8'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.8'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.9'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.9'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -1611,7 +1618,7 @@ function renderBrowserMonitor(b) {
 }
 
 // 渲染多账号切换胶囊栏
-function renderAccountSelectorBar(summary) {
+function renderAccountSelectorBar(summary, runtime = {}) {
   const bar = document.getElementById('account-selector-bar');
   if (!bar || !summary) return;
 
@@ -1628,17 +1635,17 @@ function renderAccountSelectorBar(summary) {
     <button class="account-chip ${isAllActive ? 'active' : ''}" data-acc-id="all">
       <span class="chip-icon">🌐</span>
       <span class="chip-name">全部账号汇总</span>
-      <span class="chip-badge">${summary.totalAccounts || 1} 个账号</span>
+      <span class="chip-badge">${summary.totalAccounts || 1} 个账号${summary.pausedAccounts ? ` · ${summary.pausedAccounts} 暂停` : ''}</span>
     </button>
   `;
 
   // 2. 各独立账号胶囊
   accounts.forEach(acc => {
     const isActive = selectedAccountId === acc.id;
-    const auth = getAccountAuthStatus(acc);
+    const runtimeStatus = getAccountRuntimeStatus(acc, runtime);
     html += `
-      <button class="account-chip ${isActive ? 'active' : ''}" data-acc-id="${escapeHtml(acc.id)}">
-        <span class="chip-icon">${auth.cls === 'badge-auth-valid' ? '🟢' : auth.cls === 'badge-auth-invalid' ? '🔴' : (acc.enabled ? '👤' : '⏸️')}</span>
+      <button class="account-chip ${isActive ? 'active' : ''} ${runtimeStatus.cls}" data-acc-id="${escapeHtml(acc.id)}" data-tip="${escapeHtml(runtimeStatus.tip)}">
+        <span class="chip-icon">${runtimeStatus.icon}</span>
         <span class="chip-name">${escapeHtml(acc.name)}</span>
         <span class="chip-sub">${(acc.balance || 0).toLocaleString()} 分</span>
       </button>
@@ -1675,7 +1682,7 @@ function renderDashboard(data) {
 
   // 1. 渲染顶部多账号切换胶囊
   if (summary) {
-    renderAccountSelectorBar(summary);
+    renderAccountSelectorBar(summary, { running, runningAccountId });
   }
 
   // 2. 系统运行状态与复合胶囊
@@ -1683,9 +1690,11 @@ function renderDashboard(data) {
   const btnRun = document.getElementById('btn-run');
   const btnStop = document.getElementById('btn-stop');
   const btnRunSingle = document.getElementById('btn-run-single-header');
+  const btnToggleAccount = document.getElementById('btn-toggle-account-header');
   const btnStopSingle = document.getElementById('btn-stop-single-header');
 
   const isAllMode = selectedAccountId === 'all';
+  const selectedAcc = isAllMode ? null : (summary?.accountsList || []).find(a => a.id === selectedAccountId);
 
   taskRunning = !!running;
 
@@ -1707,6 +1716,29 @@ function renderDashboard(data) {
     if (btnStop) btnStop.style.display = 'none';
     if (btnRunSingle) btnRunSingle.style.display = isAllMode ? 'none' : 'inline-flex';
     if (btnStopSingle) btnStopSingle.style.display = 'none';
+  }
+
+  if (btnToggleAccount) {
+    btnToggleAccount.style.display = (!isAllMode && selectedAcc) ? 'inline-flex' : 'none';
+    if (selectedAcc) {
+      const paused = selectedAcc.enabled === false;
+      btnToggleAccount.className = `btn btn-sm ${paused ? 'btn-success' : 'btn-warning'}`;
+      btnToggleAccount.innerHTML = paused
+        ? '<span>▶️</span> 启用账号'
+        : '<span>⏸️</span> 暂停账号';
+      btnToggleAccount.setAttribute('data-tip', paused
+        ? '启用该账号；下一次任务或手动刷新时会按需更新 Token'
+        : '暂停后停止自动任务与自动 Token 刷新，数据、凭据和历史全部保留');
+    }
+  }
+
+  if (btnRunSingle && selectedAcc) {
+    const paused = selectedAcc.enabled === false;
+    btnRunSingle.disabled = paused;
+    btnRunSingle.style.opacity = paused ? '0.55' : '';
+    btnRunSingle.setAttribute('data-tip', paused
+      ? '账号已暂停，请先点击「启用账号」'
+      : '立即运行当前账号的自动化任务');
   }
 
   refreshVersionPillTooltip();
@@ -1908,6 +1940,15 @@ function formatPunchCardTooltip(t) {
       }
     }
 
+    if (key === 'search' && t.statusMessage) {
+      subtext = `${subtext} · ${t.statusMessage}`;
+    }
+
+    if (isPunchCard && !isDone) {
+      const cooling = Object.values(t.subtaskState || {}).some(state => Number(state?.cooldownUntil || 0) > Date.now());
+      if (cooling) subtext = `${subtext} · 今日已尝试，等待冷却`;
+    }
+
     card.innerHTML = `
       <div class="task-top">
         <div class="task-info">
@@ -2000,6 +2041,67 @@ function getAccountAuthStatus(acc) {
     : { text: '失效', cls: 'badge-auth-invalid', tip };
 }
 
+/**
+ * 账号运行状态统一口径：
+ * 蓝=正在执行 > 黄=已暂停 > 红=凭据失效/异常 > 绿=正常 > 灰=未体检。
+ */
+function getAccountRuntimeStatus(acc, runtime = {}) {
+  const auth = getAccountAuthStatus(acc);
+  const isRunning = runtime.running === true && runtime.runningAccountId === acc?.id;
+  if (isRunning) {
+    return {
+      key: 'running',
+      icon: '🔵',
+      label: '运行中',
+      cls: 'status-running',
+      tip: '正在执行该账号的自动化任务'
+    };
+  }
+  if (acc?.enabled === false) {
+    const pausedTip = [
+      '账号已暂停',
+      '不会自动执行任务，也不会自动刷新 Token / Cookie',
+      '手动体检和手动刷新进度仍可使用',
+      '账号数据、凭据、历史与浏览器会话全部保留',
+      ...(auth.cls === 'badge-auth-invalid' || auth.cls === 'badge-auth-warn'
+        ? [`上次体检：${auth.text}`, auth.tip]
+        : [])
+    ].join('\n');
+    return {
+      key: 'paused',
+      icon: '🟡',
+      label: '已暂停',
+      cls: 'status-paused',
+      tip: pausedTip
+    };
+  }
+  if (auth.cls === 'badge-auth-invalid' || auth.cls === 'badge-auth-warn') {
+    return {
+      key: 'invalid',
+      icon: '🔴',
+      label: auth.text,
+      cls: 'status-invalid',
+      tip: auth.tip
+    };
+  }
+  if (auth.cls === 'badge-auth-unknown') {
+    return {
+      key: 'unknown',
+      icon: '⚪',
+      label: '未检测',
+      cls: 'status-unknown',
+      tip: auth.tip
+    };
+  }
+  return {
+    key: 'valid',
+    icon: '🟢',
+    label: '正常',
+    cls: 'status-valid',
+    tip: auth.tip
+  };
+}
+
 // 下次自动启动时间：今日计划 / 即将启动 / 明日窗口 / 停用等
 // 倒计时格式化：把「距下次执行的分钟数」显示为 HH:MM
 function formatCountdown(minutes) {
@@ -2024,7 +2126,7 @@ function formatNextRun(sched) {
     case 'imminent':
       return { text: '⏰ 00:00', tip: `已进入 ${windowText} 窗口，调度器下一分钟启动` };
     case 'disabled':
-      return { text: '⏰ 已停用', tip: '该账号已停用，不会自动启动' };
+      return { text: '⏰ 已暂停', tip: '该账号已暂停，不会自动启动；手动刷新和手动体检仍可使用' };
     case 'no-credential':
       return { text: '⏰ 未配凭据', tip: '未配置 Cookie / Token，不会自动启动' };
     case 'schedule-off':
@@ -2043,10 +2145,11 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
 
   accounts.forEach(acc => {
     const isRunning = running && runningAccountId === acc.id;
-    const auth = getAccountAuthStatus(acc);
+    const runtimeStatus = getAccountRuntimeStatus(acc, { running, runningAccountId });
+    const paused = acc.enabled === false;
     const nextRun = formatNextRun(schedule[acc.id]);
     const card = document.createElement('div');
-    card.className = 'account-overview-card';
+    card.className = `account-overview-card ${runtimeStatus.cls}`;
     card.innerHTML = `
       <div class="acc-card-top">
         <div class="acc-card-title">
@@ -2056,10 +2159,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
         <div class="acc-card-badges">
           ${isRunning
             ? '<span class="badge-mini badge-running">● 运行中</span>'
-            : `<span class="badge-mini" style="background:${acc.enabled ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}; color:${acc.enabled ? '#34D399' : '#F87171'};">${acc.enabled ? '已启用' : '已停用'}</span>`}
-          <span class="badge-mini ${auth.cls}" data-tip="${escapeHtml(auth.tip)}">
-            ${auth.text}
-          </span>
+            : `<span class="badge-mini ${runtimeStatus.cls}" data-tip="${escapeHtml(runtimeStatus.tip)}">${runtimeStatus.icon} ${escapeHtml(runtimeStatus.label)}</span>`}
           <span class="badge-mini badge-schedule" data-tip="${escapeHtml(nextRun.tip)}">${nextRun.text}</span>
         </div>
       </div>
@@ -2090,17 +2190,18 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
       </div>
 
       <div class="acc-card-actions">
-        <button class="btn btn-primary btn-sm btn-run-single" title="立即运行此账号打卡">▶️ 运行</button>
+        <button class="btn btn-primary btn-sm btn-run-single" title="${paused ? '账号已暂停，请先启用' : '立即运行此账号打卡'}" ${paused ? 'disabled' : ''}>▶️ 运行</button>
+        <button class="btn ${paused ? 'btn-success' : 'btn-warning'} btn-sm btn-pause-single" title="${paused ? '启用此账号' : '暂停此账号'}">${paused ? '▶️ 启用' : '⏸️ 暂停'}</button>
         <button class="btn btn-secondary btn-sm btn-sync-single" title="从微软官网同步该账号今日真实进度">🔄 刷新</button>
         <button class="btn btn-secondary btn-sm btn-view-acc" title="进入该账号明细大屏">明细 ➜</button>
         <div class="acc-more-wrap">
           <button class="btn btn-secondary btn-sm btn-more-actions" title="更多账号操作">•••</button>
           <div class="acc-more-dropdown">
             <button class="dropdown-item btn-edit-account" title="编辑账号信息与 Cookie 凭据">✏️ 编辑账号 / 更新凭据</button>
-            <button class="dropdown-item btn-test-single-search" title="单独搜索一次 (拟人键盘输入，安全验证)">🔍 单次安全测搜</button>
+            <button class="dropdown-item btn-test-single-search" title="${paused ? '账号已暂停，请先启用' : '单独搜索一次 (拟人键盘输入，安全验证)'}" ${paused ? 'disabled' : ''}>🔍 单次安全测搜</button>
             <button class="dropdown-item btn-test-single" title="测试该账号登录状态">📋 账号状态体检</button>
             <div class="dropdown-sep"></div>
-            <button class="dropdown-item btn-toggle-single">${acc.enabled ? '⏸️ 暂停自动巡检' : '▶️ 恢复自动巡检'}</button>
+            <button class="dropdown-item btn-toggle-single">${paused ? '▶️ 启用账号' : '⏸️ 暂停账号'}</button>
           </div>
         </div>
       </div>
@@ -2201,12 +2302,30 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
         }).then(r => r.json());
         stopMicrosoftActionPolling();
         if (res.success) {
+          const d = res.data || {};
+          const credited = d.credited;
+          const before = d.before ? `${d.before.progress}/${d.before.max}` : '未知';
+          const after = d.after ? `${d.after.progress}/${d.after.max}` : '未知';
+          const search = d.searchResult || {};
+          const loginText = search.login?.userName
+            ? `已登录：${search.login.userName}`
+            : (search.login?.isGuest ? '游客态（不会计分）' : '登录态未识别');
           updateEpicActionModal({
             activeIndex: 5,
             progress: 100,
-            badge: { text: '测试成功', cls: 'ok' },
-            message: `账号 [${acc.name}] 单次测试搜索成功`,
-            result: `${res.data.message || '已完成拟人键盘输入与积分同步'}\n\n提示：该测试仅验证浏览器登录态与搜索通道。`
+            badge: credited === true
+              ? { text: '已计分', cls: 'ok' }
+              : { text: credited === false ? '未计分' : '已提交', cls: credited === false ? 'warn' : 'ok' },
+            message: credited === true
+              ? `账号 [${acc.name}] 搜索已计分`
+              : `账号 [${acc.name}] 搜索已提交，官网暂未确认`,
+            result: [
+              res.data.message || '搜索动作已执行',
+              `官网进度：${before} → ${after}`,
+              `登录态：${loginText}`,
+              search.finalUrl ? `结果页：${search.finalUrl}` : '',
+              credited === false ? '如果连续多次仍未计分，可能是新号搜索观察期、搜索限流或账号市场不匹配。' : ''
+            ].filter(Boolean).join('\n')
           });
           fetchStatus();
         } else {
@@ -2244,13 +2363,14 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
       }
     });
 
+    card.querySelector('.btn-pause-single')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await toggleAccountById(acc.id);
+    });
+
     card.querySelector('.btn-toggle-single')?.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const res = await fetch(`/api/accounts/${acc.id}/toggle`, { method: 'POST' }).then(r => r.json());
-      if (res.success) {
-        fetchStatus();
-        fetchConfig();
-      }
+      await toggleAccountById(acc.id);
     });
 
     card.querySelector('.btn-test-single')?.addEventListener('click', (e) => {
@@ -2357,6 +2477,30 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function getSelectedAccount() {
+  if (!selectedAccountId || selectedAccountId === 'all') return null;
+  return (currentStatus?.summary?.accountsList || []).find(a => a.id === selectedAccountId) || null;
+}
+
+async function toggleSelectedAccount() {
+  const acc = getSelectedAccount();
+  if (!acc) return;
+  await toggleAccountById(acc.id);
+}
+
+async function toggleAccountById(accountId) {
+  try {
+    const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/toggle`, {
+      method: 'POST'
+    }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '操作失败');
+    await Promise.all([fetchStatus(), fetchConfig()]);
+  } catch (e) {
+    openEpicActionModal('账号状态切换失败', e.message, ['更新账号状态', '刷新看板'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '操作失败', cls: 'err' }, result: `操作失败：${e.message}` });
+  }
+}
+
 async function runTasks() {
   try {
     const reqBody = selectedAccountId !== 'all' ? { accountId: selectedAccountId } : {};
@@ -2414,12 +2558,12 @@ const SEARCH_INTERVAL_MAX = 900;
 const SEARCH_JITTER_MIN = 30;            // 安全下限：随机浮动（秒）
 const SEARCH_JITTER_MAX = 300;
 const SEARCH_STAGNANT_MIN = 1;           // 停滞保护下限
-const SEARCH_STAGNANT_MAX = 50;
+const SEARCH_STAGNANT_MAX = 5;
 
 // 停滞保护：连续多少次搜索官网进度不涨就停手
 function readSearchStagnantLimit() {
   let value = parseInt(document.getElementById('cfg-search-stagnant')?.value, 10);
-  if (isNaN(value)) value = 10;
+  if (isNaN(value)) value = 5;
   return Math.max(SEARCH_STAGNANT_MIN, Math.min(SEARCH_STAGNANT_MAX, value));
 }
 
@@ -2519,7 +2663,7 @@ function populateSettingsForm() {
   if (intervalEl) intervalEl.value = c.tasks?.searchIntervalSec ?? 180;
   if (jitterEl) jitterEl.value = c.tasks?.searchJitterSec ?? 30;
   const stagnantEl = document.getElementById('cfg-search-stagnant');
-  if (stagnantEl) stagnantEl.value = c.tasks?.searchStagnantLimit ?? 10;
+  if (stagnantEl) stagnantEl.value = Math.min(5, c.tasks?.searchStagnantLimit ?? 5);
   const gapEl = document.getElementById('cfg-account-gap');
   if (gapEl) gapEl.value = c.tasks?.accountGapSec ?? 180;
   updateSearchRhythmHint();

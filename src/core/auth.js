@@ -131,9 +131,13 @@ export class AuthManager {
   /**
    * 使用 Refresh Token 刷新 Access Token
    */
-  async refreshToken(force = false, accountId = null) {
+  async refreshToken(force = false, accountId = null, options = {}) {
     const acc = configManager.resolveAccount(accountId);
     if (!acc) return false;
+    if (acc.enabled === false && options.allowPaused !== true) {
+      logger.log('⏸️', `账号 [${acc.name || acc.id}] 已暂停，自动流程跳过 Token 刷新`, acc.name || acc.id);
+      return false;
+    }
 
     // 本函数内的日志统一归属到该账号
     const prevCtx = logger.getAccountContext();
@@ -318,13 +322,13 @@ export class AuthManager {
   /**
    * 实测移动端 OAuth Token 与 DAPI 接口连通性
    */
-  async checkTokenStatus(accountId = null) {
+  async checkTokenStatus(accountId = null, options = {}) {
     const acc = configManager.resolveAccount(accountId);
     if (!acc?.refreshToken && !acc?.accessToken) {
       return { valid: false, message: '尚未完成移动端授权 (未配置 Token)' };
     }
 
-    const tokenOk = await this.refreshToken(false, accountId);
+    const tokenOk = await this.refreshToken(false, accountId, options);
     const token = this.getAccessToken(accountId);
     if (!tokenOk || !token) {
       return { valid: false, message: 'Refresh Token 已过期或失效，请重新授权' };
@@ -366,7 +370,7 @@ export class AuthManager {
   /**
    * 一键全面诊断测试账户在 Docker 中的登录状态
    */
-  async testAccount(accountId = null) {
+  async testAccount(accountId = null, options = {}) {
     const acc = configManager.resolveAccount(accountId);
     const name = acc?.name || accountId || '当前账号';
     const prevCtx = logger.getAccountContext();
@@ -375,7 +379,7 @@ export class AuthManager {
 
     const [cookieStatus, tokenStatus] = await Promise.all([
       this.checkCookieStatus(null, accountId),
-      this.checkTokenStatus(accountId)
+      this.checkTokenStatus(accountId, options)
     ]);
 
     const hasCode = !!acc?.authCodeUrl;

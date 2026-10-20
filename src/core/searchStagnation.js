@@ -9,11 +9,11 @@
  * 主动结束本轮搜索，未打满的额度留到下次执行。
  *
  * 官网进度是异步刷新的，偶发一次读不到增长属于正常现象，所以用「连续 N 次」而不是
- * 「一次没涨就停」。N 可在设置里调整（默认 10）。
+ * 「一次没涨就停」。N 可在设置里调整（默认 5）。
  */
 export const STAGNANT_LIMIT_MIN = 1;
-export const STAGNANT_LIMIT_MAX = 50;
-export const STAGNANT_LIMIT_DEFAULT = 10;
+export const STAGNANT_LIMIT_MAX = 5;
+export const STAGNANT_LIMIT_DEFAULT = 5;
 
 export function normalizeStagnantLimit(value) {
   const n = Number(value);

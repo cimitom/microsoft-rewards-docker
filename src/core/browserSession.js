@@ -30,18 +30,32 @@ export function sessionFilePath(accountId) {
   return path.join(SESSION_DIR, `${safeAccountId(accountId)}.json`);
 }
 
+function cookieValue(cookie = '', name = '') {
+  const pattern = new RegExp(`(?:^|[;\\s])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=([^;\\r\\n]*)`, 'i');
+  const match = String(cookie || '').match(pattern);
+  return match ? match[1].trim() : '';
+}
+
 /**
- * 账号凭据指纹：Cookie 或 Token 一旦变化（换账号、重新登录），指纹就变，
- * 旧会话随即失效。
+ * 账号身份指纹：只使用稳定的网页身份字段。
+ *
+ * OAuth 的 accessToken / refreshToken 会周期性轮换，authCodeUrl 也是一次性值，
+ * 绝不能放进指纹里，否则每次 Token 续期都会误判为“换了账号”，把正常的浏览器
+ * 会话丢掉，反而增加风控暴露面。
  */
 export function accountIdentityKey(acc) {
   if (!acc) return '';
   const material = [
-    acc.cookie || '',
-    acc.refreshToken || '',
-    acc.accessToken || '',
-    acc.authCodeUrl || ''
+    acc.id || '',
+    cookieValue(acc.cookie, '_U'),
+    cookieValue(acc.cookie, 'MUID'),
+    cookieValue(acc.cookie, 'WLS')
   ].join('\u0000');
+  // 极端情况下 Cookie 里没有稳定身份字段：用账号 id + 完整 Cookie 兜底，
+  // 仍不会因为 Token 轮换而失效。
+  if (!cookieValue(acc.cookie, '_U') && !cookieValue(acc.cookie, 'MUID') && !cookieValue(acc.cookie, 'WLS')) {
+    return crypto.createHash('sha256').update(`${material}\u0000${acc.cookie || ''}`).digest('hex');
+  }
   return crypto.createHash('sha256').update(material).digest('hex');
 }
 

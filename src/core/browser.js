@@ -12,7 +12,15 @@ import configManager from '../config.js';
 import { browserSlotLock } from './contextLock.js';
 import { readBrowserSession, writeBrowserSession } from './browserSession.js';
 import { SearchStagnationGuard } from './searchStagnation.js';
-import { isQuestSubtaskCompleted } from './questStatus.js';
+import {
+  isQuestSubtaskCompleted,
+  parseQuestProgress,
+  classifyQuestAction,
+  questSubtaskKey,
+  isDailyQuestSubtask,
+  isQuestSubtaskCoolingDown,
+  buildQuestSubtaskUpdate
+} from './questStatus.js';
 import { withTimeout } from '../fsUtil.js';
 import {
   PC_USER_AGENT,
@@ -340,6 +348,97 @@ class BrowserManager extends EventEmitter {
   }
 
   /**
+   * 读取 Bing 首页的登录态。这里只返回诊断信息，不修改页面。
+   */
+  async getBingLoginState(page) {
+    try {
+      return await page.evaluate(() => {
+        const userEl = document.querySelector('#id_n, #id_a, .id_name');
+        const signInBtn = document.querySelector('#id_s, #id_l, a[href*="account.live.com"], a[href*="login.live.com"]');
+        const userName = userEl ? (userEl.textContent || '').trim() : '';
+        const signInVisible = !!signInBtn;
+        return {
+          userName: userName || null,
+          signInVisible,
+          isGuest: signInVisible && !userName,
+          status: userName ? 'logged-in' : (signInVisible ? 'guest' : 'unknown'),
+          cookieHasU: /(?:^|;\s*)_U=/.test(document.cookie || '')
+        };
+      });
+    } catch {
+      return { userName: null, signInVisible: false, isGuest: false, status: 'unknown', cookieHasU: false };
+    }
+  }
+
+  /**
+   * 在指定页面执行一次真实搜索，并返回可验证的诊断结果。
+   *
+   * 关键点：必须确认页面真的进入了 /search 结果页，而不是只在首页输入了文字。
+   * 这类“输入成功但没提交”的情况正是搜索不计分的常见来源。
+   */
+  async performHumanSearch(page, options = {}) {
+    const {
+      query = '',
+      navigateHome = true,
+      allowExistingQuery = true,
+      logAccountName = ''
+    } = options;
+    if (!page) throw new Error('搜索页面未就绪');
+
+    if (navigateHome) {
+      await page.goto('https://cn.bing.com', { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await this.delay(rewardsApi.randomRange(1000, 1800));
+    }
+
+    const login = await this.getBingLoginState(page);
+    if (login.isGuest) {
+      logger.log('🟡', '必应搜索页显示未登录（游客态），本次搜索不会累计 Rewards 积分', '', logAccountName);
+    } else if (login.userName) {
+      logger.log('👤', `必应搜索登录态确认: ${login.userName}`, '', logAccountName);
+    }
+
+    const currentUrl = String(page.url() || '');
+    const hasExistingQuery = allowExistingQuery && /\/search\?/i.test(currentUrl) && /[?&]q=/i.test(currentUrl);
+
+    if (!hasExistingQuery) {
+      if (!query) throw new Error('缺少搜索关键词');
+      const searchInputSelector = '#sb_form_q';
+      await page.waitForSelector(searchInputSelector, { timeout: 10000 });
+      await page.click(searchInputSelector);
+      await this.delay(200);
+      await page.fill(searchInputSelector, '');
+      for (const char of query) {
+        await page.type(searchInputSelector, char, { delay: rewardsApi.randomRange(50, 110) });
+      }
+      await this.delay(350);
+      await page.keyboard.press('Enter');
+    }
+
+    const submitted = await Promise.race([
+      page.waitForURL(/\/search\?/i, { timeout: 15000 }).then(() => true).catch(() => false),
+      page.waitForSelector('#b_results', { timeout: 15000 }).then(() => true).catch(() => false)
+    ]);
+    await page.waitForTimeout(rewardsApi.randomRange(2500, 4500));
+    await page.mouse.wheel(0, rewardsApi.randomRange(350, 800)).catch(() => {});
+    await this.delay(rewardsApi.randomRange(2500, 4500));
+
+    const finalUrl = String(page.url() || '');
+    const title = await page.title().catch(() => '');
+    const resultCount = await page.locator('#b_results li.b_algo, #b_results li.b_ans').count().catch(() => 0);
+    const searchSubmitted = submitted || (/\/search\?/i.test(finalUrl) && /[?&]q=/i.test(finalUrl));
+
+    return {
+      success: searchSubmitted,
+      query,
+      finalUrl,
+      title,
+      resultCount,
+      searchSubmitted,
+      login
+    };
+  }
+
+  /**
    * 单次测试搜索 (仅搜 1 次，检验按键输入流与积分变化，完全安全无冷冻风险)
    */
   async singleTestSearch(acc) {
@@ -361,9 +460,6 @@ class BrowserManager extends EventEmitter {
         lastAction: '正在访问微软必应首页 (cn.bing.com)...'
       });
 
-      await page.goto('https://cn.bing.com', { waitUntil: 'domcontentloaded', timeout: 25000 });
-      await this.delay(1500);
-
       const query = await rewardsApi.getHotSearchWord();
       this.updateState({
         status: 'typing',
@@ -375,33 +471,18 @@ class BrowserManager extends EventEmitter {
 
       logger.log('⌨️', `拟人键盘打字检索: "${query}"`, '', accName);
 
-      const searchInputSelector = '#sb_form_q';
-      await page.waitForSelector(searchInputSelector, { timeout: 10000 });
-      await page.click(searchInputSelector);
-      await this.delay(300);
-
-      // 模拟人类真实打字延迟 (每个字符 60~120ms)
-      for (const char of query) {
-        await page.type(searchInputSelector, char, { delay: rewardsApi.randomRange(60, 120) });
-      }
-      await this.delay(500);
-
-      // 模拟回车提交搜索
       this.updateState({
         status: 'dwelling',
-        lastAction: `按下 Enter 提交搜索，等待搜索结果渲染...`
+        lastAction: '按下 Enter 提交搜索，等待真实搜索结果页...'
       });
-      await page.keyboard.press('Enter');
-
-      // 等待搜索结果页面渲染
-      await page.waitForTimeout(3500);
-
-      // 模拟鼠标滚轮向下浏览
-      this.updateState({
-        lastAction: `模拟鼠标滚轮向下浏览搜索结果...`
+      const searchResult = await this.performHumanSearch(page, {
+        query,
+        navigateHome: true,
+        logAccountName: accName
       });
-      await page.mouse.wheel(0, rewardsApi.randomRange(300, 700));
-      await this.delay(3000);
+      if (!searchResult.searchSubmitted) {
+        throw new Error('搜索未进入 Bing 结果页，无法确认搜索已提交');
+      }
 
       logger.log('✅', `单次搜索完成，正在验证积分与配额...`, '', accName);
       await this.commitBrowserSession();
@@ -410,7 +491,8 @@ class BrowserManager extends EventEmitter {
       return {
         success: true,
         query,
-        message: `单次搜索已成功完成！检索词: "${query}"`
+        message: `单次搜索已提交！检索词: "${query}"，是否计分以官网进度为准`,
+        searchResult
       };
     } catch (e) {
       logger.log('🔴', `单次测试搜索失败: ${e.message}`, '', accName);
@@ -425,12 +507,21 @@ class BrowserManager extends EventEmitter {
    */
   async runPacedSearch(acc, neededPoints, options = {}) {
     const accName = acc?.name || '当前账号';
-    const { onProgress = null, probeProgress = null, stagnantLimit = 10 } = options;
+    const {
+      onProgress = null,
+      probeProgress = null,
+      stagnantLimit = 5,
+      initialProgress = null,
+      probeDelayMs = 12000
+    } = options;
     const totalSearches = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
 
     // 停滞保护：连续 N 次搜索官网进度都不涨，说明搜索额度已到顶或账号正在被限流，
     // 继续搜只会白白增加风控暴露面。达到阈值就主动停手，把本轮当部分完成收尾。
     const stagnation = new SearchStagnationGuard(stagnantLimit);
+    if (Number.isFinite(Number(initialProgress))) {
+      stagnation.observe(Number(initialProgress));
+    }
 
     // 全局搜索节奏（配置中心「任务与防风控」→ 搜索节奏设置）
     const cfg = configManager.get();
@@ -458,6 +549,8 @@ class BrowserManager extends EventEmitter {
     this.shouldStop = false;
     let completed = 0;
     let stoppedByStagnation = false;
+    let lastOfficialProgress = Number.isFinite(Number(initialProgress)) ? Number(initialProgress) : null;
+    let lastSearchResult = null;
 
     try {
       const { browser, context } = await this.launchBrowser(acc);
@@ -483,28 +576,6 @@ class BrowserManager extends EventEmitter {
           lastAction: `[第 ${completed}/${totalSearches} 轮] 正在打开必应主页...`
         });
 
-        await page.goto('https://cn.bing.com', { waitUntil: 'domcontentloaded', timeout: 25000 });
-        await this.delay(rewardsApi.randomRange(1000, 2000));
-
-        // 第一轮搜索前检测必应页面登录态，未登录时明确提示，避免空跑游客搜索
-        if (i === 0) {
-          try {
-            const loginState = await page.evaluate(() => {
-              const userEl = document.querySelector('#id_n, #id_a, .id_name');
-              const signInBtn = document.querySelector('#id_s, #id_l, a[href*="account.live.com"], a[href*="login.live.com"]');
-              return {
-                userName: userEl ? (userEl.textContent || '').trim() : null,
-                isGuest: !!signInBtn && !userEl
-              };
-            });
-            if (loginState.isGuest) {
-              logger.log('🟡', `账号 [${accName}] 打开必应搜索时未检测到登录身份（页面显示“登录”按钮），搜索可能无法累计积分！建议检查 Cookie 是否包含完整 _U 与会话标头`, '', accName);
-            } else if (loginState.userName) {
-              logger.log('👤', `必应搜索登录态确认: ${loginState.userName}`, accName);
-            }
-          } catch {}
-        }
-
         this.updateState({
           status: 'typing',
           lastAction: `[第 ${completed}/${totalSearches} 轮] 正在模拟真人键盘键入: "${query}"...`
@@ -512,53 +583,62 @@ class BrowserManager extends EventEmitter {
 
         logger.log('🔍', `[搜索 ${completed}/${totalSearches}] 键入关键词: "${query}"`, '', accName);
 
-        const searchInputSelector = '#sb_form_q';
-        await page.waitForSelector(searchInputSelector, { timeout: 10000 });
-        await page.click(searchInputSelector);
-        await this.delay(200);
-
-        for (const char of query) {
-          await page.type(searchInputSelector, char, { delay: rewardsApi.randomRange(50, 110) });
-        }
-        await this.delay(400);
-
         this.updateState({
           status: 'dwelling',
           lastAction: `[第 ${completed}/${totalSearches} 轮] 按下 Enter，浏览搜索结果中...`
         });
-
-        await page.keyboard.press('Enter');
-        await page.waitForTimeout(rewardsApi.randomRange(3000, 6000));
-
-        // 模拟浏览结果滚轮
-        await page.mouse.wheel(0, rewardsApi.randomRange(350, 800));
-        await this.delay(rewardsApi.randomRange(3000, 5000));
-
-        // 每完成一次搜索就回调一次，让 WebUI 实时看到进度增长
-        if (typeof onProgress === 'function') {
-          try {
-            onProgress(completed, totalSearches);
-          } catch {}
+        lastSearchResult = await this.performHumanSearch(page, {
+          query,
+          navigateHome: true,
+          logAccountName: accName
+        });
+        if (!lastSearchResult.searchSubmitted) {
+          logger.log('🟡', `第 ${completed}/${totalSearches} 次搜索没有进入结果页，本轮停止继续搜索`, '', accName);
+          stoppedByStagnation = true;
+          break;
         }
 
-        // 停滞保护：探测官网真实进度，连续 N 次不涨就停手
-        if (typeof probeProgress === 'function' && i < totalSearches - 1) {
-          let official = null;
+        // 给微软计分系统留出异步写入时间，再读官网真实进度。
+        await this.delay(Math.max(5000, Number(probeDelayMs) || 12000));
+        let official = null;
+        if (typeof probeProgress === 'function') {
           try {
             official = await probeProgress();
           } catch {}
+        }
+
+        let delta = 0;
+        if (Number.isFinite(Number(official))) {
+          official = Number(official);
+          if (lastOfficialProgress === null) {
+            lastOfficialProgress = official;
+          } else {
+            delta = official - lastOfficialProgress;
+            lastOfficialProgress = official;
+          }
           const result = stagnation.observe(official);
           if (result.stagnant) {
             stoppedByStagnation = true;
             logger.log(
               '🛑',
-              `连续 ${result.stagnantCount} 次搜索官网进度没有增加（停留在 ${result.bestProgress} 分），判定搜索额度已到顶，主动停止本轮搜索以免触发风控`,
+              `连续 ${result.stagnantCount} 次搜索官网进度没有增加（停留在 ${result.bestProgress} 分），判定搜索额度已到顶或账号搜索未计分，主动停止本轮搜索以免继续空跑`,
               '',
               accName
             );
-            break;
           }
         }
+
+        // 进度只回调官网读数；读不到时传 null，绝不按“每次 +3”伪造增长。
+        if (typeof onProgress === 'function') {
+          try {
+            onProgress(completed, totalSearches, {
+              officialProgress: Number.isFinite(Number(official)) ? Number(official) : null,
+              delta,
+              searchResult: lastSearchResult
+            });
+          } catch {}
+        }
+        if (stoppedByStagnation) break;
 
         // 如果已经是最后一次，不等待
         if (i === totalSearches - 1) break;
@@ -582,11 +662,16 @@ class BrowserManager extends EventEmitter {
       await this.commitBrowserSession();
       await this.closeBrowser();
       if (stoppedByStagnation) {
-        logger.log('🛑', `账号 [${accName}] 因进度停滞提前结束，本轮共执行 ${completed} 次检索（未打满的额度留到下一轮）`, '', accName);
+        logger.log('🛑', `账号 [${accName}] 因官网进度停滞结束，本轮共执行 ${completed} 次检索（未打满的额度留到下一轮）`, '', accName);
       } else {
         logger.log('🎉', `账号 [${accName}] 拟人平缓搜索完成！共执行 ${completed} 次检索`, '', accName);
       }
-      return completed;
+      return {
+        completed,
+        officialProgress: lastOfficialProgress,
+        stoppedByStagnation,
+        lastSearchResult
+      };
     } catch (e) {
       logger.log('🔴', `拟人搜索流程发生异常: ${e.message}`, '', accName);
       await this.closeBrowser();
@@ -597,6 +682,158 @@ class BrowserManager extends EventEmitter {
   stop() {
     this.shouldStop = true;
     this.updateState({ status: 'stopped', lastAction: '正在中止浏览器任务...' });
+  }
+
+  /**
+   * 扫描打孔卡页面上的子任务。
+   * 返回稳定的动作类型、进度和冷却判断所需信息。
+   */
+  async scanQuestSubtasks(page) {
+    const rawItems = await page.evaluate(() => {
+      const headings = [...document.querySelectorAll('h3')].filter(h => {
+        const t = (h.innerText || '').trim();
+        return t && !t.includes('条款和条件') && !t.includes('Terms');
+      });
+      const items = [];
+      for (let i = 0; i < headings.length; i++) {
+        const h = headings[i];
+        let container = h;
+        for (let depth = 0; depth < 8 && container?.parentElement; depth++) {
+          container = container.parentElement;
+          if (container === document.body) break;
+          if (container.querySelectorAll('h3').length > 1) break;
+          if (container.querySelectorAll('a[href], button').length > 0) break;
+        }
+        if (!container) continue;
+
+        const rawText = container.innerText || '';
+        const hasSuccessIcon = !!container.querySelector(
+          '[class*="bg-statusSuccessRewardsBg"], [class*="statusSuccessRewards"], [data-testid*="complete" i]'
+        );
+        const hasEmptyCircle = !!container.querySelector('[class*="border-ctrlChoiceBaseStrokeRest"]');
+        const hasLockIcon = !!container.querySelector('[class*="Lock"], [class*="lock"], [aria-label*="锁定"], [aria-label*="Locked"]');
+        const links = [...container.querySelectorAll('a[href], button')].filter(a => {
+          if (a.closest('header') || a.closest('footer')) return false;
+          const href = a.getAttribute('href') || '';
+          if (/\/account\/general|\/rewards\/about|\/rewards\/faq|\/rewards\/redeem/i.test(href)) return false;
+          return true;
+        });
+        if (links.length === 0) continue;
+
+        const link = links[0];
+        const disabled = link.getAttribute('aria-disabled') === 'true'
+          || link.getAttribute('data-disabled') === 'true'
+          || link.disabled === true;
+        link.setAttribute('data-msr-subtask', String(i + 1));
+        items.push({
+          index: i + 1,
+          title: (h.innerText || '').trim(),
+          actionText: (link.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+          href: link.getAttribute('href') || '',
+          tag: link.tagName,
+          rawText,
+          hasSuccessIcon,
+          hasEmptyCircle,
+          hasLockIcon,
+          disabled
+        });
+      }
+      return items;
+    });
+
+    return (rawItems || []).map(item => {
+      const progress = parseQuestProgress(item.rawText);
+      const kind = classifyQuestAction(item);
+      const completed = isQuestSubtaskCompleted(item);
+      const locked = item.disabled || item.hasLockIcon;
+      return {
+        ...item,
+        progress,
+        kind,
+        completed,
+        locked,
+        key: questSubtaskKey({
+          href: item.href,
+          title: item.title,
+          actionText: item.actionText,
+          kind
+        })
+      };
+    });
+  }
+
+  /**
+   * 执行一个打孔卡子任务。
+   *
+   * 搜索类动作必须真正提交一次 Bing 搜索；外部浏览类动作只做安全的停留和滚动。
+   * 函数不判断是否完成，完成与否统一由调用方回读页面进度决定。
+   */
+  async executeQuestSubtaskAction(context, page, quest, target, accName = '') {
+    const beforeUrl = String(page.url() || '');
+    const popupPromise = context.waitForEvent('page', { timeout: 7000 }).catch(() => null);
+    let clicked = false;
+    try {
+      await page.click(`[data-msr-subtask="${target.index}"]`, { timeout: 8000 });
+      clicked = true;
+    } catch (e) {
+      if (target.href && /^https?:\/\//i.test(target.href)) {
+        const fallback = await context.newPage().catch(() => null);
+        if (fallback) {
+          await fallback.goto(target.href, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+          await this.delay(rewardsApi.randomRange(2500, 4500));
+          await fallback.close().catch(() => {});
+          clicked = true;
+        }
+      }
+      if (!clicked) throw e;
+    }
+
+    const popup = await Promise.race([popupPromise, this.delay(2500).then(() => null)]);
+    let landingPage = popup || null;
+    if (!landingPage) {
+      const afterUrl = String(page.url() || '');
+      if (afterUrl !== beforeUrl) landingPage = page;
+    }
+    if (landingPage) {
+      await landingPage.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
+      await this.delay(rewardsApi.randomRange(1500, 2500));
+    }
+
+    let searchResult = null;
+    if (target.kind === 'search') {
+      let searchPage = landingPage;
+      const landingUrl = String(searchPage?.url?.() || '');
+      const isBing = /^https?:\/\/(?:[^/]+\.)?bing\.com\//i.test(landingUrl);
+      if (!searchPage || !isBing) {
+        searchPage = await this.createPage(context);
+        await searchPage.goto('https://cn.bing.com', { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await this.delay(1200);
+      }
+      const query = await rewardsApi.getHotSearchWord();
+      searchResult = await this.performHumanSearch(searchPage, {
+        query,
+        navigateHome: false,
+        allowExistingQuery: true,
+        logAccountName: accName
+      });
+      await this.delay(rewardsApi.randomRange(5000, 8000));
+      if (searchPage !== page && !searchPage.isClosed?.()) {
+        await searchPage.close().catch(() => {});
+      }
+    } else if (landingPage) {
+      await landingPage.mouse.wheel(0, rewardsApi.randomRange(350, 800)).catch(() => {});
+      await this.delay(rewardsApi.randomRange(3500, 6000));
+      if (landingPage !== page && !landingPage.isClosed?.()) {
+        await landingPage.close().catch(() => {});
+      }
+    } else {
+      await this.delay(rewardsApi.randomRange(2500, 4000));
+    }
+
+    // 回到打孔卡页面，等待官网写入状态后再由调用方扫描。
+    await page.goto(quest.url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    await this.delay(rewardsApi.randomRange(2500, 4500));
+    return { searchResult };
   }
 
   /**
@@ -612,11 +849,12 @@ class BrowserManager extends EventEmitter {
   async runQuestPunchCards(acc, quests = []) {
     const accName = acc?.name || '当前账号';
     const pending = (quests || []).filter(q => q && !q.done);
-    if (pending.length === 0) return { attempted: 0, completed: 0, details: [] };
+    if (pending.length === 0) return { attempted: 0, completed: 0, details: [], subtaskUpdates: {} };
 
     let attempted = 0;
     let completed = 0;
     const completedSteps = [];
+    const subtaskUpdates = {};
 
     try {
       this.shouldStop = false;
@@ -639,159 +877,100 @@ class BrowserManager extends EventEmitter {
           const pageTitle = (await page.title().catch(() => '')) || questName;
           const displayName = pageTitle.replace(/\s*[–-]\s*Microsoft Rewards\s*$/i, '').trim() || questName;
 
-          // 循环扫描并执行该打孔卡当前所有可用且未完成的子任务
+          const runtimeState = quest.runtimeState && typeof quest.runtimeState === 'object'
+            ? quest.runtimeState
+            : {};
+          const attemptedThisRun = new Set();
           let roundAttempted = 0;
-          const clickedUrls = new Set();
 
-          while (!this.shouldStop) {
-            // 提取该打孔卡内当前所有未完成、已解锁的子活动列表
-            const scannedSubtasks = await page.evaluate(() => {
-              const headings = [...document.querySelectorAll('h3')].filter(h => {
-                const t = h.innerText.trim();
-                return t && !t.includes('条款和条件') && !t.includes('Terms');
-              });
-              const items = [];
-              for (let i = 0; i < headings.length; i++) {
-                const h = headings[i];
-                let container = h;
-                while (container && container.parentElement && !container.parentElement.className.includes('grid') && container.parentElement.tagName !== 'MAIN') {
-                  if (container.querySelector && container.querySelectorAll('h3').length === 1 && container.parentElement.querySelectorAll('h3').length > 1) {
-                    break;
-                  }
-                  container = container.parentElement;
-                }
-                const rawText = container?.innerText || '';
-                const hasSuccessIcon = !!container?.querySelector(
-                  '[class*="bg-statusSuccessRewardsBg"], [class*="statusSuccessRewards"], [data-testid*="complete" i]'
-                );
-                const hasEmptyCircle = !!container?.querySelector('[class*="border-ctrlChoiceBaseStrokeRest"]');
-
-                const links = [...(container?.querySelectorAll('a[href], button') || [])].filter(a => {
-                  const disabled = a.getAttribute('aria-disabled') === 'true' || a.getAttribute('data-disabled') === 'true' || a.disabled;
-                  if (disabled) return false;
-                  const href = a.getAttribute('href') || '';
-                  if (/\/account\/general|\/rewards\/about|\/rewards\/faq|\/rewards\/redeem/i.test(href)) return false;
-                  if (a.closest('header') || a.closest('footer')) return false;
-                  return true;
-                });
-
-                if (links.length > 0) {
-                  const link = links[0];
-                  link.setAttribute('data-msr-subtask', String(i + 1));
-                  items.push({
-                    index: i + 1,
-                    title: h.innerText.trim(),
-                    text: (link.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40),
-                    href: link.getAttribute('href') || '',
-                    tag: link.tagName,
-                    rawText,
-                    hasSuccessIcon,
-                    hasEmptyCircle
-                  });
-                }
-              }
-              return items;
+          while (!this.shouldStop && roundAttempted < 20) {
+            const subtasks = await this.scanQuestSubtasks(page);
+            const progressScoreBefore = subtasks.reduce((sum, item) => sum + Number(item.progress?.progress || 0), 0);
+            const target = subtasks.find(item => {
+              if (item.completed || item.locked) return false;
+              if (attemptedThisRun.has(item.key)) return false;
+              if (isQuestSubtaskCoolingDown(runtimeState[item.key])) return false;
+              return true;
             });
-            const subtasks = scannedSubtasks.filter(item => !isQuestSubtaskCompleted(item));
 
-            // 寻找下一个尚未点击的子任务
-            const target = subtasks.find(s => !clickedUrls.has(s.href || s.text || s.title));
             if (!target) {
               if (roundAttempted === 0) {
-                logger.log('💤', `打孔卡「${displayName}」当前无待做任务或已全部完成，跳过`, '', accName);
+                logger.log('💤', `打孔卡「${displayName}」当前无待做任务、已全部完成或在冷却中，跳过`, '', accName);
               }
               break;
             }
 
             roundAttempted++;
             attempted++;
-            const keyId = target.href || target.text || target.title;
-            clickedUrls.add(keyId);
-
-            const stepLabel = target.title || target.text || `第 ${target.index} 项`;
-            logger.log('🧩', `执行打孔卡「${displayName}」子任务 [${target.index}]: ${stepLabel} (${target.text})`, '', accName);
+            attemptedThisRun.add(target.key);
+            const stepLabel = target.title || target.actionText || `第 ${target.index} 项`;
+            const progressBefore = target.progress?.progress ?? null;
+            logger.log(
+              '🧩',
+              `执行打孔卡「${displayName}」子任务 [${target.index}]: ${stepLabel} (${target.actionText}, ${target.kind})`,
+              '',
+              accName
+            );
             this.updateState({
               status: 'dwelling',
               lastAction: `正在完成打孔卡子任务: ${stepLabel}`
             });
 
-            const beforeUrl = page.url();
-            const newPagePromise = context.waitForEvent('page', { timeout: 6000 }).catch(() => null);
-
-            const isActivate = /activate|激活/i.test(target.text) || /activate/i.test(target.title);
-
+            let actionResult = {};
             try {
-              await page.click(`[data-msr-subtask="${target.index}"]`, { timeout: 8000 });
-            } catch {
-              if (target.href && /^https?:\/\//i.test(target.href)) {
-                const tempPage = await context.newPage().catch(() => null);
-                if (tempPage) {
-                  await tempPage.goto(target.href, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
-                  await this.delay(rewardsApi.randomRange(3000, 5000));
-                  await tempPage.mouse.wheel(0, rewardsApi.randomRange(300, 600)).catch(() => {});
-                  await this.delay(rewardsApi.randomRange(1500, 2500));
-                  await tempPage.close().catch(() => {});
-                }
-              }
+              actionResult = await this.executeQuestSubtaskAction(context, page, quest, target, accName);
+            } catch (e) {
+              logger.log('🟡', `打孔卡子任务操作失败: ${stepLabel}：${e.message}`, '', accName);
             }
 
-            const newPage = await Promise.race([newPagePromise, this.delay(2500).then(() => null)]);
-            if (newPage) {
-              await newPage.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
-              await this.delay(rewardsApi.randomRange(3500, 6000));
-              await newPage.mouse.wheel(0, rewardsApi.randomRange(350, 800)).catch(() => {});
-              await this.delay(rewardsApi.randomRange(2000, 3500));
-              await newPage.close().catch(() => {});
+            // 回读页面后再判断，点击/新标签页本身不算完成。
+            const afterSubtasks = await this.scanQuestSubtasks(page);
+            const afterTarget = afterSubtasks.find(item => item.key === target.key)
+              || afterSubtasks.find(item => item.title === target.title && item.kind === target.kind);
+            const progressScoreAfter = afterSubtasks.reduce((sum, item) => sum + Number(item.progress?.progress || 0), 0);
+            const progressAfter = afterTarget?.progress?.progress ?? (progressScoreAfter > progressScoreBefore ? progressScoreAfter : null);
+            const advanced = !!afterTarget && (
+              afterTarget.completed
+              || (progressBefore !== null && progressAfter !== null && progressAfter > progressBefore)
+            ) || progressScoreAfter > progressScoreBefore;
+            const activated = target.kind === 'activate' && !!afterTarget && afterTarget.kind !== 'activate';
+            const daily = isDailyQuestSubtask(target);
+            const cooldownMs = advanced
+              ? (daily ? 24 * 60 * 60 * 1000 : 0)
+              : (target.kind === 'search' ? 24 * 60 * 60 * 1000 : (target.kind === 'visit' ? 2 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000));
+            const result = advanced ? 'advanced' : (activated ? 'activated' : 'no-change');
+            subtaskUpdates[target.key] = buildQuestSubtaskUpdate({
+              previous: runtimeState[target.key] || null,
+              result,
+              progressBefore,
+              progressAfter,
+              cooldownMs
+            });
+
+            if (advanced) {
               completed++;
               completedSteps.push({
                 questId: quest.questId,
                 title: displayName,
                 stepName: stepLabel,
-                at: Date.now()
+                at: Date.now(),
+                progressAfter,
+                kind: target.kind,
+                verified: true
               });
-              logger.log('✅', `打孔卡「${displayName}」子任务已完成: ${stepLabel}`, '', accName);
-              await this.delay(rewardsApi.randomRange(2000, 4000));
+              logger.log('✅', `打孔卡「${displayName}」子任务官网已确认: ${stepLabel}`, '', accName);
+            } else if (activated) {
+              logger.log('✅', `打孔卡「${displayName}」已激活，继续检查是否出现搜索任务`, '', accName);
             } else {
-              let landedUrl = '';
-              try { landedUrl = String(page.url() || ''); } catch {}
-
-              if (landedUrl !== beforeUrl && !landedUrl.includes(quest.questId)) {
-                // 同标签页跳转到了外部任务页
-                await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
-                await this.delay(rewardsApi.randomRange(3500, 6000));
-                await page.mouse.wheel(0, rewardsApi.randomRange(350, 800)).catch(() => {});
-                await this.delay(rewardsApi.randomRange(2000, 3500));
-                // 导航回打孔卡原页面，准备继续下一个子任务
-                await page.goto(quest.url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-                await this.delay(2000);
-                completed++;
-                completedSteps.push({
-                  questId: quest.questId,
-                  title: displayName,
-                  stepName: stepLabel,
-                  at: Date.now()
-                });
-                logger.log('✅', `打孔卡「${displayName}」子任务已完成: ${stepLabel}`, '', accName);
-                await this.delay(rewardsApi.randomRange(2000, 4000));
-              } else if (isActivate) {
-                // 站内激活操作：等待状态写入后刷新校验
-                await this.delay(3000);
-                await page.reload({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
-                await this.delay(2000);
-                completed++;
-                completedSteps.push({
-                  questId: quest.questId,
-                  title: displayName,
-                  stepName: '激活任务 (Activate quest)',
-                  at: Date.now()
-                });
-                logger.log('✅', `打孔卡「${displayName}」活动激活成功`, '', accName);
-                await this.delay(rewardsApi.randomRange(2000, 3500));
-              } else {
-                // 既无新标签页也无跳转且非激活：平缓等待
-                await this.delay(2500);
-              }
+              logger.log(
+                '🟡',
+                `打孔卡「${displayName}」子任务已尝试但官网未变化，已进入冷却: ${stepLabel}`,
+                '',
+                accName
+              );
             }
+
+            await this.delay(rewardsApi.randomRange(1500, 3000));
           }
         } catch (e) {
           logger.log('🟡', `打孔卡「${questName}」处理失败: ${e.message}`, '', accName);
@@ -805,7 +984,7 @@ class BrowserManager extends EventEmitter {
       await this.closeBrowser();
     }
 
-    return { attempted, completed, details: completedSteps };
+    return { attempted, completed, details: completedSteps, subtaskUpdates };
   }
 
   /**

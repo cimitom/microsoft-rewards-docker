@@ -52,7 +52,7 @@ const DEFAULT_CONFIG = {
     dailySet: true,
     searchIntervalSec: 180, // 全局搜索节奏：每次搜索基础间隔（秒）
     searchJitterSec: 30,    // 全局搜索节奏：每次随机浮动（±秒）
-    searchStagnantLimit: 10, // 停滞保护：连续多少次搜索官网进度不涨就主动停手
+    searchStagnantLimit: 5, // 停滞保护：连续多少次搜索官网进度不涨就主动停手
     searchApi: 'baidu.official', // 'offline' | 'baidu.official' | 'hot.nntool.cc' | 'hot.cnxiaobai.com'
     searchEngineMode: 'browser', // 'browser' (Playwright 真机拟人) | 'http' (轻量HTTP)
     accountGapSec: 180, // 多账号自动化连续执行时的安全隔离间隔（秒，默认 180 秒即 3 分钟）
@@ -334,6 +334,11 @@ class ConfigManager {
         order,
         timeSlot
       };
+      if (cfg.accounts[idx].enabled === false) {
+        if (!cfg.accounts[idx].pausedAt) cfg.accounts[idx].pausedAt = Date.now();
+      } else {
+        delete cfg.accounts[idx].pausedAt;
+      }
     } else {
       const newIdx = cfg.accounts.length;
       let timeSlot = accountData.timeSlot || this.getDefaultTimeSlot(newIdx);
@@ -352,6 +357,7 @@ class ConfigManager {
         name: name || `账号 ${newIdx + 1}`,
         order,
         enabled: accountData.enabled !== false,
+        pausedAt: accountData.enabled === false ? Date.now() : undefined,
         cookie: accountData.cookie || '',
         authCodeUrl: accountData.authCodeUrl || '',
         refreshToken: accountData.refreshToken || '',
@@ -364,6 +370,25 @@ class ConfigManager {
 
     this.save();
     return this.getAccount(id);
+  }
+
+  /**
+   * 暂停/恢复账号。
+   *
+   * 暂停只改变自动执行开关，绝不清理 Cookie、Token、统计或浏览器会话。
+   * 手动体检与手动刷新进度由调用方显式允许，不属于这里的自动执行范围。
+   */
+  setAccountEnabled(accountId, enabled) {
+    const acc = this.findAccount(accountId);
+    if (!acc) return null;
+    acc.enabled = !!enabled;
+    if (acc.enabled) {
+      delete acc.pausedAt;
+    } else {
+      acc.pausedAt = Date.now();
+    }
+    this.save();
+    return acc;
   }
 
   deleteAccount(accountId) {
@@ -499,6 +524,11 @@ class ConfigManager {
             }
             // 去掉 getPublicConfig() 附加的 hasXxx 派生标记，避免污染落盘配置
             delete merged[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`];
+          }
+          if (merged.enabled === false) {
+            if (!merged.pausedAt) merged.pausedAt = Date.now();
+          } else {
+            delete merged.pausedAt;
           }
           return merged;
         });
