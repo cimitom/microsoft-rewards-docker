@@ -759,11 +759,23 @@ export class EpicManager {
     let state = await this.waitForPageState(page, ['product', 'owned', 'login'], 8000);
     if (state.state !== 'challenge' && state.state !== 'unknown') return state;
 
-    // Epic 的验证层有时是覆盖在结账界面上的 UI 层。ESC 是用户实测有效的兜底路径，
-    // 但只在仍处于挑战状态时尝试一次，避免影响正常页面。
-    this.updateState({ lastAction: '验证层仍未消失，尝试关闭覆盖层后继续...' });
+    // Epic 的验证层有时是覆盖在结账界面上的 UI 层。先尝试关闭覆盖层，
+    // 再给用户留出在 noVNC 中手动完成验证的时间。
+    this.updateState({ lastAction: '验证层仍未消失，尝试关闭覆盖层...' });
     await page.keyboard.press('Escape').catch(() => {});
-    state = await this.waitForPageState(page, ['product', 'owned', 'login'], 12000);
+    await this.delay(1000);
+
+    const retryBtn = page.getByRole('button', { name: /TRY AGAIN|重试/i }).first();
+    if (await retryBtn.count().catch(() => 0) > 0 && await retryBtn.isVisible().catch(() => false)) {
+      await retryBtn.click({ timeout: 5000, noWaitAfter: true }).catch(() => {});
+      await this.delay(1500);
+    }
+
+    const waitSec = Math.max(10, Math.min(600, Number(process.env.EPIC_CHALLENGE_WAIT_SEC) || 90));
+    this.updateState({
+      lastAction: `等待人工完成 Epic 人机验证（最多 ${waitSec} 秒），请打开可见浏览器操作`
+    });
+    state = await this.waitForPageState(page, ['product', 'owned', 'login'], waitSec * 1000);
     return state;
   }
 
@@ -1233,6 +1245,19 @@ export class EpicManager {
           result.status = 'blocked';
           result.code = 'page_timeout';
           result.message = `商城商品页加载超时（当前按钮：${await this.visibleButtonTexts(page)}）`;
+          return result;
+        }
+      }
+
+      // 慢网络下“获取”按钮可能先于账号数据水合出现。短暂稳定后再点击，
+      // 避免在商城会话尚未就绪时触发 Epic 的验证错误页。
+      await this.delay(2500);
+      if (context) {
+        const authAfterLoad = await this.checkEpicAccountSession(context);
+        if (!authAfterLoad.valid && authAfterLoad.state !== 'challenge') {
+          result.code = 'auth_expired';
+          result.authValid = false;
+          result.message = authAfterLoad.message || 'Epic 登录态已失效，请重新登录';
           return result;
         }
       }

@@ -21,6 +21,8 @@ services:
       - VNC_PORT=5900
       # 登录窗口超过该分钟数未保存则自动关闭；设为 0 关闭保护
       - EPIC_LOGIN_TIMEOUT_MIN=${EPIC_LOGIN_TIMEOUT_MIN:-30}
+      # 领取遇到 Epic 人机验证时，允许在可见浏览器中人工完成的等待秒数
+      - EPIC_CHALLENGE_WAIT_SEC=${EPIC_CHALLENGE_WAIT_SEC:-90}
     volumes:
       - ./data:/app/data
     logging:

@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.13-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.14-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -181,6 +181,11 @@
   - **独立 Chromium 领取 profile**：与登录 profile 分开保存，同时按账号隔离，删除账号时一并清理；
   - **保留账号 JSON 接口预检**：领取前先确认登录态，再进入商品页，慢页面不会再触发错误的 `auth_expired`；
   - **单元测试增至 133 个**。
+- 🛡️ **Epic 人机验证人工接管与慢页面稳定 (v1.7.14)**：
+  - **验证层出现时提示人工接管**：领取遇到 Epic 人机验证会尝试关闭覆盖层/点击 `TRY AGAIN`，随后最多等待 90 秒，可在 WebUI 的「可见浏览器」中手动完成；
+  - **可配置等待时长**：通过 `EPIC_CHALLENGE_WAIT_SEC` 调整人工验证等待时间，范围 10 至 600 秒；
+  - **商品页稳定后再点击**：`获取`按钮出现后额外等待页面水合并复核账号接口，减少慢网络下过早点击触发的验证错误页；
+  - **登录态仍以账号 JSON 接口为准**，人机验证不会被误报成会话失效。
 - 🧊 **搜索真实性、打孔卡状态机与账号暂停 (v1.7.9)**：
   - **搜索进度只认官网**：删除本地“每次搜索 +3 分”和 `max(本地, 官网)` 的假进度，官网不涨就保持 0/15、0/30、0/60，不再虚报打满；
   - **搜索停滞保护收紧为 5 次**：连续 5 次官网无增长立即停止当日搜索，避免新号观察期或搜索限流时持续空跑；
