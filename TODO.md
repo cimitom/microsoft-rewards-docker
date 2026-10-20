@@ -1,5 +1,13 @@
 # 下一版本待办
 
+## 已完成于 v1.7.13
+
+- [x] Epic 登录、账号体检与免费游戏领取统一使用 Chromium + Patchright。
+- [x] 领取使用独立 Chromium profile，避免复用 Firefox 领取 profile。
+- [x] 删除 Epic 账号时同步清理 Chromium 领取 profile。
+- [x] 保留领取前的 Epic 账号 JSON 接口预检。
+- [x] 新增 v1.7.13 回归测试，测试总数 133。
+
 ## 已完成于 v1.7.12
 
 - [x] Epic 登录态改用 `/id/api/account` JSON 接口确认，不依赖慢页面的 `isloggedin`。

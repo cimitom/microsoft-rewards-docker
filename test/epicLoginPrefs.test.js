@@ -7,14 +7,22 @@ const { EPIC_FIREFOX_PREFS } = await import('../src/core/epic.js');
 const ROOT = path.resolve(import.meta.dirname, '..');
 const EPIC_SOURCE = fs.readFileSync(path.join(ROOT, 'src/core/epic.js'), 'utf-8');
 
-test('Epic 登录 Firefox 允许 hCaptcha/Talon 所需的跨站 Cookie', () => {
+test('Epic Firefox 指纹自检允许 hCaptcha/Talon 所需的跨站 Cookie', () => {
   assert.equal(EPIC_FIREFOX_PREFS['network.cookie.cookieBehavior'], 0);
   assert.equal(EPIC_FIREFOX_PREFS['network.cookie.cookieBehavior.pbmode'], 0);
   assert.equal(EPIC_FIREFOX_PREFS['privacy.trackingprotection.enabled'], false);
 });
 
-test('Epic 登录 Firefox 关闭容易在容器网络中拖慢验证码的 HTTP/3 与 IPv6', () => {
+test('Epic Firefox 指纹自检关闭容易在容器网络中拖慢验证码的 HTTP/3 与 IPv6', () => {
   assert.equal(EPIC_FIREFOX_PREFS['network.http.http3.enable'], false);
   assert.equal(EPIC_FIREFOX_PREFS['network.dns.disableIPv6'], true);
   assert.match(EPIC_SOURCE, /firefoxUserPrefs:\s*EPIC_FIREFOX_PREFS/);
+});
+
+test('Epic 登录、体检与领取统一使用 Chromium 会话', () => {
+  assert.match(EPIC_SOURCE, /profileDir:\s*loginProfile,\s*engine:\s*'chromium'/s);
+  assert.equal(
+    (EPIC_SOURCE.match(/launchPersistentContext\(acc,\s*\{\s*engine:\s*'chromium'\s*\}\)/g) || []).length,
+    2
+  );
 });

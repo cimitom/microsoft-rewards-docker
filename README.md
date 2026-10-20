@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.12-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.13-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -176,6 +176,11 @@
   - **商品页等待逻辑修复**：账号已确认登录时，遇到早期登录链接会继续等待“获取”按钮，而不是立即失败；
   - **Chromium 登录关闭 QUIC**，减少部分 NAS 网络中 QUIC 被阻断造成的额外等待；
   - **单元测试增至 132 个**。
+- 🔄 **Epic 登录、体检与领取统一 Chromium (v1.7.13)**：
+  - **领取不再切回 Firefox**：人工登录、账号体检和免费游戏领取统一使用 Chromium + Patchright，避免同一账号在两种浏览器之间出现会话与风控判定差异；
+  - **独立 Chromium 领取 profile**：与登录 profile 分开保存，同时按账号隔离，删除账号时一并清理；
+  - **保留账号 JSON 接口预检**：领取前先确认登录态，再进入商品页，慢页面不会再触发错误的 `auth_expired`；
+  - **单元测试增至 133 个**。
 - 🧊 **搜索真实性、打孔卡状态机与账号暂停 (v1.7.9)**：
   - **搜索进度只认官网**：删除本地“每次搜索 +3 分”和 `max(本地, 官网)` 的假进度，官网不涨就保持 0/15、0/30、0/60，不再虚报打满；
   - **搜索停滞保护收紧为 5 次**：连续 5 次官网无增长立即停止当日搜索，避免新号观察期或搜索限流时持续空跑；

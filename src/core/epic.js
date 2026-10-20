@@ -604,7 +604,11 @@ export class EpicManager {
    * @param {'firefox'|'chromium'} [opts.engine] 登录使用 Chromium，领取仍使用 Firefox。
    */
   async launchPersistentContext(acc, { cleanSession = false, profileDir = null, engine = 'firefox' } = {}) {
-    const dir = profileDir || epicProfilePath(acc.id);
+    const dir = profileDir || (
+      engine === 'chromium'
+        ? `${epicProfilePath(acc.id)}-chromium`
+        : epicProfilePath(acc.id)
+    );
     fs.mkdirSync(dir, { recursive: true });
     const proxy = this.getBrowserProxy();
     const headless = process.env.EPIC_VISIBLE !== '1';
@@ -622,6 +626,12 @@ export class EpicManager {
         viewport: null,
         locale: 'zh-CN',
         timezoneId: 'Asia/Shanghai',
+        ...(cleanSession ? {} : {
+          storageState: {
+            cookies: acc.storageState?.cookies || [],
+            origins: acc.storageState?.origins || []
+          }
+        }),
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -634,6 +644,9 @@ export class EpicManager {
         ],
         ...(proxy ? { proxy } : {})
       });
+      if (!cleanSession && acc.storageState?.cookies?.length) {
+        await context.addCookies(acc.storageState.cookies).catch(() => {});
+      }
       const page = context.pages()[0] || await context.newPage();
       return { context, page, engine: 'chromium' };
     }
@@ -760,7 +773,7 @@ export class EpicManager {
       checking: this.checking,
       verifying: this.verifying,
       stopRequested: this.stopRequested,
-      engine: 'firefox',
+      engine: 'chromium',
       visible: process.env.EPIC_VISIBLE === '1',
       novncPort: Number(process.env.NOVNC_PORT || 6080),
       loginWindow: {
@@ -1385,7 +1398,7 @@ export class EpicManager {
         accountName: acc.name,
         lastAction: `校验 Epic 账号「${acc.name}」...`
       });
-      const launched = await this.launchPersistentContext(acc);
+      const launched = await this.launchPersistentContext(acc, { engine: 'chromium' });
       context = launched.context;
       this.activeContext = context;
       this.activeAccountId = accountId;
@@ -1470,7 +1483,7 @@ export class EpicManager {
         if (!gotSlot) throw new Error('浏览器资源正被积分任务占用，请稍后再试');
         slotHeld = true;
         this.throwIfStopped();
-        const launched = await this.launchPersistentContext(acc);
+        const launched = await this.launchPersistentContext(acc, { engine: 'chromium' });
         context = launched.context;
         page = launched.page;
         this.activeContext = context;
