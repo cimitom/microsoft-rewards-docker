@@ -1,5 +1,13 @@
 # 下一版本待办
 
+## 已完成于 v1.7.11
+
+- [x] Epic 人工登录窗口从 Firefox 切换到 Chromium + Patchright，规避 `captcha_invalid`。
+- [x] 登录使用独立 Chromium profile，不再继承 Firefox 领取 profile 或旧会话。
+- [x] Chromium 可执行文件探测覆盖 Docker、macOS 与 Windows，并复用微软任务的浏览器路径逻辑。
+- [x] 删除 Epic 账号时同步清理 Chromium 登录 profile。
+- [x] 新增 v1.7.11 回归测试，测试总数 128。
+
 ## 已完成于 v1.7.10
 
 - [x] Bing 登录态检测：优先读取 `#id_n` / `#id_a` 的真实用户名，避免空 `.id_name` 导致 PC 搜索误报“游客态”。

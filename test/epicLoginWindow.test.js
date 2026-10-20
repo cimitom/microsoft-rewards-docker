@@ -60,24 +60,24 @@ test('未启用可见浏览器或账号不存在时拒绝打开登录窗口', as
   assert.equal(firefoxSlotLock.isBusy(), false, '被拒绝的登录请求不应残留资源锁');
 });
 
-test('登录窗口持有 Firefox 资源锁，关闭后释放', async () => {
+test('登录窗口持有浏览器资源锁，关闭后释放', async () => {
   ensureAccount();
   const { em, closed } = makeManager();
   await withVisibleBrowser(async () => {
     const res = await em.openLoginWindow(ACCOUNT_ID);
     assert.equal(res.opened, true);
     assert.equal(em.isLoginWindowOpen(), true);
-    assert.equal(firefoxSlotLock.isBusy(), true, '登录窗口打开期间必须占住 Firefox 锁');
+    assert.equal(firefoxSlotLock.isBusy(), true, '登录窗口打开期间必须占住 Epic 浏览器锁');
     assert.equal(firefoxSlotLock.tryAcquire('other-owner'), false, '其他流程不得与登录窗口抢同一个 profile');
 
     await em.closeLoginWindow();
     assert.equal(em.isLoginWindowOpen(), false);
-    assert.equal(firefoxSlotLock.isBusy(), false, '关闭登录窗口后必须释放 Firefox 锁');
+    assert.equal(firefoxSlotLock.isBusy(), false, '关闭登录窗口后必须释放 Epic 浏览器锁');
     assert.equal(closed.context, 1);
   });
 });
 
-test('登录窗口启动失败时不残留 Firefox 资源锁', async () => {
+test('登录窗口启动失败时不残留浏览器资源锁', async () => {
   ensureAccount();
   const { em } = makeManager();
   em.launchPersistentContext = async () => { throw new Error('firefox launch boom'); };
@@ -102,7 +102,8 @@ test('登录窗口使用干净会话与独立临时 profile，不注入已失效
     await em.closeLoginWindow();
   });
   assert.equal(seenOpts?.cleanSession, true, '登录必须从干净会话开始，否则会带着旧会话去登录');
-  assert.match(String(seenOpts?.profileDir || ''), /-login$/, '登录应使用独立的临时 profile，不污染领取用的 profile');
+  assert.equal(seenOpts?.engine, 'chromium', 'Epic 登录必须使用 Chromium，规避 Firefox 的 captcha_invalid 拒绝');
+  assert.match(String(seenOpts?.profileDir || ''), /-login-chromium$/, '登录应使用独立的 Chromium 临时 profile，不污染领取用的 profile');
 });
 
 test('登录窗口打开时领取与校验快速失败，而不是去抢同一个 profile', async () => {
@@ -120,7 +121,7 @@ test('登录窗口打开时领取与校验快速失败，而不是去抢同一�
   assert.equal(firefoxSlotLock.isBusy(), false);
 });
 
-test('停止 Epic 任务会关闭登录窗口并释放 Firefox 锁', async () => {
+test('停止 Epic 任务会关闭登录窗口并释放浏览器锁', async () => {
   ensureAccount();
   const { em } = makeManager();
   await withVisibleBrowser(async () => {

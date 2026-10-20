@@ -1505,7 +1505,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.10';
+  const current = updateInfo?.currentVersion || '1.7.11';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1560,8 +1560,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.10'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.10'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.11'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.11'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -3871,7 +3871,7 @@ function openEpicModal(accountId) {
   if (status) {
     status.innerText = acc
       ? (acc.hasSession
-        ? '该账号已有登录凭据。点击“打开可见浏览器登录”可在内置 Firefox 中重新登录，完成后点击保存。'
+        ? '该账号已有登录凭据。点击“打开可见浏览器登录”可在内置 Chromium 中重新登录，完成后点击保存。'
         : '该账号尚未登录。请打开可见浏览器完成 Epic 登录，然后点击“我已登录，保存凭据”。')
       : '请先填写备注名称并保存账号，之后再打开可见浏览器登录。';
   }
@@ -3962,7 +3962,7 @@ async function ensureEpicAccountSaved() {
 async function openEpicLoginWindow() {
   let accountId = document.getElementById('epic-account-name')?.dataset.accountId;
   if (!accountId) {
-    openEpicActionModal('正在准备 Epic 账号', '正在保存账号备注并准备打开 Firefox...', ['保存账号', '启动 Firefox', '打开登录页'], 0);
+    openEpicActionModal('正在准备 Epic 账号', '正在保存账号备注并准备打开 Chromium...', ['保存账号', '启动 Chromium', '打开登录页'], 0);
     startActionProgressTicker(10, 35, 8, '正在保存账号备注...');
     try {
       accountId = await ensureEpicAccountSaved();
@@ -3978,8 +3978,8 @@ async function openEpicLoginWindow() {
       return;
     }
   }
-  openEpicActionModal('正在打开 Epic 登录窗口', '正在容器内启动 Firefox 并打开 Epic 登录页...', ['启动 Firefox', '打开登录页', '等待手动登录'], 0);
-  startActionProgressTicker(15, 75, 10, '正在启动 Firefox 登录窗口...');
+  openEpicActionModal('正在打开 Epic 登录窗口', '正在容器内启动 Chromium 并打开 Epic 登录页...', ['启动 Chromium', '打开登录页', '等待手动登录'], 0);
+  startActionProgressTicker(15, 75, 10, '正在启动 Chromium 登录窗口...');
   try {
     const res = await fetch(`/api/epic/accounts/${accountId}/login-window`, { method: 'POST' }).then(r => r.json());
     stopActionProgressTicker();
@@ -4003,7 +4003,7 @@ async function openEpicLoginWindow() {
 async function saveEpicLoginWindow() {
   const accountId = document.getElementById('epic-account-name')?.dataset.accountId;
   if (!accountId) return;
-  openEpicActionModal('正在保存 Epic 登录凭据', '正在检测登录状态并保存 Firefox storageState...', ['检测登录状态', '保存 Cookie 与 profile', '关闭登录窗口'], 0);
+  openEpicActionModal('正在保存 Epic 登录凭据', '正在检测登录状态并保存 Chromium storageState...', ['检测登录状态', '保存 Cookie 与 profile', '关闭登录窗口'], 0);
   startActionProgressTicker(20, 85, 10, '正在检测 Epic 登录状态...');
   try {
     const res = await fetch(`/api/epic/accounts/${accountId}/login-window/save`, { method: 'POST' }).then(r => r.json());
@@ -4019,7 +4019,7 @@ async function saveEpicLoginWindow() {
         progress: 100,
         badge: { text: '已保存', cls: 'ok' },
         message: 'Epic 登录凭据已保存',
-        result: `已保存 ${res.data.cookieCount || 0} 条 Cookie 到内置 Firefox profile。`
+        result: `已保存 ${res.data.cookieCount || 0} 条 Cookie 到内置 Chromium profile。`
       });
     } else {
       updateEpicActionModal({

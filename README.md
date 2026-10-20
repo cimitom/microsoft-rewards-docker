@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.10-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.11-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -163,6 +163,12 @@
   - **Bing 登录态误判修复**：优先读取 `#id_n` / `#id_a` 的真实用户名，不再被空的 `.id_name` 误判为游客态；
   - **Super Duolingo 打孔卡串卡修复**：按任务卡 `href` 精确关联标题和进度，不再把 Duolingo 卡错误匹配成已完成的 FY27 月度卡；
   - **单元测试增至 126 个**。
+- 🧩 **Epic 登录改用 Chromium，规避 Firefox CAPTCHA 拒绝 (v1.7.11)**：
+  - **修复 Firefox 验证码通过后仍提示「错误回复。请刷新页面」**：Epic 账号门户会将部分 Firefox 提交的 hCaptcha 结果判为 `errors.com.epicgames.accountportal.captcha_invalid`，即使 hCaptcha 本身已返回通过；
+  - **人工登录窗口切换 Chromium + Patchright**：使用容器内 Chromium/Edge 的独立临时 profile，不再继承领取流程的 Firefox profile 或旧会话；
+  - **领取流程保持不变**：免费游戏领取仍使用 Playwright Firefox，登录成功后保存的 storageState 可正常复用；
+  - **新增 Chromium 可执行文件探测与回归测试**，删除账号时会同时清理 Chromium 登录 profile；
+  - **单元测试增至 128 个**。
 - 🧊 **搜索真实性、打孔卡状态机与账号暂停 (v1.7.9)**：
   - **搜索进度只认官网**：删除本地“每次搜索 +3 分”和 `max(本地, 官网)` 的假进度，官网不涨就保持 0/15、0/30、0/60，不再虚报打满；
   - **搜索停滞保护收紧为 5 次**：连续 5 次官网无增长立即停止当日搜索，避免新号观察期或搜索限流时持续空跑；

@@ -29,6 +29,7 @@ import {
   CHROME_MAJOR,
   buildUserAgentMetadata
 } from './fingerprint.js';
+import { findChromiumExecutable } from './chromiumExecutable.js';
 
 export function classifyBingLoginState(signals = {}) {
   const userName = [signals.idN, signals.idA, signals.idName]
@@ -72,29 +73,7 @@ class BrowserManager extends EventEmitter {
   }
 
   getExecutablePath() {
-    if (process.env.CHROMIUM_PATH && fs.existsSync(process.env.CHROMIUM_PATH)) {
-      return process.env.CHROMIUM_PATH;
-    }
-
-    const candidatePaths = [
-      // Linux (Debian/Ubuntu/Alpine)
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-      // macOS
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      // Windows
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-    ];
-
-    for (const p of candidatePaths) {
-      if (fs.existsSync(p)) return p;
-    }
-    return null;
+    return findChromiumExecutable();
   }
 
   updateState(partial) {

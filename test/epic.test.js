@@ -45,12 +45,16 @@ test('deleteEpicAccount 会一并清理账号对应的浏览器持久化 profile
     name: '待删账号'
   });
   const dir = epicProfilePath(acc.id);
+  const chromiumLoginDir = path.join(path.dirname(dir), `${acc.id}-login-chromium`);
   fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(chromiumLoginDir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'test-cookie.txt'), 'cf_clearance_dummy');
   assert.equal(fs.existsSync(dir), true);
+  assert.equal(fs.existsSync(chromiumLoginDir), true);
 
   configManager.deleteEpicAccount(acc.id);
   assert.equal(fs.existsSync(dir), false, '删除账号后持久化 profile 目录应被彻底清理');
+  assert.equal(fs.existsSync(chromiumLoginDir), false, '删除账号后 Chromium 登录 profile 也应被清理');
 });
 
 test('EpicManager 在任务进行中时拒绝校验与并发', async () => {

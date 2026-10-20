@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { firefox } from 'playwright-firefox';
+import { chromium } from 'patchright-core';
 import configManager from '../config.js';
 import logger from '../logger.js';
 import networkClient from '../network.js';
@@ -12,6 +13,7 @@ import {
   buildFirefoxUserAgent,
   evaluateFirefoxFingerprint
 } from './firefoxStealth.js';
+import { findChromiumExecutable } from './chromiumExecutable.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
@@ -101,6 +103,7 @@ export class EpicManager {
     this.activeAccountId = null;
     this.loginContext = null;
     this.loginAccountId = null;
+    this.loginEngine = null;
     this.loginSlotOwner = null;
     this.loginTimer = null;
     this.loginClosePromise = null;
@@ -218,11 +221,12 @@ export class EpicManager {
       // 登录必须从干净会话开始，并且用独立的临时 profile：
       // 旧凭据（多半已失效）混进来会让登录请求带着互相矛盾的会话，
       // 而登录窗口的使命就是建立一个全新会话。正常领取用的 profile 不受影响。
-      const loginProfile = `${epicProfilePath(accountId)}-login`;
+      const loginProfile = `${epicProfilePath(accountId)}-login-chromium`;
       fs.rmSync(loginProfile, { recursive: true, force: true });
       launched = await this.launchPersistentContext(acc, {
         cleanSession: true,
-        profileDir: loginProfile
+        profileDir: loginProfile,
+        engine: 'chromium'
       });
     } catch (e) {
       firefoxSlotLock.release(slotOwner);
@@ -230,13 +234,14 @@ export class EpicManager {
     }
     this.loginContext = launched.context;
     this.loginAccountId = accountId;
+    this.loginEngine = launched.engine || 'chromium';
     this.loginSlotOwner = slotOwner;
     this.scheduleLoginWindowTimeout();
     this.updateState({
       status: 'login_window',
       progress: 0,
       accountName: acc.name,
-      lastAction: `已打开 Epic 登录窗口，请在可见浏览器中完成登录`
+      lastAction: '已打开 Epic Chromium 登录窗口，请在可见浏览器中完成登录'
     });
     const loginUrl = 'https://www.epicgames.com/id/login?lang=zh-CN&noHostRedirect=true&redirectUrl=' + encodeURIComponent(`${STORE_BASE}/free-games`);
     await launched.page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
@@ -327,6 +332,7 @@ export class EpicManager {
     const slotOwner = this.loginSlotOwner;
     this.loginContext = null;
     this.loginAccountId = null;
+    this.loginEngine = null;
     this.loginSlotOwner = null;
     // 先释放锁，再尽力关闭浏览器。否则 Firefox 卡死时锁会永久泄漏。
     if (slotOwner) firefoxSlotLock.release(slotOwner);
@@ -453,12 +459,42 @@ export class EpicManager {
    *   登录流程必须用干净会话：拿一个多半已失效的旧凭据去登录，
    *   会让登录请求带着互相矛盾的会话，Epic 官方排障也是建议清空站点数据后重登。
    * @param {string} [opts.profileDir] 覆盖 profile 目录（登录窗口用独立的临时目录）
+   * @param {'firefox'|'chromium'} [opts.engine] 登录使用 Chromium，领取仍使用 Firefox。
    */
-  async launchPersistentContext(acc, { cleanSession = false, profileDir = null } = {}) {
+  async launchPersistentContext(acc, { cleanSession = false, profileDir = null, engine = 'firefox' } = {}) {
     const dir = profileDir || epicProfilePath(acc.id);
     fs.mkdirSync(dir, { recursive: true });
     const proxy = this.getBrowserProxy();
     const headless = process.env.EPIC_VISIBLE !== '1';
+
+    if (engine === 'chromium') {
+      const executablePath = findChromiumExecutable();
+      if (!executablePath) {
+        throw new Error('未检测到 Chromium/Edge 浏览器内核，无法打开 Epic 登录窗口');
+      }
+      const context = await chromium.launchPersistentContext(dir, {
+        executablePath,
+        headless,
+        // 可见登录窗口直接跟随 Xvfb 的 1366x768 桌面，避免 Playwright
+        // 再给内容区强制 768px 高度后把浏览器工具栏挤出屏幕底部。
+        viewport: null,
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--window-size=1366,768',
+          '--window-position=0,0'
+        ],
+        ...(proxy ? { proxy } : {})
+      });
+      const page = context.pages()[0] || await context.newPage();
+      return { context, page, engine: 'chromium' };
+    }
+
     const context = await firefox.launchPersistentContext(dir, {
       headless,
       viewport: { width: 1366, height: 768 },
@@ -486,7 +522,7 @@ export class EpicManager {
 
     const page = context.pages()[0] || await context.newPage();
     await page.setViewportSize({ width: 1366, height: 768 }).catch(() => {});
-    return { context, page };
+    return { context, page, engine: 'firefox' };
   }
 
   async readPageText(page) {
@@ -586,7 +622,8 @@ export class EpicManager {
       novncPort: Number(process.env.NOVNC_PORT || 6080),
       loginWindow: {
         open: !!this.loginContext,
-        accountId: this.loginAccountId
+        accountId: this.loginAccountId,
+        engine: this.loginEngine
       },
       runningAccountId: this.runningAccountId,
       lastRun: this.lastRun,

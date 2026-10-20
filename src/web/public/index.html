@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.7.10</span>
+            <span class="version-label" id="version-label">v1.7.11</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -1105,12 +1105,12 @@
           <input type="text" id="epic-account-name" class="form-input" placeholder="例如：主号">
         </div>
         <div class="form-group">
-          <label class="form-label">内置 Firefox 登录</label>
+          <label class="form-label">内置 Chromium 登录</label>
           <div class="epic-login-actions">
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-epic-open-login">🦊 打开可见浏览器登录</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-epic-open-login">🌐 打开可见浏览器登录</button>
             <button type="button" class="btn btn-primary btn-sm" id="btn-epic-save-login">✅ 我已登录，保存凭据</button>
           </div>
-          <small class="form-hint" id="epic-login-status">登录会在容器内的 Firefox 小窗中完成，登录凭据直接保存在该账号的持久化 profile 中，无需复制 Cookie。</small>
+          <small class="form-hint" id="epic-login-status">登录会在容器内的 Chromium 小窗中完成，登录凭据直接保存在该账号的持久化 profile 中，无需复制 Cookie。</small>
         </div>
         <div class="form-group">
           <label class="form-label">兜底：粘贴会话（可选）</label>
@@ -1136,7 +1136,7 @@
         <button class="btn-close" id="btn-close-novnc">&times;</button>
       </div>
       <div class="modal-body" style="padding: 0; flex: 1; min-height: 0;">
-        <iframe id="novnc-frame" title="Epic Firefox 可见浏览器" style="width: 100%; height: 100%; border: 0; background: #111827;"></iframe>
+        <iframe id="novnc-frame" title="Epic Chromium 可见浏览器" style="width: 100%; height: 100%; border: 0; background: #111827;"></iframe>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-refresh-novnc">🔄 刷新画面</button>

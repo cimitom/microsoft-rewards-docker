@@ -470,6 +470,7 @@ class ConfigManager {
       const profileRoot = path.join(DATA_DIR, 'epic-firefox-profiles');
       fs.rmSync(path.join(profileRoot, safeId), { recursive: true, force: true });
       fs.rmSync(path.join(profileRoot, `${safeId}-login`), { recursive: true, force: true });
+      fs.rmSync(path.join(profileRoot, `${safeId}-login-chromium`), { recursive: true, force: true });
     } catch {}
     this.save();
     return true;
