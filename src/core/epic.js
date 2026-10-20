@@ -167,12 +167,21 @@ export class EpicManager {
     const activeContext = this.activeContext;
     this.activeContext = null;
     this.activeAccountId = null;
-    await Promise.allSettled([
-      activeContext
-        ? withTimeout(Promise.resolve().then(() => activeContext.close()), this.closeTimeoutMs, '关闭 Epic 浏览器超时').catch(() => {})
-        : Promise.resolve(),
-      this.closeLoginWindow().catch(() => {})
-    ]);
+    const closeTasks = [];
+    if (activeContext) {
+      closeTasks.push(
+        withTimeout(
+          Promise.resolve().then(() => activeContext.close()),
+          this.closeTimeoutMs,
+          '关闭 Epic 浏览器超时'
+        ).catch(() => {})
+      );
+    }
+    if (this.loginContext) {
+      closeTasks.push(this.closeLoginWindow().catch(() => {}));
+    }
+    // 不等待浏览器 close()，否则 Chromium 卡住时前端要等满 15 秒还没有反馈。
+    Promise.allSettled(closeTasks).catch(() => {});
     if (!this.running && !this.checking && !this.verifying) {
       if (!hadTask) this.stopRequested = false;
       this.updateState({
@@ -182,7 +191,7 @@ export class EpicManager {
         lastAction: 'Epic 任务已停止，浏览器资源已释放'
       });
     }
-    return { stopped: true, message: '停止指令已发送，浏览器资源即将释放' };
+    return { stopped: true, message: '停止指令已执行，浏览器正在后台关闭' };
   }
 
   /** 登录窗口是否正在占用某个账号的 Firefox 持久化 profile */
@@ -1183,6 +1192,14 @@ export class EpicManager {
   }
 
   /** 领取单个游戏；status: claimed(本次领到) / owned(本来就有) / skipped(无页面) / failed */
+  async detectClaimOutcome(page) {
+    const successCount = await page.getByText(EPIC_SUCCESS_TEXT_RE).count().catch(() => 0);
+    if (successCount > 0) return { status: 'claimed', message: '领取成功' };
+    const ownedCount = await page.locator('text=已在库中').count().catch(() => 0);
+    if (ownedCount > 0) return { status: 'owned', message: '已在库中' };
+    return null;
+  }
+
   async claimSingle(page, game, context = null) {
     const result = {
       id: game.id,
@@ -1230,6 +1247,16 @@ export class EpicManager {
         pageState = await this.dismissChallengeOverlay(page);
       }
 
+      const outcomeAfterChallenge = await this.detectClaimOutcome(page);
+      if (outcomeAfterChallenge) {
+        result.ok = true;
+        result.status = outcomeAfterChallenge.status;
+        result.code = outcomeAfterChallenge.status;
+        result.authValid = true;
+        result.message = outcomeAfterChallenge.message;
+        return result;
+      }
+
       if (pageState.state === 'challenge' || pageState.state === 'unknown') {
         result.status = 'blocked';
         result.code = 'challenge';
@@ -1263,7 +1290,7 @@ export class EpicManager {
       }
 
       // 已在库中：本次无需领取
-      if (pageState.state === 'owned' || await page.locator('text=已在库中').count() > 0) {
+      if (pageState.state === 'owned') {
         result.ok = true;
         result.status = 'owned';
         result.code = 'owned';
@@ -1303,27 +1330,28 @@ export class EpicManager {
       let escapeTried = false;
       while (Date.now() < checkoutDeadline) {
         this.throwIfStopped();
-        const successCount = await page.getByText(EPIC_SUCCESS_TEXT_RE).count().catch(() => 0);
-        if (successCount > 0) {
+        const outcome = await this.detectClaimOutcome(page);
+        if (outcome) {
           result.ok = true;
-          result.status = 'claimed';
-          result.code = 'claimed';
+          result.status = outcome.status;
+          result.code = outcome.status;
           result.authValid = true;
-          result.message = '领取成功';
-          return result;
-        }
-        if (await page.locator('text=已在库中').count().catch(() => 0) > 0) {
-          result.ok = true;
-          result.status = 'owned';
-          result.code = 'owned';
-          result.authValid = true;
-          result.message = '已在库中';
+          result.message = outcome.message;
           return result;
         }
 
         const current = await this.detectPageState(page);
         if (current.state === 'challenge') {
           const resolved = await this.dismissChallengeOverlay(page);
+          const resolvedOutcome = await this.detectClaimOutcome(page);
+          if (resolvedOutcome) {
+            result.ok = true;
+            result.status = resolvedOutcome.status;
+            result.code = resolvedOutcome.status;
+            result.authValid = true;
+            result.message = resolvedOutcome.message;
+            return result;
+          }
           if (resolved.state === 'challenge' || resolved.state === 'unknown') {
             result.status = 'blocked';
             result.code = 'challenge';
@@ -1347,6 +1375,15 @@ export class EpicManager {
       }
 
       if (!checkoutReady) {
+        const outcome = await this.detectClaimOutcome(page);
+        if (outcome) {
+          result.ok = true;
+          result.status = outcome.status;
+          result.code = outcome.status;
+          result.authValid = true;
+          result.message = outcome.message;
+          return result;
+        }
         result.code = 'no_order_button';
         result.message = `未出现下单按钮（当前按钮：${await this.visibleButtonTexts(page)}）`;
         return result;
@@ -1363,25 +1400,23 @@ export class EpicManager {
 
       this.updateState({ status: 'ordering', progress: 82, lastAction: `确认订单...` });
       await orderBtn.click({ timeout: 10000, noWaitAfter: true });
-      await this.delay(5000);
 
-      const successText = await page.getByText(EPIC_SUCCESS_TEXT_RE).count();
-      if (successText > 0) {
-        result.ok = true;
-        result.status = 'claimed';
-        result.code = 'claimed';
-        result.authValid = true;
-        result.message = '领取成功';
-      } else if (await page.locator('text=已在库中').count() > 0) {
-        result.ok = true;
-        result.status = 'owned';
-        result.code = 'owned';
-        result.authValid = true;
-        result.message = '已在库中';
-      } else {
-        result.code = 'order_unconfirmed';
-        result.message = `已点击下单，未识别到成功提示（当前按钮：${await this.visibleButtonTexts(page)}）`;
+      const confirmDeadline = Date.now() + 25000;
+      while (Date.now() < confirmDeadline) {
+        this.throwIfStopped();
+        const outcome = await this.detectClaimOutcome(page);
+        if (outcome) {
+          result.ok = true;
+          result.status = outcome.status;
+          result.code = outcome.status;
+          result.authValid = true;
+          result.message = outcome.message;
+          return result;
+        }
+        await this.delay(1000);
       }
+      result.code = 'order_unconfirmed';
+      result.message = `已点击下单，未识别到成功提示（当前按钮：${await this.visibleButtonTexts(page)}）`;
       return result;
     } catch (e) {
       result.code = 'exception';
@@ -1672,6 +1707,16 @@ export class EpicManager {
         }
       }
 
+      if (this.stopRequested) {
+        this.updateState({
+          status: 'idle',
+          progress: 0,
+          code: 'stopped',
+          lastAction: 'Epic 批量领取已停止，浏览器资源已释放'
+        });
+        return { accounts: accounts.map(a => ({ id: a.id, name: a.name })), results: allResults, stopped: true };
+      }
+
       this.lastRun = { startedAt, finishedAt: Date.now(), results: allResults };
       this.updateState({ status: 'done', progress: 100, lastAction: '本轮领取完成' });
       return { accounts: accounts.map(a => ({ id: a.id, name: a.name })), results: allResults };
@@ -1699,6 +1744,16 @@ export class EpicManager {
       this.lastRun = { startedAt, finishedAt: Date.now(), results: [{ accountId, results }] };
       this.updateState({ status: 'done', progress: 100, lastAction: '本轮领取完成' });
       return { games, results };
+    } catch (e) {
+      if (e?.code === 'EPIC_STOPPED') {
+        this.updateState({
+          status: 'idle',
+          progress: 0,
+          code: 'stopped',
+          lastAction: 'Epic 任务已停止，浏览器资源已释放'
+        });
+      }
+      throw e;
     } finally {
       this.running = false;
       this.stopRequested = false;

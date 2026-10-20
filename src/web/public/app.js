@@ -1199,6 +1199,8 @@ async function runTaskCardAction(accountId, taskKey, taskName = taskKey) {
   }
 }
 
+let epicChallengeAutoOpened = false;
+
 function startEpicActionPolling() {
   stopEpicActionPolling();
   const poll = async () => {
@@ -1207,6 +1209,12 @@ function startEpicActionPolling() {
       if (!res.success) return;
       const data = res.data || {};
       const st = data.state || {};
+      if (st.status === 'challenge' && data.visible && !epicChallengeAutoOpened) {
+        epicChallengeAutoOpened = true;
+        openNovncModal('Epic 人机验证');
+      } else if (st.status !== 'challenge') {
+        epicChallengeAutoOpened = false;
+      }
       const activeStatuses = ['checking', 'navigating', 'challenge', 'clicking', 'ordering', 'waiting', 'retrying', 'verifying', 'stopping'];
       const active = !!data.running || !!data.verifying || activeStatuses.includes(st.status);
       const badgeCls = st.status === 'challenge' ? 'warn' : (active ? 'ok' : 'idle');
@@ -1236,9 +1244,11 @@ async function stopEpicTask() {
       progress: 100
     });
     // 登录窗口也会被 stop() 一并关闭，内嵌小窗此时已无画面，避免留下一个连不上的黑框。
+    epicChallengeAutoOpened = false;
     closeNovncModal();
     await fetchEpicStatus();
     await fetchEpicAccounts();
+    setTimeout(fetchEpicStatus, 1200);
   } catch (e) {
     updateEpicActionModal({
       badge: { text: '停止失败', cls: 'err' },
@@ -1505,7 +1515,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.14';
+  const current = updateInfo?.currentVersion || '1.7.15';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1560,8 +1570,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.14'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.14'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.15'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.15'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );

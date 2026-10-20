@@ -101,3 +101,30 @@ test('Epic 停止请求会关闭活动浏览器上下文并标记状态', async 
   em.activeContext = null;
   em.stopRequested = false;
 });
+
+test('手动完成验证后出现“已在库中”即可确认领取完成', async () => {
+  const em = new EpicManager();
+  const page = {
+    getByText: () => ({ count: async () => 0 }),
+    locator: () => ({ count: async () => 1 })
+  };
+  const outcome = await em.detectClaimOutcome(page);
+  assert.deepEqual(outcome, { status: 'owned', message: '已在库中' });
+});
+
+test('停止后 claimOne 会把状态从 retrying 收尾为 idle', async () => {
+  const id = `epic_stop_state_${Date.now()}`;
+  configManager.upsertEpicAccount({ id, name: '停止状态测试' });
+  const em = new EpicManager();
+  em.claimForAccount = async () => {
+    const e = new Error('Epic 任务已手动停止');
+    e.code = 'EPIC_STOPPED';
+    throw e;
+  };
+  em.updateState({ status: 'retrying', progress: 55, lastAction: '等待重试...' });
+  await assert.rejects(() => em.claimOne(id), /已手动停止/);
+  assert.equal(em.running, false);
+  assert.equal(em.stopRequested, false);
+  assert.equal(em.state.status, 'idle');
+  assert.equal(em.state.code, 'stopped');
+});
