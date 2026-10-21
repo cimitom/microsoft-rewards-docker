@@ -701,7 +701,7 @@ export class RewardsApi {
 
       let icon = '🎯';
       if (title.includes('Halloween') || title.includes('万圣节')) icon = '🎃';
-      else if (isDesktop) icon = '🖥️';
+      else if (isDesktop) icon = 'rewards-app';
       else if (title.includes('秋') || title.includes('亮点')) icon = '🍁';
 
       const key = canonicalQuestKey(title);

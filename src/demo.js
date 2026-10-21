@@ -94,9 +94,14 @@ const baseAccountsStats = {
     claimablePoints: 3,
     streakDays: 42,
     stamps: { progress: 8, max: 12 },
+    streaks: {
+      bing: { completedDays: 5, currentDay: 6, activitiesCompleted: 3, activitiesTotal: 3, isCurrentDayCompleted: true },
+      dailyset: { completedDays: 4, currentDay: 5, activitiesCompleted: 3, activitiesTotal: 3, isCurrentDayCompleted: true },
+      bingapp: { completedDays: 3, currentDay: 4, activitiesCompleted: 1, activitiesTotal: 1, isCurrentDayCompleted: true }
+    },
     lastUpdate: Date.now() - 12 * 60 * 1000,
     tasks: {
-      sign: { name: '每日双端签入 (PC+App)', progress: 1, max: 1, points: 10, unit: '次', icon: '📱', done: true },
+      sign: { name: '移动端签到', progress: 1, max: 1, points: 10, unit: '次', icon: '📱', done: true },
       read: { name: '新闻资讯自动阅读', progress: 30, max: 30, points: 30, unit: '篇', icon: '📖', done: true },
       search: { name: '必应 PC 搜索任务', progress: 60, max: 60, points: 60, unit: '分', icon: '🔍', done: true },
       dailySet: { name: '每日活动集 (Daily Set)', progress: 3, max: 3, points: 30, unit: '个', icon: '📅', done: true },
@@ -161,9 +166,14 @@ const baseAccountsStats = {
     claimablePoints: 0,
     streakDays: 18,
     stamps: { progress: 5, max: 12 },
+    streaks: {
+      bing: { completedDays: 2, currentDay: 3, activitiesCompleted: 1, activitiesTotal: 3, isCurrentDayCompleted: false },
+      dailyset: { completedDays: 2, currentDay: 3, activitiesCompleted: 2, activitiesTotal: 3, isCurrentDayCompleted: false },
+      bingapp: { completedDays: 2, currentDay: 3, activitiesCompleted: 0, activitiesTotal: 1, isCurrentDayCompleted: false }
+    },
     lastUpdate: Date.now() - 45 * 60 * 1000,
     tasks: {
-      sign: { name: '每日双端签入 (PC+App)', progress: 1, max: 1, points: 10, unit: '次', icon: '📱', done: true },
+      sign: { name: '移动端签到', progress: 0, max: 1, points: 0, unit: '次', icon: '📱', done: false },
       read: { name: '新闻资讯自动阅读', progress: 30, max: 30, points: 30, unit: '篇', icon: '📖', done: true },
       search: { name: '必应 PC 搜索任务', progress: 42, max: 60, points: 42, unit: '分', icon: '🔍', done: false },
       dailySet: { name: '每日活动集 (Daily Set)', progress: 2, max: 3, points: 0, unit: '个', icon: '📅', done: false },
@@ -212,9 +222,14 @@ const baseAccountsStats = {
     claimablePoints: 5,
     streakDays: 7,
     stamps: { progress: 11, max: 12 },
+    streaks: {
+      bing: { completedDays: 7, currentDay: 7, activitiesCompleted: 3, activitiesTotal: 3, isCurrentDayCompleted: true },
+      dailyset: { completedDays: 7, currentDay: 7, activitiesCompleted: 3, activitiesTotal: 3, isCurrentDayCompleted: true },
+      bingapp: { completedDays: 6, currentDay: 7, activitiesCompleted: 1, activitiesTotal: 1, isCurrentDayCompleted: true }
+    },
     lastUpdate: Date.now() - 5 * 60 * 1000,
     tasks: {
-      sign: { name: '每日双端签入 (PC+App)', progress: 1, max: 1, points: 10, unit: '次', icon: '📱', done: true },
+      sign: { name: '移动端签到', progress: 1, max: 1, points: 10, unit: '次', icon: '📱', done: true },
       read: { name: '新闻资讯自动阅读', progress: 30, max: 30, points: 30, unit: '篇', icon: '📖', done: true },
       search: { name: '必应 PC 搜索任务', progress: 60, max: 60, points: 60, unit: '分', icon: '🔍', done: true },
       dailySet: { name: '每日活动集 (Daily Set)', progress: 3, max: 3, points: 30, unit: '个', icon: '📅', done: true },
@@ -274,7 +289,7 @@ for (let i = 6; i >= 0; i--) {
       { name: '每日活动集 (Daily Set)', icon: '📅', points: 30 },
       { name: '新闻资讯自动阅读', icon: '📖', points: 30 },
       { name: '活动卡片与 Quiz 问答', icon: '🧩', points: 15 },
-      { name: '每日双端签入 (PC+App)', icon: '📱', points: 10 }
+      { name: '移动端签到', icon: '📱', points: 10 }
     ]
   });
 
@@ -284,7 +299,7 @@ for (let i = 6; i >= 0; i--) {
     breakdown: [
       { name: '必应 PC 搜索任务', icon: '🔍', points: 42 },
       { name: '新闻资讯自动阅读', icon: '📖', points: 30 },
-      { name: '每日双端签入 (PC+App)', icon: '📱', points: 10 }
+      { name: '移动端签到', icon: '📱', points: 10 }
     ]
   });
 
@@ -296,7 +311,7 @@ for (let i = 6; i >= 0; i--) {
       { name: '每日活动集 (Daily Set)', icon: '📅', points: 30 },
       { name: '新闻资讯自动阅读', icon: '📖', points: 30 },
       { name: '桌面应用每周专属任务', icon: '🖥️', points: 20 },
-      { name: '每日双端签入 (PC+App)', icon: '📱', points: 10 }
+      { name: '移动端签到', icon: '📱', points: 10 }
     ]
   });
 }
@@ -322,10 +337,10 @@ logger.log('👤', '账号 [主账号 (张三)] 今日打卡满额 +137 积分�
 logger.log('🔍', '账号 [副账号 1 (李四)] 正在执行平缓搜索 (进度 42/60 分)', '', '副账号 1 (李四)');
 logger.log('🎮', 'Epic 模块就绪（演示模式：已预置 3 个示例游戏与历史领取清单）');
 
-logger.addTimeline('主账号 (张三)', '今日双端签到完成 (+10 积分)');
+logger.addTimeline('主账号 (张三)', '移动端签到完成 (+10 积分)');
 logger.addTimeline('主账号 (张三)', '新闻阅读完成 30/30 (+30 积分)');
 logger.addTimeline('主账号 (张三)', 'PC 搜索满额达成 (+60 积分)');
-logger.addTimeline('副账号 1 (李四)', '双端签到已生效 (官网连签第 18 天)');
+logger.addTimeline('副账号 1 (李四)', '移动端签到已生效 (官网连签第 18 天)');
 logger.addTimeline('副账号 2 (王五)', '全套打卡完成 (+160 积分)');
 
 // 6. 注入演示用 Epic 账号与历史处理记录

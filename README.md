@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.8.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.8.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -208,6 +208,13 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 💎 **液态玻璃视觉重构与任务进度升级 (v1.8.1)**：
+  - **WebGL2 动态背景**：新增丝绸流光、颗粒渐变、暗色面纱、柔光极光与棱镜光幕五种着色器风格；
+  - **iOS 液态玻璃卡片**：统一卡片折射模糊、边缘高光与悬停微透视，鼠标只驱动边框高光角度；
+  - **官网连续进度**：必应搜索、每日活动集、移动端签到增加 7 日连续打卡轨，印章改为高对比金色状态；
+  - **首页多账号明细**：积分、余额、待领取与印章支持逐账号展开，账号较多时在卡片内部滚动；
+  - **配置中心视觉面板**：支持调节卡片透明度、模糊、高光弧长、液态强度、背景速度、噪点与鼠标扰动；
+  - **正式版界面收敛**：固定夜间模式，修复账号卡片轮询闪烁、下拉菜单可读性与多端胶囊圆角。
 - 🎉 **Epic 白嫖成功庆祝与 VNC 自动关闭 (v1.8.0)**：
   - **成功后自动关闭 VNC**：领取结果出现 `claimed` 或 `owned` 时，自动断开并关闭可见浏览器小窗，不再留下黑屏窗口；
   - **白嫖成功庆祝弹窗**：显示“恭喜白嫖成功”、账号、游戏名与入库状态；

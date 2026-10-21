@@ -3,7 +3,7 @@ let currentStatus = null;
 let currentConfig = null;
 let eventSource = null;
 let currentHistoryDays = 7;
-let currentTheme = localStorage.getItem('ms_rewards_theme') || 'auto';
+let currentTheme = 'dark';
 let selectedAccountId = 'all'; // 'all' 或具体账号 id (如 'acc_1')
 let editingAccountIdInModal = null;
 let editingAccountIdInQuickModal = null;
@@ -21,6 +21,7 @@ let logViewSince = 0;
 let lastSystemMetrics = null;
 let diagMode = 'single';
 let diagAccountId = null;
+let accountsOverviewRenderSignature = '';
 
 // 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
@@ -40,6 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initUIEvents();
   initInstantTooltips();
+  initLiquidVisuals();
+  initLiquidMouseFollower();
   startCountdownTimer();
   fetchStatus();
   fetchSystemMetrics();
@@ -53,63 +56,561 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(fetchBrowserStatus, 2500); // 2.5秒轮询无头浏览器状态
 });
 
-// 初始化日夜模式与跟随系统
-function initTheme() {
-  applyTheme(currentTheme);
+// =========================================================================
+// 🎨 iOS 液态玻璃风格与 WebGL2 动态背景引擎联动
+// =========================================================================
 
-  // 监听操作系统深色/浅色模式切换
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (currentTheme === 'auto') {
-      applyTheme('auto');
-    }
-  });
+const DEFAULT_VISUAL_CONFIG = {
+  bgEnabled: true,
+  bgStyle: 'grainient',
+  colorTheme: 'aurora',
+  bgSpeed: 1.0,
+  bgNoise: 25,
+  mouseTurbulence: 100,
+  cardOpacity: 65,
+  cardBlur: 20,
+  borderGlow: 100,
+  liquidSheen: 100,
+  mouseFollow: true,
+  rimSpread: 34,
+  cardTilt: true
+};
 
-  // 顶部胶囊切换事件
-  document.querySelectorAll('.theme-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const targetTheme = btn.getAttribute('data-theme-val');
-      setTheme(targetTheme);
-    });
-  });
+const THEME_ACCENT_COLORS = {
+  aurora: { rgb: '250, 17, 79', secRgb: '0, 245, 212' },
+  sunset: { rgb: '244, 63, 94', secRgb: '245, 158, 11' },
+  ocean: { rgb: '2, 132, 199', secRgb: '6, 182, 212' },
+  emerald: { rgb: '16, 185, 129', secRgb: '161, 255, 0' },
+  monochrome: { rgb: '148, 163, 184', secRgb: '203, 213, 225' }
+};
 
-  // 配置中心下拉框切换事件
-  document.getElementById('cfg-ui-theme')?.addEventListener('change', (e) => {
-    setTheme(e.target.value);
-  });
+let currentVisualConfig = { ...DEFAULT_VISUAL_CONFIG };
+
+function normalizeColorTheme(theme) {
+  const aliases = {
+    purple: 'sunset',
+    amber: 'sunset',
+    titanium: 'monochrome'
+  };
+  const normalized = aliases[theme] || theme;
+  return THEME_ACCENT_COLORS[normalized] ? normalized : 'aurora';
 }
 
-function setTheme(theme, syncServer = true) {
-  currentTheme = theme;
-  localStorage.setItem('ms_rewards_theme', theme);
-  applyTheme(theme);
+function normalizeBgStyle(style) {
+  const aliases = {
+    fluid: 'silk',
+    geometry: 'prism',
+    nebula: 'veil',
+    cyber: 'prism'
+  };
+  const normalized = aliases[style] || style;
+  return ['silk', 'grainient', 'veil', 'aurora', 'prism'].includes(normalized) ? normalized : 'silk';
+}
+
+function getRewardsAppOfficialIconHtml() {
+  return `<span class="rewards-app-icon-wrap" aria-hidden="true">
+    <span class="rewards-app-icon-fallback">🎁</span>
+    <img class="rewards-app-official-icon"
+      src="https://bing.com/th?id=OMR.icon-96.png&amp;pid=Rewards"
+      alt=""
+      loading="lazy"
+      referrerpolicy="no-referrer"
+      onerror="this.style.display='none'">
+  </span>`;
+}
+
+function render7DayStreakTrack(streak, fallbackDays, fallbackDone, streakTitle) {
+  let completedDays = 0;
+  if (streak && typeof streak.completedDays === 'number') {
+    completedDays = Number(streak.completedDays || 0);
+  } else if (fallbackDays) {
+    completedDays = (fallbackDays % 7) || (fallbackDone ? 7 : 0);
+  } else if (fallbackDone) {
+    completedDays = 1;
+  }
+  completedDays = Math.min(7, Math.max(0, completedDays));
+
+  const fillPercent = completedDays <= 0 ? 0 : Math.min(100, Math.round(((completedDays - 0.5) / 6.5) * 100));
+
+  let nodesHtml = '';
+  for (let d = 1; d <= 6; d++) {
+    if (d < completedDays) {
+      nodesHtml += `<div class="streak-step-node done-circle" data-tip="第 ${d} 天：已打卡"><span class="step-check">✓</span></div>`;
+    } else if (d === completedDays) {
+      nodesHtml += `<div class="streak-step-node active-pill" data-tip="第 ${d} 天：已打卡达成"><span class="step-check">✓</span><span class="step-num">${d}</span></div>`;
+    } else {
+      nodesHtml += `<div class="streak-step-node pending-circle" data-tip="第 ${d} 天：待打卡"></div>`;
+    }
+  }
+
+  if (completedDays >= 7) {
+    nodesHtml += `<div class="streak-step-node goal-pill done" data-tip="第 7 天：连续达成 100 积分大奖！"><span class="step-star">✦</span><span class="step-pts">100</span></div>`;
+  } else {
+    nodesHtml += `<div class="streak-step-node goal-pill pending" data-tip="第 7 天：达成额外奖励 100 积分"><span class="step-star">✦</span><span class="step-pts">100</span></div>`;
+  }
+
+  return `
+    <div class="streak-7day-wrap">
+      <div class="streak-7day-header">
+        <span class="streak-7day-title">${escapeHtml(streakTitle)}</span>
+        <span class="streak-7day-badge">已连签 ${completedDays} / 7 天</span>
+      </div>
+      <div class="streak-7day-rail">
+        <div class="streak-7day-line"></div>
+        <div class="streak-7day-line-fill" style="width: ${fillPercent}%;"></div>
+        ${nodesHtml}
+      </div>
+    </div>
+  `;
+}
+
+function renderStampsGrid(stamps) {
+  const container = document.getElementById('stamps-grid-track');
+  if (!container) return;
+  const progress = Number(stamps?.progress || 0);
+  const max = Number(stamps?.max || 12) || 12;
+
+  const starPath = 'M12 2 L13.8 7.8 L19.5 8.5 L15.2 12.3 L16.5 18 L12 15 L7.5 18 L8.8 12.3 L4.5 8.5 L10.2 7.8 Z';
+
+  let html = '';
+  for (let i = 1; i <= max; i++) {
+    const isCollected = i <= progress;
+    const isGoal = i === max;
+    const tip = isCollected
+      ? `第 ${i} 个印章：已集齐`
+      : (isGoal ? `第 ${i} 个印章：集满赢取 1,000 积分大奖！` : `第 ${i} 个印章：待集齐`);
+
+    html += `
+      <div class="stamp-grid-item ${isCollected ? 'collected' : 'uncollected'}${isGoal ? ' is-goal' : ''}" data-tip="${tip}" aria-label="${tip}">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="${starPath}" />
+        </svg>
+      </div>
+    `;
+  }
+  container.innerHTML = html;
+}
+
+function renderAccountStampsList(accounts) {
+  const container = document.getElementById('stamps-account-list');
+  if (!container) return;
+  const starPath = 'M12 2 L13.8 7.8 L19.5 8.5 L15.2 12.3 L16.5 18 L12 15 L7.5 18 L8.8 12.3 L4.5 8.5 L10.2 7.8 Z';
+
+  container.innerHTML = (accounts || []).map(acc => {
+    const stamps = acc.stamps || { progress: 0, max: 12 };
+    const max = Math.max(1, Number(stamps.max || 12));
+    const progress = Math.max(0, Math.min(max, Number(stamps.progress || 0)));
+    const dots = Array.from({ length: max }, (_, index) => {
+      const day = index + 1;
+      return `<span class="mini-stamp ${day <= progress ? 'collected' : 'uncollected'}${day === max ? ' is-goal' : ''}" title="${escapeHtml(acc.name || '账号')}：第 ${day} 个印章${day <= progress ? '已集齐' : '待集齐'}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${starPath}"/></svg>
+      </span>`;
+    }).join('');
+
+    return `
+      <div class="stamp-account-row">
+        <div class="stamp-account-head">
+          <span class="stamp-account-name" title="${escapeHtml(acc.name || '账号')}">${escapeHtml(acc.name || '账号')}</span>
+          <span class="stamp-account-count">${progress} / ${max}</span>
+        </div>
+        <div class="stamp-account-dots">${dots}</div>
+      </div>
+    `;
+  }).join('') || '<div class="stamp-account-empty">暂无账号印章数据</div>';
+}
+
+function renderHeroAccountBreakdown(containerId, accounts, valueKey, formatter) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = (accounts || []).map(acc => {
+    const value = Number(acc[valueKey] || 0);
+    return `
+      <div class="hero-account-row">
+        <span class="hero-account-name" title="${escapeHtml(acc.name || '账号')}">${escapeHtml(acc.name || '账号')}</span>
+        <span class="hero-account-value">${escapeHtml(formatter(value))}</span>
+      </div>
+    `;
+  }).join('') || '<div class="hero-account-empty">暂无账号数据</div>';
+}
+
+function applyVisualConfig(cfg = {}) {
+  currentVisualConfig = { ...DEFAULT_VISUAL_CONFIG, ...cfg };
+  const v = currentVisualConfig;
+  v.colorTheme = normalizeColorTheme(v.colorTheme);
+  v.bgStyle = normalizeBgStyle(v.bgStyle);
+
+  // 兼容小数格式归一化为百分比整数
+  if (typeof v.cardOpacity === 'number' && v.cardOpacity > 0 && v.cardOpacity <= 1) v.cardOpacity = Math.round(v.cardOpacity * 100);
+  if (typeof v.borderGlow === 'number' && v.borderGlow > 0 && v.borderGlow <= 2) v.borderGlow = Math.round(v.borderGlow * 100);
+  if (typeof v.liquidSheen === 'number' && v.liquidSheen > 0 && v.liquidSheen <= 2) v.liquidSheen = Math.round(v.liquidSheen * 100);
+  if (typeof v.bgNoise === 'number' && v.bgNoise > 0 && v.bgNoise <= 1) v.bgNoise = Math.round(v.bgNoise * 100);
+  if (typeof v.mouseTurbulence === 'number' && v.mouseTurbulence > 0 && v.mouseTurbulence <= 2) v.mouseTurbulence = Math.round(v.mouseTurbulence * 100);
+
+  const root = document.documentElement;
+  root.style.setProperty('--glass-opacity', (v.cardOpacity / 100).toFixed(2));
+  root.style.setProperty('--glass-blur', `${v.cardBlur}px`);
+  root.style.setProperty('--border-glow-intensity', (v.borderGlow / 100).toFixed(2));
+  root.style.setProperty('--liquid-sheen-intensity', (v.liquidSheen / 100).toFixed(2));
+  root.style.setProperty('--rim-half', `${v.rimSpread}deg`);
+  root.style.setProperty('--rim-q', `${(v.rimSpread * 0.35).toFixed(1)}deg`);
+  root.style.setProperty('--rim-mid', `${(v.rimSpread * 0.72).toFixed(1)}deg`);
+  root.style.setProperty('--rim-end', `${(v.rimSpread * 1.9).toFixed(1)}deg`);
+
+  const palette = THEME_ACCENT_COLORS[v.colorTheme] || THEME_ACCENT_COLORS.aurora;
+  root.style.setProperty('--accent-glow-rgb', palette.rgb);
+  root.style.setProperty('--accent-glow-sec-rgb', palette.secRgb);
+
+  document.body.classList.add('liquid-glass-enabled');
+  document.body.classList.toggle('webgl-bg-active', !!v.bgEnabled);
+  document.body.classList.toggle('mouse-follow-enabled', !!v.mouseFollow);
+  document.body.classList.toggle('card-tilt-enabled', !!v.cardTilt);
+  document.body.dataset.visualTheme = v.colorTheme || 'aurora';
+
+  localStorage.setItem('msr_visual_config', JSON.stringify(v));
+  enhanceGlassSurfaces();
+
+  if (window.LiquidBg) {
+    window.LiquidBg.setEnabled(!!v.bgEnabled);
+    window.LiquidBg.setStyle(v.bgStyle);
+    window.LiquidBg.setTheme(v.colorTheme || 'aurora');
+    window.LiquidBg.setSpeed(Number(v.bgSpeed) || 1.0);
+    window.LiquidBg.setNoise((Number(v.bgNoise) || 25) / 100);
+    window.LiquidBg.setTurbulence((Number(v.mouseTurbulence) || 100) / 100);
+  }
+
+  syncVisualInputs(v);
+}
+
+function syncVisualInputs(v) {
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+  const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.innerText = txt; };
+
+  setVal('cfg-card-opacity', v.cardOpacity);
+  setText('val-card-opacity', `${v.cardOpacity}%`);
+
+  setVal('cfg-card-blur', v.cardBlur);
+  setText('val-card-blur', `${v.cardBlur}px`);
+
+  setVal('cfg-border-glow', v.borderGlow);
+  setText('val-border-glow', `${v.borderGlow}%`);
+
+  setVal('cfg-liquid-sheen', v.liquidSheen);
+  setText('val-liquid-sheen', `${v.liquidSheen}%`);
+
+  setVal('cfg-rim-spread', v.rimSpread);
+  setText('val-rim-spread', `${v.rimSpread}°`);
+
+  setChecked('cfg-mouse-follow', v.mouseFollow);
+  setChecked('cfg-card-tilt', v.cardTilt);
+
+  setChecked('cfg-bg-enabled', v.bgEnabled);
+  setVal('cfg-bg-style', v.bgStyle);
+  setVal('cfg-color-theme', v.colorTheme);
+
+  setVal('cfg-bg-speed', v.bgSpeed);
+  setText('val-bg-speed', `${Number(v.bgSpeed).toFixed(1)}x`);
+
+  setVal('cfg-bg-noise', v.bgNoise);
+  setText('val-bg-noise', `${v.bgNoise}%`);
+
+  setVal('cfg-mouse-turb', v.mouseTurbulence);
+  setText('val-mouse-turb', `${v.mouseTurbulence}%`);
+}
+
+function readVisualInputs() {
+  const readNumber = (id, fallback) => {
+    const value = Number(document.getElementById(id)?.value);
+    return Number.isFinite(value) ? value : fallback;
+  };
+  return {
+    cardOpacity: readNumber('cfg-card-opacity', 65),
+    cardBlur: readNumber('cfg-card-blur', 20),
+    borderGlow: readNumber('cfg-border-glow', 100),
+    liquidSheen: readNumber('cfg-liquid-sheen', 100),
+    rimSpread: readNumber('cfg-rim-spread', 34),
+    mouseFollow: document.getElementById('cfg-mouse-follow')?.checked ?? true,
+    cardTilt: document.getElementById('cfg-card-tilt')?.checked ?? true,
+    bgEnabled: document.getElementById('cfg-bg-enabled')?.checked ?? true,
+    bgStyle: normalizeBgStyle(document.getElementById('cfg-bg-style')?.value || 'silk'),
+    colorTheme: normalizeColorTheme(document.getElementById('cfg-color-theme')?.value || 'aurora'),
+    bgSpeed: readNumber('cfg-bg-speed', 1.0),
+    bgNoise: readNumber('cfg-bg-noise', 25),
+    mouseTurbulence: readNumber('cfg-mouse-turb', 100)
+  };
+}
+
+function initLiquidVisuals() {
+  const saved = localStorage.getItem('msr_visual_config');
+  if (saved) {
+    try {
+      applyVisualConfig(JSON.parse(saved));
+    } catch (e) {
+      applyVisualConfig(DEFAULT_VISUAL_CONFIG);
+    }
+  } else {
+    applyVisualConfig(DEFAULT_VISUAL_CONFIG);
+  }
+
+  const bindRange = (id, valId, unit, key, scale = 1) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const v = el.value;
+      const valEl = document.getElementById(valId);
+      if (valEl) valEl.innerText = `${v}${unit}`;
+      const patch = {};
+      patch[key] = scale === 1 ? Number(v) : parseFloat(v);
+      applyVisualConfig(patch);
+    });
+  };
+
+  bindRange('cfg-card-opacity', 'val-card-opacity', '%', 'cardOpacity');
+  bindRange('cfg-card-blur', 'val-card-blur', 'px', 'cardBlur');
+  bindRange('cfg-border-glow', 'val-border-glow', '%', 'borderGlow');
+  bindRange('cfg-liquid-sheen', 'val-liquid-sheen', '%', 'liquidSheen');
+  bindRange('cfg-rim-spread', 'val-rim-spread', '°', 'rimSpread');
+  bindRange('cfg-bg-speed', 'val-bg-speed', 'x', 'bgSpeed', 0.1);
+  bindRange('cfg-bg-noise', 'val-bg-noise', '%', 'bgNoise');
+  bindRange('cfg-mouse-turb', 'val-mouse-turb', '%', 'mouseTurbulence');
+
+  const bindCheckbox = (id, key) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => {
+      const patch = {};
+      patch[key] = el.checked;
+      applyVisualConfig(patch);
+    });
+  };
+
+  bindCheckbox('cfg-mouse-follow', 'mouseFollow');
+  bindCheckbox('cfg-card-tilt', 'cardTilt');
+  bindCheckbox('cfg-bg-enabled', 'bgEnabled');
+
+  const bindSelect = (id, key) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => {
+      const patch = {};
+      patch[key] = el.value;
+      applyVisualConfig(patch);
+    });
+  };
+
+  bindSelect('cfg-bg-style', 'bgStyle');
+  bindSelect('cfg-color-theme', 'colorTheme');
+
+  document.getElementById('btn-preset-ios')?.addEventListener('click', () => applyVisualPreset('ios-glass'));
+  document.getElementById('btn-preset-aurora')?.addEventListener('click', () => applyVisualPreset('aurora-night'));
+  document.getElementById('btn-preset-ocean')?.addEventListener('click', () => applyVisualPreset('deep-ocean'));
+  document.getElementById('btn-preset-titanium')?.addEventListener('click', () => applyVisualPreset('matte-titanium'));
+  document.getElementById('btn-reset-visual')?.addEventListener('click', () => resetVisualDefaults());
+}
+
+function applyVisualPreset(presetName) {
+  let patch = {};
+  if (presetName === 'ios-glass') {
+    patch = {
+      cardOpacity: 55,
+      cardBlur: 24,
+      borderGlow: 120,
+      liquidSheen: 120,
+      mouseFollow: true,
+      rimSpread: 30,
+      cardTilt: true,
+      bgEnabled: true,
+      bgStyle: 'silk',
+      colorTheme: 'ocean',
+      bgSpeed: 0.8,
+      bgNoise: 20,
+      mouseTurbulence: 90
+    };
+  } else if (presetName === 'aurora-night') {
+    patch = {
+      cardOpacity: 65,
+      cardBlur: 20,
+      borderGlow: 110,
+      liquidSheen: 100,
+      mouseFollow: true,
+      rimSpread: 34,
+      cardTilt: true,
+      bgEnabled: true,
+      bgStyle: 'veil',
+      colorTheme: 'aurora',
+      bgSpeed: 1.0,
+      bgNoise: 25,
+      mouseTurbulence: 100
+    };
+  } else if (presetName === 'deep-ocean') {
+    patch = {
+      cardOpacity: 60,
+      cardBlur: 22,
+      borderGlow: 100,
+      liquidSheen: 110,
+      mouseFollow: true,
+      rimSpread: 42,
+      cardTilt: true,
+      bgEnabled: true,
+      bgStyle: 'grainient',
+      colorTheme: 'ocean',
+      bgSpeed: 1.2,
+      bgNoise: 20,
+      mouseTurbulence: 130
+    };
+  } else if (presetName === 'matte-titanium') {
+    patch = {
+      cardOpacity: 75,
+      cardBlur: 16,
+      borderGlow: 80,
+      liquidSheen: 60,
+      mouseFollow: true,
+      rimSpread: 26,
+      cardTilt: false,
+      bgEnabled: true,
+      bgStyle: 'grainient',
+      colorTheme: 'monochrome',
+      bgSpeed: 0.5,
+      bgNoise: 40,
+      mouseTurbulence: 50
+    };
+  }
+  applyVisualConfig(patch);
+}
+
+function resetVisualDefaults() {
+  applyVisualConfig(DEFAULT_VISUAL_CONFIG);
+}
+
+const GLASS_SURFACE_SELECTOR = [
+  '.header',
+  '.account-selector-section',
+  '.ms-toolbar',
+  '.hero-card',
+  '.section-card',
+  '.task-card',
+  '.account-overview-card',
+  '.modal-box',
+  '.epic-stat-card',
+  '.epic-game-card',
+  '.epic-side-card',
+  '.epic-account-card',
+  '.epic-record-row',
+  '.diag-item-card',
+  '.diag-banner',
+  '.diag-summary-box',
+  '.history-card',
+  '.browser-metric-row',
+  '.timeline-item',
+  '.step-action-box'
+].join(',');
+
+function enhanceGlassSurfaces(root = document) {
+  if (root?.matches?.(GLASS_SURFACE_SELECTOR)) root.classList.add('glass-surface');
+  root?.querySelectorAll?.(GLASS_SURFACE_SELECTOR).forEach(el => el.classList.add('glass-surface'));
+}
+
+function initLiquidMouseFollower() {
+  enhanceGlassSurfaces();
+  let cards = [];
+  const updateCardsList = () => {
+    enhanceGlassSurfaces();
+    cards = Array.from(document.querySelectorAll(GLASS_SURFACE_SELECTOR));
+  };
+
+  let observerRaf = 0;
+  const observer = new MutationObserver(() => {
+    if (observerRaf) return;
+    observerRaf = requestAnimationFrame(() => {
+      observerRaf = 0;
+      updateCardsList();
+    });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  updateCardsList();
+
+  let rafPending = false;
+  let mouseEvent = null;
+
+  window.addEventListener('mousemove', (e) => {
+    mouseEvent = e;
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        if (!mouseEvent) return;
+        const mx = mouseEvent.clientX;
+        const my = mouseEvent.clientY;
+        const isTiltEnabled = document.body.classList.contains('card-tilt-enabled');
+
+        for (let i = 0; i < cards.length; i++) {
+          const card = cards[i];
+          const rect = card.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) continue;
+          const isInside = mx >= rect.left && mx <= rect.right && my >= rect.top && my <= rect.bottom;
+          if (
+            mx >= rect.left - 350 &&
+            mx <= rect.right + 350 &&
+            my >= rect.top - 350 &&
+            my <= rect.bottom + 350
+          ) {
+            const relX = mx - rect.left;
+            const relY = my - rect.top;
+            const normX = (relX / rect.width) * 2 - 1;
+            const normY = (relY / rect.height) * 2 - 1;
+            const pointerAngle = Math.atan2(normY, normX) * 180 / Math.PI + 90;
+            const normalizedAngle = ((pointerAngle % 360) + 360) % 360;
+            card.style.setProperty('--pointer-angle', `${normalizedAngle.toFixed(2)}deg`);
+
+            if (isTiltEnabled && isInside) {
+              const normX = (relX / rect.width) - 0.5;
+              const normY = (relY / rect.height) - 0.5;
+              const isLargeSurface = card.matches('.header, .section-card, .modal-box, .account-selector-section, .ms-toolbar');
+              const strength = isLargeSurface ? 0.9 : 2.4;
+              const lift = isLargeSurface ? 0 : -2;
+              const tiltX = -normY * strength;
+              const tiltY = normX * strength;
+              card.style.transform = `perspective(1100px) rotateX(${tiltX.toFixed(2)}deg) rotateY(${tiltY.toFixed(2)}deg) translateY(${lift}px)`;
+            } else if (card.style.transform) {
+              card.style.transform = '';
+            }
+          } else if (card.style.transform) {
+            card.style.transform = '';
+          }
+        }
+      });
+    }
+  }, { passive: true });
+
+  const resetCardTilt = () => {
+    for (let i = 0; i < cards.length; i++) {
+      cards[i].style.transform = '';
+    }
+  };
+  document.documentElement.addEventListener('mouseleave', resetCardTilt);
+  window.addEventListener('blur', resetCardTilt);
+}
+
+// 全时段固定夜间模式
+function initTheme() {
+  applyTheme('dark');
+}
+
+function setTheme(_theme, syncServer = false) {
+  currentTheme = 'dark';
+  localStorage.setItem('ms_rewards_theme', 'dark');
+  applyTheme('dark');
   const selectElem = document.getElementById('cfg-ui-theme');
-  if (selectElem) selectElem.value = theme;
+  if (selectElem) selectElem.value = 'dark';
   if (syncServer) {
     fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ui: { theme } })
+      body: JSON.stringify({ ui: { theme: 'dark' } })
     }).catch(() => {});
   }
 }
 
-function applyTheme(theme) {
-  let isDark = true;
-  if (theme === 'dark') {
-    isDark = true;
-  } else if (theme === 'light') {
-    isDark = false;
-  } else {
-    // auto: 跟随系统
-    isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  }
-
-  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-
-  // 更新顶部胶囊按钮状态
-  document.querySelectorAll('.theme-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.getAttribute('data-theme-val') === theme);
-  });
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', 'dark');
 }
 
 // 启动每日刷新剩余时间倒计时 (距离下一次 09:00:00，中国区 Rewards 刷新点)
@@ -1674,7 +2175,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.0';
+  const current = updateInfo?.currentVersion || '1.8.1';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1729,8 +2230,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.0'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.0'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.1'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.1'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -1922,6 +2423,9 @@ function renderDashboard(data) {
   const displayClaimable = isAllMode ? Number(summary?.totalClaimable || 0) : Number(stats.claimablePoints || 0);
   const displayStreak = isAllMode ? (summary?.maxStreak || 0) : (stats.streakDays || 0);
   const stamps = isAllMode ? (summary?.stamps || { progress: 0, max: 12 }) : (stats.stamps || { progress: 0, max: 12 });
+  const earnedBreakdown = document.getElementById('earned-account-breakdown');
+  const balanceBreakdown = document.getElementById('balance-account-breakdown');
+  const claimableBreakdown = document.getElementById('claimable-account-breakdown');
 
   document.getElementById('stat-earned').innerText = `+${displayEarned}`;
   document.getElementById('stat-balance').innerText = displayBalance.toLocaleString();
@@ -1944,13 +2448,35 @@ function renderDashboard(data) {
     heroClaimBtn.style.opacity = displayClaimable > 0 ? '1' : '0.5';
   }
 
+  const accountCount = summary?.accountsList?.length || 0;
+  const allBreakdowns = [earnedBreakdown, balanceBreakdown, claimableBreakdown];
+  allBreakdowns.forEach(el => { if (el) el.hidden = !isAllMode; });
+  if (isAllMode) {
+    renderHeroAccountBreakdown('earned-account-breakdown', summary?.accountsList || [], 'earned', value => `+${value.toLocaleString()}`);
+    renderHeroAccountBreakdown('balance-account-breakdown', summary?.accountsList || [], 'balance', value => value.toLocaleString());
+    renderHeroAccountBreakdown('claimable-account-breakdown', summary?.accountsList || [], 'claimablePoints', value => `${value.toLocaleString()} 分`);
+  }
+  const earnedDesc = document.querySelector('#stat-earned + .hero-account-breakdown')?.nextElementSibling;
+  const balanceDesc = document.querySelector('#stat-balance + .hero-account-breakdown')?.nextElementSibling;
+  if (earnedDesc) {
+    earnedDesc.innerText = isAllMode ? `${accountCount} 个账号今日积分明细` : '各项任务自动累计到账';
+  }
+  if (balanceDesc) {
+    balanceDesc.innerText = isAllMode ? `${accountCount} 个账号当前余额明细` : '同步微软平台账户积分';
+  }
+
   document.getElementById('stat-streak').innerText = `${displayStreak} 天`;
 
   const statStamps = document.getElementById('stat-stamps');
   const statStampsDesc = document.getElementById('stat-stamps-desc');
   const statStampsFill = document.getElementById('stat-stamps-fill');
+  const stampsGrid = document.getElementById('stamps-grid-track');
+  const stampsAccountList = document.getElementById('stamps-account-list');
+  const stampsMiniBar = document.querySelector('.stamps-mini-bar');
   if (statStamps) {
-    statStamps.innerText = `${stamps.progress || 0} / ${stamps.max || 12}`;
+    statStamps.innerText = isAllMode
+      ? `${summary?.accountsList?.length || 0} 个账号`
+      : `${stamps.progress || 0} / ${stamps.max || 12}`;
   }
   if (statStampsFill) {
     const sMax = Number(stamps.max || 12) || 12;
@@ -1959,8 +2485,20 @@ function renderDashboard(data) {
     statStampsFill.style.width = `${sPct}%`;
   }
   if (statStampsDesc) {
-    const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 0));
-    statStampsDesc.innerText = diff > 0 ? `差 ${diff} 个集满 1,000 分大奖` : '1,000 奖励印章已集满！';
+    if (isAllMode) {
+      statStampsDesc.innerText = '各账号印章进度，账号较多时可滚动查看';
+    } else {
+      const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 0));
+      statStampsDesc.innerText = diff > 0 ? `差 ${diff} 个集满 1,000 分大奖` : '1,000 奖励印章已集满！';
+    }
+  }
+  if (stampsGrid) stampsGrid.hidden = isAllMode;
+  if (stampsAccountList) stampsAccountList.hidden = !isAllMode;
+  if (stampsMiniBar) stampsMiniBar.hidden = isAllMode;
+  if (isAllMode) {
+    renderAccountStampsList(summary?.accountsList || []);
+  } else {
+    renderStampsGrid(stamps);
   }
 
   // 顶部工具条面包屑/范围更新
@@ -1981,14 +2519,12 @@ function renderDashboard(data) {
   const overviewCard = document.getElementById('accounts-overview-card');
   const taskListTitle = document.getElementById('task-list-title');
   const historyTitle = document.getElementById('history-chart-title');
+  const historyCard = document.getElementById('history-card-section');
 
   if (historyTitle) {
-    if (isAllMode) {
-      historyTitle.innerText = `每日积分增长历史记录 (全部账号汇总)`;
-    } else {
-      historyTitle.innerText = `每日积分增长历史记录 [${stats.name || selectedAccountId}]`;
-    }
+    historyTitle.innerText = '每日积分增长历史记录 (全部账号汇总)';
   }
+  if (historyCard) historyCard.style.display = isAllMode ? 'flex' : 'none';
 
   if (isAllMode) {
     // 汇总模式：显示全账号概览卡片矩阵，隐藏单任务清单（避免在汇总下显示误导的任务列表）
@@ -2061,11 +2597,26 @@ function formatPunchCardTooltip(t) {
   // 5. 渲染任务网格
   const taskGrid = document.getElementById('task-grid');
   taskGrid.innerHTML = '';
+  const TASK_PRIORITY = {
+    search: 10,
+    dailySet: 20,
+    sign: 30,
+    read: 40,
+    promos: 50,
+    desktopApp: 60
+  };
+
   const tasksList = Object.entries(stats.tasks || {});
+  tasksList.sort((a, b) => {
+    const prioA = TASK_PRIORITY[a[0]] || 100;
+    const prioB = TASK_PRIORITY[b[0]] || 100;
+    return prioA - prioB;
+  });
 
   for (const [key, t] of tasksList) {
     const card = document.createElement('div');
-    card.className = 'task-card task-card-clickable';
+    const isFeaturedTask = key === 'search' || key === 'dailySet' || key === 'sign';
+    card.className = `task-card task-card-clickable${isFeaturedTask ? ' task-card-featured' : ''}`;
     card.dataset.taskKey = key;
     card.setAttribute('role', 'button');
     card.setAttribute('tabindex', '0');
@@ -2097,20 +2648,29 @@ function formatPunchCardTooltip(t) {
       card.style.cursor = 'help';
     }
 
-    if (key === 'sign') {
-      // 双端签入是否完成以官网「必应应用连续打卡」为准。
-      // 这里把官网真实状态直接标在卡片上，避免出现「脚本显示已完成、
-      // 官网 App 连签还是 0/1」这种对不上的情况。
-      const appStreak = stats.streaks?.bingapp;
-      if (appStreak) {
-        const days = Number(appStreak.completedDays || 0);
-        const todayText = appStreak.isCurrentDayCompleted ? '今日已签' : '今日未签';
-        subtext = `${subtext} · 官网 App 连签 ${days}/7 天（${todayText}）`;
+    let extraStreakHtml = '';
+    let displayName = t.name || key;
+
+    // 1. 必应 PC 搜索任务：对应官网「必应搜索连续打卡」7 日进度条
+    if (key === 'search') {
+      const searchStreak = stats.streaks?.bing;
+      extraStreakHtml = render7DayStreakTrack(searchStreak, stats.streakDays, isDone, '必应搜索连续打卡');
+      if (t.statusMessage) {
+        subtext = `${subtext} · ${t.statusMessage}`;
       }
     }
 
-    if (key === 'search' && t.statusMessage) {
-      subtext = `${subtext} · ${t.statusMessage}`;
+    // 2. 每日活动集：对应官网「每日连续打卡活动」7 日进度条
+    if (key === 'dailySet') {
+      const dsStreak = stats.streaks?.dailyset;
+      extraStreakHtml = render7DayStreakTrack(dsStreak, stats.streakDays, isDone, '每日连续打卡活动');
+    }
+
+    // 3. 移动端签到：与另外两张重点卡保持一致，只展示移动端完成状态
+    if (key === 'sign') {
+      displayName = '移动端签到';
+      const appStreak = stats.streaks?.bingapp;
+      extraStreakHtml = render7DayStreakTrack(appStreak, stats.streakDays, isDone, '移动端连续打卡');
     }
 
     if (isPunchCard && !isDone) {
@@ -2118,12 +2678,19 @@ function formatPunchCardTooltip(t) {
       if (cooling) subtext = `${subtext} · 今日已尝试，等待冷却`;
     }
 
+    // 图标处理：所有 rewards app 的任务，图表换成 rewards app 的官方矢量图标
+    const isRewardsApp = key === 'desktopApp'
+      || /rewards\s*app/i.test(displayName || '')
+      || (displayName || '').includes('桌面应用')
+      || t.icon === 'rewards-app';
+    const iconHtml = isRewardsApp ? getRewardsAppOfficialIconHtml() : escapeHtml(t.icon || '📌');
+
     card.innerHTML = `
       <div class="task-top">
         <div class="task-info">
-          <div class="task-icon">${escapeHtml(t.icon || '📌')}</div>
+          <div class="task-icon">${iconHtml}</div>
           <div>
-            <div class="task-name">${escapeHtml(t.name || key)}</div>
+            <div class="task-name">${escapeHtml(displayName)}</div>
             <div class="task-subtext">${escapeHtml(subtext)}</div>
           </div>
         </div>
@@ -2138,8 +2705,9 @@ function formatPunchCardTooltip(t) {
           <div class="progress-bar-fill" style="width: ${progPercent}%;"></div>
         </div>
       </div>
+      ${extraStreakHtml}
     `;
-    const triggerTaskCard = () => runTaskCardAction(selectedAccountId, key, t.name || key);
+    const triggerTaskCard = () => runTaskCardAction(selectedAccountId, key, displayName);
     card.addEventListener('click', triggerTaskCard);
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -2308,15 +2876,41 @@ function formatNextRun(sched) {
 function renderAccountsOverviewGrid(accounts, runtime = {}) {
   const grid = document.getElementById('accounts-grid');
   if (!grid) return;
-  grid.innerHTML = '';
 
   const { running = false, runningAccountId = null, schedule = {} } = runtime;
-
-  accounts.forEach(acc => {
+  const prepared = accounts.map(acc => {
     const isRunning = running && runningAccountId === acc.id;
     const runtimeStatus = getAccountRuntimeStatus(acc, { running, runningAccountId });
     const paused = acc.enabled === false;
     const nextRun = formatNextRun(schedule[acc.id]);
+    return { acc, isRunning, runtimeStatus, paused, nextRun };
+  });
+
+  const signature = JSON.stringify(prepared.map(({ acc, isRunning, runtimeStatus, paused, nextRun }) => ({
+    id: acc.id,
+    name: acc.name,
+    enabled: acc.enabled,
+    earned: acc.earned,
+    balance: acc.balance,
+    claimablePoints: acc.claimablePoints,
+    streakDays: acc.streakDays,
+    doneTasks: acc.doneTasks,
+    totalTasks: acc.totalTasks,
+    percent: acc.percent,
+    auth: acc.authDiagnosis,
+    isRunning,
+    runtimeStatus: runtimeStatus.key,
+    paused,
+    nextRun: nextRun.text,
+    nextRunTip: nextRun.tip
+  })));
+  if (signature === accountsOverviewRenderSignature && grid.childElementCount === prepared.length) {
+    return;
+  }
+  accountsOverviewRenderSignature = signature;
+  grid.innerHTML = '';
+
+  prepared.forEach(({ acc, isRunning, runtimeStatus, paused, nextRun }) => {
     const card = document.createElement('div');
     card.className = `account-overview-card ${runtimeStatus.cls}`;
     card.innerHTML = `
@@ -2839,7 +3433,7 @@ function populateSettingsForm() {
   document.getElementById('cfg-search-engine').value = c.tasks?.searchEngineMode || 'browser';
   document.getElementById('cfg-search-api').value = c.tasks?.searchApi || 'baidu.official';
   // 主题
-  const themeVal = c.ui?.theme || localStorage.getItem('ms_rewards_theme') || 'auto';
+  const themeVal = 'dark';
   const themeSelect = document.getElementById('cfg-ui-theme');
   if (themeSelect) themeSelect.value = themeVal;
   // 调度
@@ -2856,6 +3450,10 @@ function populateSettingsForm() {
   document.getElementById('cfg-notify-pushme').value = c.notify?.pushme || '';
   document.getElementById('cfg-notify-tg-token').value = c.notify?.telegram?.botToken || '';
   document.getElementById('cfg-notify-tg-chat').value = c.notify?.telegram?.chatId || '';
+
+  // 液态视觉与背景
+  const visualVal = c.visual || JSON.parse(localStorage.getItem('msr_visual_config') || 'null') || DEFAULT_VISUAL_CONFIG;
+  applyVisualConfig(visualVal);
 }
 
 function loadAccountIntoForm(accId) {
@@ -2976,11 +3574,16 @@ async function saveSettingsFromModal() {
     currentAccounts.push(updatedAccountData);
   }
 
-  const selectedTheme = document.getElementById('cfg-ui-theme')?.value || 'auto';
+  const selectedTheme = 'dark';
   setTheme(selectedTheme);
+
+  const visualConfig = readVisualInputs();
+  localStorage.setItem('msr_visual_config', JSON.stringify(visualConfig));
+  applyVisualConfig(visualConfig);
 
   const updateData = {
     accounts: currentAccounts,
+    visual: visualConfig,
     network: {
       useProxy: document.getElementById('cfg-use-proxy').checked,
       proxyUrl: document.getElementById('cfg-proxy-url').value.trim(),

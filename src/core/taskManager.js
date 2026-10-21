@@ -40,12 +40,12 @@ export class TaskManager {
       stamps: { progress: 0, max: 12 },
       lastUpdate: Date.now(),
       tasks: {
-        sign: { name: "每日双端签入 (PC+App)", progress: 0, max: 1, points: 0, unit: "次", icon: "📱", done: false },
+        sign: { name: "移动端签到", progress: 0, max: 1, points: 0, unit: "次", icon: "📱", done: false },
         read: { name: "新闻资讯自动阅读", progress: 0, max: 30, points: 0, unit: "篇", icon: "📖", done: false },
         search: { name: "必应 PC 搜索任务", progress: 0, max: 60, points: 0, unit: "分", icon: "🔍", done: false },
         dailySet: { name: "每日活动集 (Daily Set)", progress: 0, max: 3, points: 0, unit: "个", icon: "📅", done: false },
         promos: { name: "活动卡片与 Quiz 问答", progress: 0, max: 1, points: 0, unit: "项", icon: "🧩", done: false },
-        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "🖥️", expiresText: "", available: false, done: false, stepLogs: [], isPunchCard: true }
+        desktopApp: { name: "桌面应用每周专属任务", progress: 0, max: 8, points: 20, unit: "个任务", icon: "rewards-app", expiresText: "", available: false, done: false, stepLogs: [], isPunchCard: true }
       }
     };
   }
@@ -521,10 +521,10 @@ export class TaskManager {
           accStats.streakDays = streakInfo.streakDays;
         }
 
-        // 5. 双端签入 / 每日活动集：只认官网连签任务的真实状态
+        // 5. 移动端签到 / 每日活动集：只认官网连签任务的真实状态
         //
         //    这里以前是「搜索和阅读都打满就推断签到与活动也完成了」，属于猜测。
-        //    那正是「脚本显示双端签入已完成、官网必应应用连续打卡却还是 0/1」的根因。
+        //    那正是「脚本显示签到已完成、官网必应应用连续打卡却还是 0/1」的根因。
         //    现在改为以官网 streak 模型为准，并且能双向校正：
         //    官网说完成就标完成，官网明确说没完成就把误标的完成状态纠正回来。
         const appStreak = info.streaks?.bingapp;
@@ -968,12 +968,6 @@ export class TaskManager {
             }
           }
 
-          await rewardsApi.randomDelay(1500, 3000);
-          const pcPoints = await rewardsApi.signPC().catch(() => 0);
-          if (pcPoints >= 0) {
-            points += Number(pcPoints || 0);
-            result.details.push(pcPoints > 0 ? `PC 网页端签到成功 +${pcPoints} 积分` : 'PC 网页端签到已处理');
-          }
           await this.syncAccountOfficialStatus(acc, { owned: true });
           const finalInfo = await rewardsApi.getRewardsInfo(1).catch(() => null);
           const finalApp = finalInfo?.streaks?.bingapp;
@@ -1279,10 +1273,10 @@ export class TaskManager {
       logger.log('🟡', '移动端 OAuth Token 未就绪，将跳过 App 签到与阅读任务', accountName);
     }
 
-    // 1. 每日双端签入 (若已签到则直接跳过)
+    // 1. 移动端签到 (若官网已确认则直接跳过)
     if (globalCfg.tasks?.sign && this.running) {
       if (accStats.tasks.sign?.done) {
-        logger.log('✅', '每日签入已完成，跳过', accountName);
+        logger.log('✅', '移动端签到已完成，跳过', accountName);
       } else {
         let signPoints = 0;
         let signSuccess = false;
@@ -1315,22 +1309,18 @@ export class TaskManager {
           }
         }
 
-        await rewardsApi.randomDelay(2000, 4000);
-        const pcPts = await rewardsApi.signPC();
-        if (pcPts >= 0) {
-          signSuccess = true;
-          signPoints += pcPts;
-          logger.log('💻', `PC 网页端签入成功${pcPts > 0 ? ` +${pcPts} 积分` : ''}`, accountName);
-        }
-
         if (signSuccess) {
-          this.updateTask('sign', { progress: 1, max: 1, points: signPoints || 10, done: true }, accountId);
-          logger.addTimeline(accountName, `双端签到完成 (+${signPoints || 10} 积分)`);
+          this.updateTask('sign', {
+            progress: 1,
+            max: 1,
+            points: signPoints || accStats.tasks.sign?.points || 10,
+            done: true
+          }, accountId);
+          logger.addTimeline(accountName, `移动端签到完成 (+${signPoints || 10} 积分)`);
         }
       }
 
-      // 双端签入必须以官网「必应应用连续打卡」为准。
-      // PC 端成功、App 端失败时不能继续把卡片标成已完成，这里立即用官网状态纠偏。
+      // 移动端签到必须以官网「必应应用连续打卡」为准。
       await this.syncAccountOfficialStatus(accCfg, { owned: true });
     }
 
