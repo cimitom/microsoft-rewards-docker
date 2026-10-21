@@ -52,33 +52,47 @@ export function evaluateEpicBrowserFingerprint(signals = {}) {
   return warnings;
 }
 
-async function applyChromiumWebglIdentity(context) {
-  if (!context?.addInitScript) return;
-  await context.addInitScript(() => {
-    const VENDOR = 'Google Inc. (Intel)';
-    const RENDERER = 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)';
-    const SOFTWARE_RE = /swiftshader|llvmpipe|softpipe|software/i;
-    const patch = (proto) => {
-      if (!proto?.getParameter) return;
-      const orig = proto.getParameter;
-      let spoof = null;
-      proto.getParameter = function (parameter) {
-        if (parameter === 37445 || parameter === 37446) {
-          if (spoof === null) {
-            const real = `${orig.call(this, 37445) || ''} ${orig.call(this, 37446) || ''}`;
-            spoof = SOFTWARE_RE.test(real);
-          }
-          if (spoof) return parameter === 37445 ? VENDOR : RENDERER;
+function chromiumWebglPatch() {
+  const VENDOR = 'Google Inc. (Intel)';
+  const RENDERER = 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+  const SOFTWARE_RE = /swiftshader|llvmpipe|softpipe|software/i;
+  const patch = (proto) => {
+    if (!proto?.getParameter) return;
+    const orig = proto.getParameter;
+    let spoof = null;
+    proto.getParameter = function (parameter) {
+      if (parameter === 37445 || parameter === 37446) {
+        if (spoof === null) {
+          const real = `${orig.call(this, 37445) || ''} ${orig.call(this, 37446) || ''}`;
+          spoof = SOFTWARE_RE.test(real);
         }
-        return orig.call(this, parameter);
-      };
-      proto.getParameter.toString = () => orig.toString();
+        if (spoof) return parameter === 37445 ? VENDOR : RENDERER;
+      }
+      return orig.call(this, parameter);
     };
-    try {
-      patch(window.WebGLRenderingContext?.prototype);
-      patch(window.WebGL2RenderingContext?.prototype);
-    } catch {}
-  }).catch(() => {});
+    proto.getParameter.toString = () => orig.toString();
+  };
+  try {
+    patch(window.WebGLRenderingContext?.prototype);
+    patch(window.WebGL2RenderingContext?.prototype);
+  } catch {}
+}
+
+async function patchChromiumWebglPage(page) {
+  if (!page?.evaluate) return;
+  await page.evaluate(chromiumWebglPatch).catch(() => {});
+}
+
+async function applyChromiumWebglIdentity(context, page) {
+  if (!context?.newCDPSession || !page) return;
+  const source = `(${chromiumWebglPatch.toString()})()`;
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source });
+    if (!context.__epicCdpSessions) context.__epicCdpSessions = [];
+    context.__epicCdpSessions.push(cdp);
+  } catch {}
+  await patchChromiumWebglPage(page);
 }
 
 /**
@@ -267,6 +281,7 @@ export class EpicManager {
     });
     const loginUrl = 'https://www.epicgames.com/id/login?lang=zh-CN&noHostRedirect=true&redirectUrl=' + encodeURIComponent(`${STORE_BASE}/free-games`);
     await launched.page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+    await patchChromiumWebglPage(launched.page);
     return { opened: true, accountId, loginUrl };
   }
 
@@ -554,8 +569,10 @@ export class EpicManager {
       );
       context = launched.context;
       const page = launched.page;
-      // 用 about:blank 即可：这些信号与页面无关，不打扰 Epic，也避免触发风控计数
-      await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      // 使用 data URL 强制创建新文档，确保 addInitScript 的 WebGL 伪装已执行；
+      // 不访问 Epic，避免触发额外风控计数。
+      await page.goto('data:text/html,<title>fingerprint</title>', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await patchChromiumWebglPage(page);
       const signals = await page.evaluate(() => {
         const readGl = () => {
           try {
@@ -662,8 +679,11 @@ export class EpicManager {
     if (!cleanSession && acc.storageState?.cookies?.length) {
       await context.addCookies(acc.storageState.cookies).catch(() => {});
     }
-    await applyChromiumWebglIdentity(context);
     const page = context.pages()[0] || await context.newPage();
+    await applyChromiumWebglIdentity(context, page);
+    context.on?.('page', newPage => {
+      applyChromiumWebglIdentity(context, newPage).catch(() => {});
+    });
     return { context, page, engine: 'chromium' };
   }
 
@@ -733,6 +753,7 @@ export class EpicManager {
       navigationError = e;
     }
     await page.waitForLoadState('domcontentloaded', { timeout: Math.max(5000, timeout - 15000) }).catch(() => {});
+    await patchChromiumWebglPage(page);
     this.throwIfStopped();
     const result = await this.waitForPageState(page, ['product', 'checkout', 'challenge', 'login', 'owned'], timeout);
     return { ...result, navigationError };

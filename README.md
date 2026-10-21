@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.18-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.19-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -207,6 +207,11 @@
   - **修复 Chromium 在 Xvfb 中 WebGL 不可用**：启用 SwiftShader 软件 WebGL，并将软件渲染标识伪装为常见 Intel 核显，避免指纹自检报警和验证码误判；
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
+  - **回归测试 130 项全部通过**。
+- 🔍 **WebGL 伪装实际生效与结账状态复检 (v1.7.19)**：
+  - **修复 Patchright 下 `addInitScript` 不生效**：改为页面加载后主动注入 WebGL 伪装，并在每次 Epic 页面导航后重新应用；
+  - **指纹自检确认 WebGL 可用**：SwiftShader 的软件渲染标识会被替换为常见 Intel 核显；
+  - **结账按钮状态在验证期间实时识别**，不会因残留 `TRY AGAIN` 或误按 `Escape` 关闭结账弹窗；
   - **回归测试 130 项全部通过**。
 - 🧊 **搜索真实性、打孔卡状态机与账号暂停 (v1.7.9)**：
   - **搜索进度只认官网**：删除本地“每次搜索 +3 分”和 `max(本地, 官网)` 的假进度，官网不涨就保持 0/15、0/30、0/60，不再虚报打满；

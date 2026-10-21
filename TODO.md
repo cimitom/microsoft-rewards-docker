@@ -1,5 +1,12 @@
 # 下一版本待办
 
+## 已完成于 v1.7.19
+
+- [x] 修复 Patchright 下 `addInitScript` 不生效的问题，页面加载后主动注入 WebGL 伪装。
+- [x] 每次 Epic 页面导航后重新应用 WebGL 伪装。
+- [x] 指纹自检确认 SwiftShader 标识被替换为常见 Intel 核显。
+- [x] 回归测试 130 项全部通过。
+
 ## 已完成于 v1.7.18
 
 - [x] Chromium 在 Xvfb 中启用 SwiftShader WebGL，并将软件渲染标识伪装为常见核显。
