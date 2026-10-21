@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.20-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.8.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -208,6 +208,12 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🎉 **Epic 白嫖成功庆祝与 VNC 自动关闭 (v1.8.0)**：
+  - **成功后自动关闭 VNC**：领取结果出现 `claimed` 或 `owned` 时，自动断开并关闭可见浏览器小窗，不再留下黑屏窗口；
+  - **白嫖成功庆祝弹窗**：显示“恭喜白嫖成功”、账号、游戏名与入库状态；
+  - **网页礼花**：使用本地 Canvas 绘制礼花，不依赖外部 CDN，并遵守系统“减少动态效果”设置；
+  - **桌面与手机适配**：庆祝层在 1366px 桌面和 390px 手机宽度下均无横向溢出；
+  - **回归测试 138 项全部通过**。
 - 🛒 **Epic 结账按钮跨 iframe 与遮罩点击修复 (v1.7.20)**：
   - **跨 iframe 查找结账按钮**：不再只在主页面查找“添加到库”，结账层位于子 frame 时也能定位；
   - **活跃验证层优先**：人机验证遮罩仍可见时不会越过遮罩强点结账按钮，等验证层真正消失后再继续；

@@ -12,6 +12,9 @@ let epicActionPollTimer = null;
 let microsoftActionPollTimer = null;
 let actionProgressTimer = null;
 let lastEpicActionLog = '';
+let celebrationAnimationId = null;
+let celebrationResizeHandler = null;
+let celebrationTimers = [];
 // 前端日志视图的起始时间：点击「清空」后只显示此后的新日志（后端日志不受影响）
 let logViewSince = 0;
 // 最近一次系统指标（容器 CPU/内存），供浏览器监控卡片复用
@@ -937,6 +940,162 @@ function closeNovncModal() {
   closeModal('novnc-modal');
 }
 
+function stopEpicConfetti() {
+  if (celebrationAnimationId !== null) {
+    cancelAnimationFrame(celebrationAnimationId);
+    celebrationAnimationId = null;
+  }
+  celebrationTimers.forEach(timer => clearTimeout(timer));
+  celebrationTimers = [];
+  if (celebrationResizeHandler) {
+    window.removeEventListener('resize', celebrationResizeHandler);
+    celebrationResizeHandler = null;
+  }
+  const canvas = document.getElementById('epic-confetti-canvas');
+  const ctx = canvas?.getContext('2d');
+  if (ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function closeEpicCelebration() {
+  stopEpicConfetti();
+  const layer = document.getElementById('epic-celebration');
+  if (layer) {
+    layer.classList.remove('show');
+    layer.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function collectEpicSuccesses(resultGroups = []) {
+  const successes = [];
+  let failures = 0;
+  for (const group of resultGroups || []) {
+    const accountName = group.accountName
+      || epicAccountCache.find(acc => acc.id === group.accountId)?.name
+      || group.accountId
+      || '';
+    for (const result of group.results || []) {
+      if (result?.ok && (result.status === 'claimed' || result.status === 'owned')) {
+        successes.push({
+          accountName,
+          title: result.title || '免费游戏',
+          message: result.message || (result.status === 'owned' ? '已在库中' : '领取成功')
+        });
+      } else if (!result?.ok && result?.status !== 'skipped') {
+        failures += 1;
+      }
+    }
+    if (group.error) failures += 1;
+  }
+  return { successes, failures };
+}
+
+function showEpicCelebration({ message = '免费游戏已经收入库中。', items = [], note = '' } = {}) {
+  const layer = document.getElementById('epic-celebration');
+  if (!layer) return;
+  const messageEl = document.getElementById('epic-celebration-message');
+  const listEl = document.getElementById('epic-celebration-list');
+  const noteEl = document.getElementById('epic-celebration-note');
+  if (messageEl) messageEl.innerText = message;
+  if (listEl) {
+    listEl.innerHTML = items.slice(0, 6).map(item => {
+      const meta = [item.accountName, item.message].filter(Boolean).join(' · ');
+      return `<div class="celebration-item"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(meta)}</span></div>`;
+    }).join('');
+  }
+  const extra = items.length > 6 ? `另有 ${items.length - 6} 个游戏也已入库。` : '';
+  if (noteEl) noteEl.innerText = [extra, note].filter(Boolean).join(' ');
+  layer.classList.add('show');
+  layer.setAttribute('aria-hidden', 'false');
+  requestAnimationFrame(() => {
+    if (!layer.classList.contains('show')) return;
+    startEpicConfetti();
+    document.getElementById('btn-close-epic-celebration')?.focus({ preventScroll: true });
+  });
+}
+
+function sizeEpicConfettiCanvas() {
+  const canvas = document.getElementById('epic-confetti-canvas');
+  if (!canvas) return null;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, window.innerWidth);
+  const height = Math.max(1, window.innerHeight);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { canvas, ctx, width, height };
+}
+
+function startEpicConfetti() {
+  stopEpicConfetti();
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  let sized = sizeEpicConfettiCanvas();
+  if (!sized) return;
+  let { canvas, ctx, width, height } = sized;
+  let particles = [];
+  const colors = ['#10B981', '#38BDF8', '#F59E0B', '#F472B6', '#F8FAFC'];
+
+  const burst = (count, originX, originY) => {
+    for (let i = 0; i < count; i++) {
+      const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.9;
+      const speed = 5 + Math.random() * 8;
+      particles.push({
+        x: originX + (Math.random() - 0.5) * 90,
+        y: originY + (Math.random() - 0.5) * 34,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        gravity: 0.11 + Math.random() * 0.07,
+        drag: 0.992,
+        size: 4 + Math.random() * 6,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        rot: Math.random() * Math.PI,
+        spin: (Math.random() - 0.5) * 0.26,
+        life: 1
+      });
+    }
+  };
+
+  burst(85, width * 0.5, height * 0.22);
+  celebrationTimers.push(setTimeout(() => burst(55, width * 0.22, height * 0.16), 180));
+  celebrationTimers.push(setTimeout(() => burst(55, width * 0.78, height * 0.16), 360));
+
+  const startedAt = performance.now();
+  const tick = now => {
+    ctx.clearRect(0, 0, width, height);
+    for (const particle of particles) {
+      particle.vx *= particle.drag;
+      particle.vy += particle.gravity;
+      particle.x += particle.vx;
+      particle.y += particle.vy;
+      particle.rot += particle.spin;
+      particle.life -= 0.006;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, particle.life);
+      ctx.translate(particle.x, particle.y);
+      ctx.rotate(particle.rot);
+      ctx.fillStyle = particle.color;
+      ctx.fillRect(-particle.size / 2, -particle.size * 0.3, particle.size, particle.size * 0.6);
+      ctx.restore();
+    }
+    particles = particles.filter(particle => particle.life > 0 && particle.y < height + 40);
+    if (now - startedAt < 4800 || particles.length > 0) {
+      celebrationAnimationId = requestAnimationFrame(tick);
+    } else {
+      celebrationAnimationId = null;
+      ctx.clearRect(0, 0, width, height);
+    }
+  };
+  celebrationAnimationId = requestAnimationFrame(tick);
+
+  celebrationResizeHandler = () => {
+    sized = sizeEpicConfettiCanvas();
+    if (!sized) return;
+    ({ canvas, ctx, width, height } = sized);
+  };
+  window.addEventListener('resize', celebrationResizeHandler);
+}
+
 function showWebConfirm(message, title = '请确认') {
   return new Promise((resolve) => {
     const modal = document.getElementById('web-confirm-modal');
@@ -1515,7 +1674,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.20';
+  const current = updateInfo?.currentVersion || '1.8.0';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1570,8 +1729,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.20'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.20'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.0'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.0'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -3574,6 +3733,15 @@ function initEpicUI() {
   document.getElementById('btn-close-novnc-btn')?.addEventListener('click', closeNovncModal);
   document.getElementById('btn-refresh-novnc')?.addEventListener('click', refreshNovncModal);
   document.getElementById('btn-novnc-save-login')?.addEventListener('click', saveEpicLoginWindow);
+  document.getElementById('btn-close-epic-celebration')?.addEventListener('click', closeEpicCelebration);
+  document.getElementById('epic-celebration')?.addEventListener('click', event => {
+    if (event.target?.id === 'epic-celebration') closeEpicCelebration();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && document.getElementById('epic-celebration')?.classList.contains('show')) {
+      closeEpicCelebration();
+    }
+  });
 
   // 商店检测周期预设（常规每周 vs 节日每日）
   document.querySelectorAll('.cycle-pill').forEach(btn => {
@@ -4307,6 +4475,7 @@ async function claimEpic(accountId) {
     } else {
       resultText = '本轮执行完毕，所有游戏均无需重复领取。';
     }
+    const { successes, failures } = collectEpicSuccesses(resultGroups);
 
     updateEpicActionModal({
       activeIndex: 6,
@@ -4315,6 +4484,16 @@ async function claimEpic(accountId) {
       message: '本轮免费游戏领取已全部处理完毕',
       result: resultText
     });
+
+    if (successes.length > 0) {
+      epicChallengeAutoOpened = false;
+      closeNovncModal();
+      const message = successes.length === 1
+        ? '免费游戏已经稳稳收入库中。'
+        : `本次共 ${successes.length} 个游戏成功入库。`;
+      const note = failures > 0 ? `另有 ${failures} 项未完成，可稍后重试。` : '';
+      showEpicCelebration({ message, items: successes, note });
+    }
 
     await fetchEpicAccounts();
     await fetchEpicStatus();

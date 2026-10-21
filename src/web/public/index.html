@@ -20,7 +20,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.7.20</span>
+            <span class="version-label" id="version-label">v1.8.0</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -1143,6 +1143,19 @@
         <button class="btn btn-primary" id="btn-novnc-save-login" style="display: none;">✅ 我已登录，保存凭据</button>
         <button class="btn btn-primary" id="btn-close-novnc-btn">关闭小窗</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Epic 领取成功庆祝层 -->
+  <div class="celebration-layer" id="epic-celebration" role="dialog" aria-modal="true" aria-labelledby="epic-celebration-title" aria-hidden="true">
+    <canvas class="celebration-canvas" id="epic-confetti-canvas" aria-hidden="true"></canvas>
+    <div class="celebration-panel">
+      <div class="celebration-kicker">EPIC FREEBIE CLAIMED</div>
+      <h2 class="celebration-title" id="epic-celebration-title">恭喜白嫖成功</h2>
+      <p class="celebration-message" id="epic-celebration-message">免费游戏已经收入库中。</p>
+      <div class="celebration-list" id="epic-celebration-list"></div>
+      <div class="celebration-note" id="epic-celebration-note"></div>
+      <button class="btn btn-primary celebration-close" id="btn-close-epic-celebration">收下战利品</button>
     </div>
   </div>
 

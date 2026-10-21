@@ -2401,6 +2401,133 @@ body {
   gap: 10px;
 }
 
+/* Epic 领取成功庆祝层 */
+.celebration-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(3, 7, 18, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.celebration-layer.show {
+  display: flex;
+}
+
+.celebration-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.celebration-panel {
+  position: relative;
+  z-index: 1;
+  width: min(460px, 94vw);
+  padding: 34px 30px 26px;
+  border-radius: 18px;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  background: var(--modal-bg);
+  color: var(--text-main);
+  text-align: center;
+  overflow: hidden;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(16, 185, 129, 0.08) inset;
+  animation: celebration-pop 0.46s cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+.celebration-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, #10B981, #38BDF8, #F59E0B);
+}
+
+.celebration-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: var(--success);
+}
+
+.celebration-title {
+  margin: 10px 0 8px;
+  font-size: clamp(28px, 6vw, 40px);
+  line-height: 1.12;
+  letter-spacing: 0;
+  color: var(--text-main);
+}
+
+.celebration-message {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-sub);
+}
+
+.celebration-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  text-align: left;
+}
+
+.celebration-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--card-inner);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.celebration-item strong {
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.celebration-item span {
+  color: var(--text-sub);
+}
+
+.celebration-note {
+  margin-top: 12px;
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.celebration-note:empty {
+  display: none;
+}
+
+.celebration-close {
+  width: 100%;
+  margin-top: 22px;
+  justify-content: center;
+}
+
+@keyframes celebration-pop {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .action-status-row {
   display: flex;
   align-items: flex-start;
@@ -3289,4 +3416,12 @@ body {
   .modal-body { padding: 14px 12px; }
   .modal-footer { padding: 10px 14px; }
   .tab-btn, .step-nav-item { font-size: 11px; padding: 5px 8px; }
+  .celebration-layer { padding: 14px; }
+  .celebration-panel { padding: 28px 18px 22px; border-radius: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .celebration-panel {
+    animation: none;
+  }
 }
