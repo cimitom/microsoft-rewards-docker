@@ -17,7 +17,12 @@ const EPIC_PROFILE_DIR = path.join(DATA_DIR, 'epic-firefox-profiles');
 const CHALLENGE_TEXT_RE = /verify you are human|确认您是真人|正在验证|checking your browser|cf-mitigated|try again|cloudflare/i;
 const LOGIN_TEXT_RE = /sign in|log in|登录|登入/i;
 export const EPIC_ORDER_BUTTON_RE = /添加到库|添加至库|加入库|Add to Library|下订单|下单|确认订单|结账|Place Order|Checkout/i;
-export const EPIC_SUCCESS_TEXT_RE = /已添加到库|已加入库|已拥有|谢谢|感谢|订单已提交|Added to your library|In Library|Thanks|Thank you|Order confirmed/i;
+// “结账 / Checkout” 只是打开结账层，不能当成最终确认按钮。
+// 最终动作必须优先命中真正会把游戏写入账号库的按钮。
+export const EPIC_FINAL_ORDER_BUTTON_RE = /添加到库|添加至库|加入库|Add to Library|下订单|下单|确认订单|Place Order/i;
+export const EPIC_OWNED_BUTTON_RE = /已在库中|已在您的库中|In Library|In your library/i;
+export const EPIC_SUCCESS_TEXT_RE = /已添加到库|已添加至库|已加入库|已添加到您的库|已加入您的库|已拥有此游戏|订单已提交|购买成功|领取成功|感谢您的购买|Added to your library|Successfully added to your library|Already in your library|You already own this game|Order confirmed|Purchase complete|Thanks for your order|Thank you for your order/i;
+const EPIC_OWNED_TEXT_RE = /^(已在库中|已在您的库中|In Library|In your library)$/i;
 
 function safeProfileId(accountId) {
   return String(accountId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_');
@@ -689,8 +694,7 @@ export class EpicManager {
 
   async readPageText(page) {
     const parts = [];
-    const frames = page.frames();
-    for (const frame of frames.slice(0, 20)) {
+    for (const frame of this.getEpicFrames(page)) {
       try {
         const text = await frame.locator('body').innerText({ timeout: 800 });
         if (text) parts.push(text);
@@ -699,16 +703,226 @@ export class EpicManager {
     return parts.join('\n');
   }
 
+  getEpicFrames(page) {
+    try {
+      const frames = page?.frames?.();
+      if (Array.isArray(frames) && frames.length > 0) return frames.slice(0, 20);
+    } catch {}
+    return page ? [page] : [];
+  }
+
+  /**
+   * Epic 的结账层可能位于 iframe 中。只在主页面上查找按钮会出现
+   * “VNC 里明明看得到添加到库，脚本却一直说没找到”的情况。
+   */
+  async findVisibleEpicButton(page, nameRe, { exact = false, requireEnabled = false } = {}) {
+    const frames = this.getEpicFrames(page);
+    for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+      const frame = frames[frameIndex];
+      let locator = null;
+      try {
+        locator = frame.getByRole?.('button', { name: nameRe, exact });
+      } catch {}
+      if (!locator) continue;
+
+      const count = await locator.count().catch(() => 0);
+      for (let i = 0; i < Math.min(count, 12); i++) {
+        const candidate = typeof locator.nth === 'function' ? locator.nth(i) : locator.first();
+        const visible = await candidate.isVisible().catch(() => false);
+        if (!visible) continue;
+        const enabled = await Promise.resolve(candidate.isEnabled?.()).catch(() => true);
+        if (requireEnabled && enabled === false) continue;
+        const text = await Promise.resolve(candidate.innerText?.({ timeout: 500 }))
+          .then(value => String(value || '').trim())
+          .catch(() => '');
+        return { locator: candidate, frame, frameIndex, text, enabled: enabled !== false };
+      }
+    }
+
+    // 少数活动页把按钮渲染成链接或自定义 role。getByRole 找不到时再做一次
+    // 受限的文本查找，仍然只接受 button / role=button / a，避免误点说明文字。
+    for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+      const frame = frames[frameIndex];
+      let locator = null;
+      try {
+        locator = frame.locator?.('button, [role="button"], a').filter({ hasText: nameRe });
+      } catch {}
+      if (!locator) continue;
+
+      const count = await locator.count().catch(() => 0);
+      for (let i = 0; i < Math.min(count, 12); i++) {
+        const candidate = typeof locator.nth === 'function' ? locator.nth(i) : locator.first();
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        const enabled = await Promise.resolve(candidate.isEnabled?.()).catch(() => true);
+        if (requireEnabled && enabled === false) continue;
+        const text = await Promise.resolve(candidate.innerText?.({ timeout: 500 }))
+          .then(value => String(value || '').trim())
+          .catch(() => '');
+        return { locator: candidate, frame, frameIndex, text, enabled: enabled !== false };
+      }
+    }
+    return null;
+  }
+
+  async findVisibleOrderButton(page) {
+    return this.findVisibleEpicButton(page, EPIC_FINAL_ORDER_BUTTON_RE);
+  }
+
+  async findCheckoutPage(context, fallbackPage) {
+    const pages = context?.pages?.() || [];
+    const candidates = [
+      fallbackPage,
+      ...pages.filter(candidate => candidate !== fallbackPage).reverse()
+    ];
+    for (const candidate of candidates) {
+      if (!candidate || candidate.isClosed?.()) continue;
+      if (await this.findVisibleOrderButton(candidate)) return candidate;
+    }
+    return fallbackPage;
+  }
+
+  async hasVisibleText(page, textRe) {
+    for (const frame of this.getEpicFrames(page)) {
+      if (typeof frame.getByText !== 'function') continue;
+      let locator = null;
+      try {
+        locator = frame.getByText(textRe);
+      } catch {}
+      if (!locator) continue;
+      const count = await locator.count().catch(() => 0);
+      for (let i = 0; i < Math.min(count, 12); i++) {
+        const candidate = typeof locator.nth === 'function' ? locator.nth(i) : locator.first();
+        if (await this.isLocatorRendered(candidate)) return true;
+      }
+    }
+    return false;
+  }
+
+  async isLocatorRendered(locator) {
+    if (!await locator.isVisible().catch(() => false)) return false;
+    return await Promise.resolve(locator.evaluate?.(el => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity || 1) > 0.01
+        && rect.width > 0
+        && rect.height > 0;
+    })).then(value => value !== false).catch(() => true);
+  }
+
+  /**
+   * “TRY AGAIN” 可能只是验证失败后的残留文案，不能单独说明验证层仍在。
+   * 这里只认真正可见的验证控件或验证提示，避免遮罩覆盖结账按钮时
+   * 仍然直接去点被挡住的下单按钮。
+   */
+  async hasActiveChallengeUi(page) {
+    const selector = [
+      '#challenge-stage',
+      '.cf-challenge',
+      '[id*="challenge-stage" i]',
+      '[class*="challenge-stage" i]'
+    ].join(',');
+    for (const frame of this.getEpicFrames(page)) {
+      let locator = null;
+      try {
+        locator = frame.locator(selector);
+      } catch {}
+      if (locator) {
+        const count = await locator.count().catch(() => 0);
+        for (let i = 0; i < Math.min(count, 8); i++) {
+          const candidate = typeof locator.nth === 'function' ? locator.nth(i) : locator.first();
+          if (await this.isLocatorRendered(candidate)) return true;
+        }
+      }
+      if (await this.hasVisibleText(frame, /verify you are human|confirm you are human|i am human|确认您是真人|正在验证|checking your browser|我不是机器人/i)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async clickEpicButton(locator, label = '按钮') {
+    const errors = [];
+    const enabled = await Promise.resolve(locator.isEnabled?.()).catch(() => true);
+    if (enabled === false) {
+      const message = `${label}当前处于禁用状态`;
+      logger.log('🟡', `Epic ${message}`);
+      return { ok: false, mode: '', errors: [message] };
+    }
+    try {
+      await locator.scrollIntoViewIfNeeded?.({ timeout: 2000 });
+    } catch {}
+
+    const attempts = [
+      ['普通点击', () => locator.click({ timeout: 8000, noWaitAfter: true })],
+      ['DOM 点击', () => locator.evaluate(el => el.click())],
+      // 强制点击在遮罩覆盖时会“成功返回”但事件落到遮罩上，不能放在 DOM 点击前面。
+      ['强制点击', () => locator.click({ timeout: 5000, force: true, noWaitAfter: true })]
+    ];
+    for (const [mode, run] of attempts) {
+      try {
+        await run();
+        return { ok: true, mode, errors };
+      } catch (e) {
+        errors.push(`${mode}: ${String(e?.message || e).split('\n')[0]}`);
+      }
+    }
+    logger.log('🟡', `Epic「${label}」点击失败：${errors.join('；')}`);
+    return { ok: false, mode: '', errors };
+  }
+
+  /**
+   * 部分订单要求先勾选 EULA。复选框也可能在 iframe 内，
+   * 因此先收集所有可见且未勾选的复选框，再优先勾选带同意/条款文案的那个。
+   */
+  async acceptCheckoutAgreements(page) {
+    const candidates = [];
+    for (const frame of this.getEpicFrames(page)) {
+      let boxes = null;
+      try {
+        boxes = frame.locator('input[type="checkbox"]');
+      } catch {}
+      if (!boxes) continue;
+      const count = await boxes.count().catch(() => 0);
+      for (let i = 0; i < Math.min(count, 10); i++) {
+        const box = typeof boxes.nth === 'function' ? boxes.nth(i) : boxes.first();
+        if (!await box.isVisible().catch(() => false)) continue;
+        if (await box.isChecked().catch(() => true)) continue;
+        if (await Promise.resolve(box.isEnabled?.()).catch(() => true) === false) continue;
+        const relatedText = await Promise.resolve(box.evaluate(el => {
+          const label = el.closest('label')
+            || (el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null);
+          return `${label?.innerText || ''} ${el.getAttribute('aria-label') || ''} ${el.closest('div')?.innerText?.slice(0, 240) || ''}`;
+        })).then(value => String(value || '')).catch(() => '');
+        candidates.push({ box, relatedText });
+      }
+    }
+
+    const agreementRe = /同意|agree|EULA|条款|terms|privacy|隐私/i;
+    const chosen = candidates.filter(item => agreementRe.test(item.relatedText));
+    if (chosen.length === 0 && candidates.length === 1) chosen.push(candidates[0]);
+    for (const item of chosen) {
+      await item.box.check({ timeout: 3000 }).catch(async () => {
+        await item.box.click({ timeout: 2000, force: true }).catch(() => {});
+      });
+    }
+    return chosen.length;
+  }
+
   async detectPageState(page) {
     const title = await page.title().catch(() => '');
     const pageUrl = page.url();
     const text = await this.readPageText(page);
     const combined = `${title}\n${text}`;
 
-    // 结账弹窗出现后，页面仍可能保留 “TRY AGAIN” 等旧验证文案。
-    // 可见的结账按钮是比文本更可靠的状态信号。
-    const orderBtn = page.getByRole('button', { name: EPIC_ORDER_BUTTON_RE }).first();
-    if (await orderBtn.count().catch(() => 0) > 0 && await orderBtn.isVisible().catch(() => false)) {
+    if (await this.hasActiveChallengeUi(page)) {
+      return { state: 'challenge', text: combined };
+    }
+
+    // 验证层真正消失后，页面仍可能保留 “TRY AGAIN” 等旧验证文案。
+    // 此时可见的结账按钮是比文本更可靠的状态信号。
+    if (await this.findVisibleOrderButton(page)) {
       return { state: 'checkout', text: combined };
     }
 
@@ -720,14 +934,11 @@ export class EpicManager {
       return { state: 'login', text: combined };
     }
 
-    for (const frame of page.frames().slice(0, 20)) {
-      const owned = await frame.locator('text=已在库中').count().catch(() => 0);
-      if (owned > 0) return { state: 'owned', text: combined };
-
-      const getBtn = frame.getByRole('button', { name: /^获取$|^Get$/ }).first();
-      if (await getBtn.count().catch(() => 0) > 0 && await getBtn.isVisible().catch(() => false)) {
-        return { state: 'product', text: combined };
-      }
+    if (await this.hasVisibleText(page, EPIC_OWNED_TEXT_RE)) {
+      return { state: 'owned', text: combined };
+    }
+    if (await this.findVisibleEpicButton(page, /^获取$|^Get$/i)) {
+      return { state: 'product', text: combined };
     }
     return { state: 'unknown', text: combined };
   }
@@ -767,11 +978,17 @@ export class EpicManager {
       status: 'challenge',
       progress: 45,
       code: 'challenge',
-      lastAction: '检测到 Epic 人机验证，等待验证层自动通过...'
+      lastAction: '检测到 Epic 人机验证，等待验证层消失（托管验证可能自动放行）...'
     });
 
     let state = await this.waitForPageState(page, ['product', 'checkout', 'owned', 'login'], 8000);
-    if (state.state !== 'challenge' && state.state !== 'unknown') return state;
+    if (state.state !== 'challenge' && state.state !== 'unknown') {
+      logger.log('✅', 'Epic 人机验证层已消失，继续检查结账按钮');
+      return state;
+    }
+    if (!await this.hasActiveChallengeUi(page) && await this.findVisibleOrderButton(page)) {
+      return { state: 'checkout', text: state.text || '' };
+    }
 
     // Epic 的验证层有时是覆盖在结账界面上的 UI 层。先尝试关闭覆盖层，
     // 再给用户留出在 noVNC 中手动完成验证的时间。
@@ -779,9 +996,9 @@ export class EpicManager {
     await page.keyboard.press('Escape').catch(() => {});
     await this.delay(1000);
 
-    const retryBtn = page.getByRole('button', { name: /TRY AGAIN|重试/i }).first();
-    if (await retryBtn.count().catch(() => 0) > 0 && await retryBtn.isVisible().catch(() => false)) {
-      await retryBtn.click({ timeout: 5000, noWaitAfter: true }).catch(() => {});
+    const retryBtn = await this.findVisibleEpicButton(page, /TRY AGAIN|重试/i);
+    if (retryBtn) {
+      await this.clickEpicButton(retryBtn.locator, retryBtn.text || '重试');
       await this.delay(1500);
     }
 
@@ -790,6 +1007,11 @@ export class EpicManager {
       lastAction: `等待人工完成 Epic 人机验证（最多 ${waitSec} 秒），请打开可见浏览器操作`
     });
     state = await this.waitForPageState(page, ['product', 'checkout', 'owned', 'login'], waitSec * 1000);
+    if (state.state !== 'challenge' && state.state !== 'unknown') {
+      logger.log('✅', 'Epic 人机验证已完成，继续领取流程');
+    } else {
+      logger.log('🟡', `Epic 人机验证层在 ${waitSec} 秒内仍未消失`);
+    }
     return state;
   }
 
@@ -1039,12 +1261,21 @@ export class EpicManager {
   async visibleButtonTexts(page) {
     try {
       const texts = [];
-      for (const frame of page.frames().slice(0, 20)) {
+      const frames = this.getEpicFrames(page);
+      for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+        const frame = frames[frameIndex];
         try {
-          texts.push(...await frame.locator('button').allInnerTexts());
+          const buttons = frame.locator('button, [role="button"]');
+          const count = await buttons.count().catch(() => 0);
+          for (let i = 0; i < Math.min(count, 30); i++) {
+            const button = typeof buttons.nth === 'function' ? buttons.nth(i) : buttons.first();
+            if (!await button.isVisible().catch(() => false)) continue;
+            const text = String(await button.innerText({ timeout: 500 }).catch(() => '') || '').trim();
+            if (text) texts.push(frameIndex === 0 ? text : `[iframe ${frameIndex}] ${text}`);
+          }
         } catch {}
       }
-      return [...new Set(texts.map(t => String(t).trim()).filter(Boolean))].slice(0, 16).join(' / ');
+      return [...new Set(texts)].slice(0, 20).join(' / ');
     } catch {
       return '(读取失败)';
     }
@@ -1199,15 +1430,12 @@ export class EpicManager {
 
   /** 领取单个游戏；status: claimed(本次领到) / owned(本来就有) / skipped(无页面) / failed */
   async detectOwnedState(page) {
-    const textCount = await page.getByText('已在库中', { exact: true }).count().catch(() => 0);
-    if (textCount > 0) return true;
-    const buttonCount = await page.getByRole('button', { name: /已在库中|In Library/i }).count().catch(() => 0);
-    return buttonCount > 0;
+    if (await this.hasVisibleText(page, EPIC_OWNED_TEXT_RE)) return true;
+    return !!(await this.findVisibleEpicButton(page, EPIC_OWNED_BUTTON_RE));
   }
 
   async detectClaimOutcome(page) {
-    const successCount = await page.getByText(EPIC_SUCCESS_TEXT_RE).count().catch(() => 0);
-    if (successCount > 0) return { status: 'claimed', message: '领取成功' };
+    if (await this.hasVisibleText(page, EPIC_SUCCESS_TEXT_RE)) return { status: 'claimed', message: '领取成功' };
     if (await this.detectOwnedState(page)) return { status: 'owned', message: '已在库中' };
     return null;
   }
@@ -1312,18 +1540,22 @@ export class EpicManager {
       }
 
       this.updateState({ status: 'clicking', progress: 55, lastAction: `点击「获取」...` });
-      const exactGet = page.getByRole('button', { name: /^获取$|^Get$/ }).first();
-      const getBtn = (await exactGet.count()) > 0
-        ? exactGet
-        : page.getByRole('button', { name: /获取|Get/ }).first();
-
-      if ((await getBtn.count()) === 0) {
+      let getMatch = await this.findVisibleEpicButton(page, /^获取$|^Get$/i, { requireEnabled: true });
+      if (!getMatch) {
+        getMatch = await this.findVisibleEpicButton(page, /获取|Get/i, { requireEnabled: true });
+      }
+      if (!getMatch) {
         result.code = 'no_get_button';
         result.message = `未找到「获取」按钮（当前按钮：${await this.visibleButtonTexts(page)}）`;
         return result;
       }
       const pageCountBeforeClick = context ? context.pages().length : 1;
-      await getBtn.click({ timeout: 10000, noWaitAfter: true });
+      const getClick = await this.clickEpicButton(getMatch.locator, '获取');
+      if (!getClick.ok) {
+        result.code = 'get_click_failed';
+        result.message = `点击「获取」失败：${getClick.errors.join('；')}`;
+        return result;
+      }
       await this.delay(2000);
 
       if (context) {
@@ -1332,10 +1564,14 @@ export class EpicManager {
           page = pages[pages.length - 1];
           await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
         }
+        const checkoutPage = await this.findCheckoutPage(context, page);
+        if (checkoutPage !== page) {
+          page = checkoutPage;
+          this.updateState({ lastAction: '结账窗口位于另一个标签页，已切换过去继续确认...' });
+        }
       }
 
       this.updateState({ status: 'ordering', progress: 70, lastAction: `等待结账窗口...` });
-      const orderBtn = page.getByRole('button', { name: EPIC_ORDER_BUTTON_RE }).first();
       const checkoutDeadline = Date.now() + 25000;
       const checkoutStartedAt = Date.now();
       let checkoutReady = false;
@@ -1352,13 +1588,6 @@ export class EpicManager {
           return result;
         }
 
-        // 验证码消失后，页面可能仍残留 “TRY AGAIN” 文案，但结账弹窗已经出现。
-        // 只要可见的“添加到库”按钮存在，就以结账界面为准。
-        if (await orderBtn.count().catch(() => 0) > 0 && await orderBtn.isVisible().catch(() => false)) {
-          checkoutReady = true;
-          break;
-        }
-
         const current = await this.detectPageState(page);
         if (current.state === 'challenge') {
           const resolved = await this.dismissChallengeOverlay(page);
@@ -1372,15 +1601,17 @@ export class EpicManager {
             return result;
           }
           if (resolved.state === 'challenge' || resolved.state === 'unknown') {
-            if (await orderBtn.count().catch(() => 0) > 0 && await orderBtn.isVisible().catch(() => false)) {
-              checkoutReady = true;
-              break;
-            }
             result.status = 'blocked';
             result.code = 'challenge';
             result.message = `结账前人机验证未通过（当前按钮：${await this.visibleButtonTexts(page)}）`;
             return result;
           }
+        }
+
+        // 验证层真正消失后，页面可能仍残留 “TRY AGAIN” 文案，但结账弹窗已经出现。
+        if (await this.findVisibleOrderButton(page)) {
+          checkoutReady = true;
+          break;
         }
 
         if (!escapeTried && Date.now() - checkoutStartedAt > 2500) {
@@ -1408,18 +1639,42 @@ export class EpicManager {
       }
 
       // 部分游戏需要勾选 EULA 才能下单
-      try {
-        const checkbox = page.locator('input[type="checkbox"]').first();
-        if (await checkbox.count() > 0) {
-          const checked = await checkbox.isChecked().catch(() => true);
-          if (!checked) await checkbox.check({ timeout: 3000 }).catch(() => {});
-        }
-      } catch {}
+      const agreementCount = await this.acceptCheckoutAgreements(page);
+      if (agreementCount > 0) {
+        this.updateState({ lastAction: `已勾选 ${agreementCount} 项结账协议，准备确认订单...` });
+      }
 
-      this.updateState({ status: 'ordering', progress: 82, lastAction: `确认订单...` });
-      await orderBtn.click({ timeout: 10000, noWaitAfter: true });
+      // 勾选协议或验证层消退后 DOM 可能重建，因此点击前重新定位。
+      let orderMatch = await this.findVisibleOrderButton(page);
+      if (!orderMatch) {
+        await this.delay(1500);
+        orderMatch = await this.findVisibleOrderButton(page);
+      }
+      if (!orderMatch) {
+        result.code = 'no_order_button';
+        result.message = `结账按钮在点击前消失（当前按钮：${await this.visibleButtonTexts(page)}）`;
+        return result;
+      }
 
-      const confirmDeadline = Date.now() + 25000;
+      const orderLabel = orderMatch.text || '添加到库';
+      this.updateState({
+        status: 'ordering',
+        progress: 82,
+        lastAction: `点击「${orderLabel}」（${orderMatch.frameIndex === 0 ? '主页面' : `iframe ${orderMatch.frameIndex}`}）...`
+      });
+      const orderClick = await this.clickEpicButton(orderMatch.locator, orderLabel);
+      if (!orderClick.ok) {
+        result.code = 'order_click_failed';
+        result.message = `点击「${orderLabel}」失败：${orderClick.errors.join('；')}`;
+        return result;
+      }
+      this.updateState({
+        status: 'ordering',
+        progress: 86,
+        lastAction: `已通过${orderClick.mode}点击「${orderLabel}」，等待入库回调...`
+      });
+
+      const confirmDeadline = Date.now() + 35000;
       while (Date.now() < confirmDeadline) {
         this.throwIfStopped();
         const outcome = await this.detectClaimOutcome(page);
@@ -1434,7 +1689,7 @@ export class EpicManager {
         await this.delay(1000);
       }
       result.code = 'order_unconfirmed';
-      result.message = `已点击下单，未识别到成功提示（当前按钮：${await this.visibleButtonTexts(page)}）`;
+      result.message = `已点击「${orderLabel}」，但未识别到入库确认（当前按钮：${await this.visibleButtonTexts(page)}）`;
       return result;
     } catch (e) {
       result.code = 'exception';
@@ -1471,8 +1726,8 @@ export class EpicManager {
           status = 'owned';
           handledPatch[game.id] = { at: Date.now(), status: 'owned', title: game.title };
         } else if (pageState.state === 'product') {
-          const getBtn = page.getByRole('button', { name: /^获取$|^Get$/ }).first();
-          if (await getBtn.count().catch(() => 0) > 0 && await getBtn.isVisible().catch(() => false)) {
+          const getBtn = await this.findVisibleEpicButton(page, /^获取$|^Get$/i);
+          if (getBtn) {
             status = 'available';
             delete handledPatch[game.id];
           }

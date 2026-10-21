@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.19-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.20-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -208,6 +208,12 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🛒 **Epic 结账按钮跨 iframe 与遮罩点击修复 (v1.7.20)**：
+  - **跨 iframe 查找结账按钮**：不再只在主页面查找“添加到库”，结账层位于子 frame 时也能定位；
+  - **活跃验证层优先**：人机验证遮罩仍可见时不会越过遮罩强点结账按钮，等验证层真正消失后再继续；
+  - **点击降级与标签页切换**：普通点击被遮挡时先改用 DOM 点击，避免强制点击落到遮罩上“假成功”；结账窗口在另一个标签页时自动切换；
+  - **成功判定收紧**：只认可见的“已在库中 / 已添加”类提示，隐藏模板或页面里的宽泛“感谢”不再误报成功；
+  - **回归测试 135 项全部通过**。
 - 🔍 **WebGL 伪装实际生效与结账状态复检 (v1.7.19)**：
   - **修复 Patchright 下 `addInitScript` 不生效**：改为页面加载后主动注入 WebGL 伪装，并在每次 Epic 页面导航后重新应用；
   - **指纹自检确认 WebGL 可用**：SwiftShader 的软件渲染标识会被替换为常见 Intel 核显；

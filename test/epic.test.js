@@ -11,6 +11,7 @@ const {
   isEpicChallengeText,
   isEpicLoginText,
   EPIC_ORDER_BUTTON_RE,
+  EPIC_FINAL_ORDER_BUTTON_RE,
   EPIC_SUCCESS_TEXT_RE,
   epicProfilePath,
   EpicManager
@@ -81,6 +82,8 @@ test('Epic 结账按钮与成功文案覆盖“添加到库”当前文案', () 
   assert.equal(EPIC_ORDER_BUTTON_RE.test('Add to Library'), true);
   assert.equal(EPIC_ORDER_BUTTON_RE.test('确认订单'), true);
   assert.equal(EPIC_ORDER_BUTTON_RE.test('愿望清单'), false);
+  assert.equal(EPIC_FINAL_ORDER_BUTTON_RE.test('添加到库'), true);
+  assert.equal(EPIC_FINAL_ORDER_BUTTON_RE.test('Checkout'), false, '打开结账层不能当成最终确认按钮');
 
   assert.equal(EPIC_SUCCESS_TEXT_RE.test('已添加到库'), true);
   assert.equal(EPIC_SUCCESS_TEXT_RE.test('Added to your library'), true);
@@ -104,10 +107,17 @@ test('Epic 停止请求会关闭活动浏览器上下文并标记状态', async 
 
 test('手动完成验证后出现“已在库中”即可确认领取完成', async () => {
   const em = new EpicManager();
+  const makeLocator = () => ({
+    first() { return this; },
+    nth() { return this; },
+    count: async () => 1,
+    isVisible: async () => true,
+    isEnabled: async () => true
+  });
   const page = {
-    getByText: (_text, options) => ({ count: async () => options?.exact ? 1 : 0 }),
-    getByRole: () => ({ count: async () => 0 }),
-    locator: () => ({ count: async () => 1 })
+    getByText: text => ({ ...makeLocator(), count: async () => /已在库中/.test(String(text)) ? 1 : 0 }),
+    getByRole: () => ({ ...makeLocator(), count: async () => 0 }),
+    locator: () => ({ ...makeLocator(), count: async () => 0 })
   };
   const outcome = await em.detectClaimOutcome(page);
   assert.deepEqual(outcome, { status: 'owned', message: '已在库中' });
@@ -171,8 +181,7 @@ test('验证码残留 TRY AGAIN 时，可见的“添加到库”按钮优先执
   em.delay = async () => {};
   em.checkEpicAccountSession = async () => ({ valid: true, state: 'logged-in' });
   em.navigateEpicPage = async () => ({ state: 'product' });
-  em.detectPageState = async () => ({ state: 'challenge' });
-  em.dismissChallengeOverlay = async () => ({ state: 'challenge' });
+  em.detectPageState = async () => ({ state: 'checkout' });
   em.detectClaimOutcome = async () => orderClicked ? { status: 'owned', message: '已在库中' } : null;
 
   const makeLocator = (kind) => ({
@@ -216,4 +225,112 @@ test('结账按钮存在时页面状态优先判为 checkout，而不是残留�
   };
   const state = await em.detectPageState(page);
   assert.equal(state.state, 'checkout');
+});
+
+test('验证层仍可见时不能越过遮罩直接点结账按钮', async () => {
+  const em = new EpicManager();
+  em.readPageText = async () => '确认您是真人';
+  const makeLocator = (count, visible = true) => ({
+    first() { return this; },
+    nth() { return this; },
+    count: async () => count,
+    isVisible: async () => visible,
+    isEnabled: async () => true,
+    innerText: async () => count > 0 ? '添加到库' : ''
+  });
+  const page = {
+    title: async () => 'Agent A',
+    url: () => 'https://store.epicgames.com/p/agent-a',
+    getByText: () => makeLocator(1),
+    getByRole: () => makeLocator(1),
+    locator: () => makeLocator(0)
+  };
+
+  const state = await em.detectPageState(page);
+  assert.equal(state.state, 'challenge');
+});
+
+test('结账按钮位于 iframe 时仍能识别为 checkout', async () => {
+  const em = new EpicManager();
+  em.readPageText = async () => 'TRY AGAIN';
+  const makeLocator = (count) => ({
+    first() { return this; },
+    nth() { return this; },
+    count: async () => count,
+    isVisible: async () => count > 0,
+    isEnabled: async () => true,
+    innerText: async () => count > 0 ? '添加到库' : ''
+  });
+  const emptyFrame = {
+    getByRole: () => makeLocator(0),
+    locator: () => makeLocator(0)
+  };
+  const checkoutFrame = {
+    getByRole: (_role, options) => makeLocator(/添加到库/.test(String(options?.name)) ? 1 : 0),
+    locator: () => makeLocator(0)
+  };
+  const page = {
+    title: async () => 'Agent A',
+    url: () => 'https://store.epicgames.com/p/agent-a',
+    frames: () => [emptyFrame, checkoutFrame],
+    getByRole: () => makeLocator(0)
+  };
+
+  const state = await em.detectPageState(page);
+  assert.equal(state.state, 'checkout');
+});
+
+test('结账窗口位于新标签页时会切换到实际结账页', async () => {
+  const em = new EpicManager();
+  const productPage = { name: 'product', isClosed: () => false };
+  const checkoutPage = { name: 'checkout', isClosed: () => false };
+  em.findVisibleOrderButton = async candidate => candidate === checkoutPage;
+
+  const found = await em.findCheckoutPage(
+    { pages: () => [productPage, checkoutPage] },
+    productPage
+  );
+  assert.equal(found, checkoutPage);
+});
+
+test('隐藏的成功文案不能被当成领取完成', async () => {
+  const em = new EpicManager();
+  const makeLocator = (visible) => ({
+    first() { return this; },
+    nth() { return this; },
+    count: async () => 1,
+    isVisible: async () => visible,
+    isEnabled: async () => true
+  });
+  const page = {
+    getByText: () => makeLocator(false),
+    getByRole: () => ({ ...makeLocator(false), count: async () => 0 }),
+    locator: () => ({ ...makeLocator(false), count: async () => 0 })
+  };
+  assert.equal(await em.detectClaimOutcome(page), null);
+});
+
+test('普通点击被遮挡时，结账按钮会降级为 DOM 点击而不是假成功的强制点击', async () => {
+  const em = new EpicManager();
+  let clicks = 0;
+  let domClicks = 0;
+  let forceClicks = 0;
+  const locator = {
+    scrollIntoViewIfNeeded: async () => {},
+    click: async options => {
+      clicks += 1;
+      if (clicks === 1) throw new Error('element is covered by another element');
+      if (options?.force) forceClicks += 1;
+    },
+    evaluate: async () => {
+      domClicks += 1;
+    }
+  };
+
+  const result = await em.clickEpicButton(locator, '添加到库');
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'DOM 点击');
+  assert.equal(clicks, 1);
+  assert.equal(domClicks, 1);
+  assert.equal(forceClicks, 0, 'DOM 点击成功后不能再触发假成功的强制点击');
 });
