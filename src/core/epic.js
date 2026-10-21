@@ -52,6 +52,35 @@ export function evaluateEpicBrowserFingerprint(signals = {}) {
   return warnings;
 }
 
+async function applyChromiumWebglIdentity(context) {
+  if (!context?.addInitScript) return;
+  await context.addInitScript(() => {
+    const VENDOR = 'Google Inc. (Intel)';
+    const RENDERER = 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+    const SOFTWARE_RE = /swiftshader|llvmpipe|softpipe|software/i;
+    const patch = (proto) => {
+      if (!proto?.getParameter) return;
+      const orig = proto.getParameter;
+      let spoof = null;
+      proto.getParameter = function (parameter) {
+        if (parameter === 37445 || parameter === 37446) {
+          if (spoof === null) {
+            const real = `${orig.call(this, 37445) || ''} ${orig.call(this, 37446) || ''}`;
+            spoof = SOFTWARE_RE.test(real);
+          }
+          if (spoof) return parameter === 37445 ? VENDOR : RENDERER;
+        }
+        return orig.call(this, parameter);
+      };
+      proto.getParameter.toString = () => orig.toString();
+    };
+    try {
+      patch(window.WebGLRenderingContext?.prototype);
+      patch(window.WebGL2RenderingContext?.prototype);
+    } catch {}
+  }).catch(() => {});
+}
+
 /**
  * 归一化「每天自动领取时间」。非法输入一律退回 10:00，
  * 避免一个手滑写入的空值让定时任务永远不触发。
@@ -622,6 +651,9 @@ export class EpicManager {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-quic',
+        '--ignore-gpu-blocklist',
+        '--enable-unsafe-swiftshader',
+        '--use-angle=swiftshader',
         '--window-size=1366,768',
         '--window-position=0,0'
       ],
@@ -630,6 +662,7 @@ export class EpicManager {
     if (!cleanSession && acc.storageState?.cookies?.length) {
       await context.addCookies(acc.storageState.cookies).catch(() => {});
     }
+    await applyChromiumWebglIdentity(context);
     const page = context.pages()[0] || await context.newPage();
     return { context, page, engine: 'chromium' };
   }
