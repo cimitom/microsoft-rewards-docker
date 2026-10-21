@@ -1515,7 +1515,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.7.15';
+  const current = updateInfo?.currentVersion || '1.7.16';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -1570,8 +1570,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.15'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.15'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.7.16'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.7.16'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -4150,7 +4150,7 @@ async function verifyEpicSession(accountId) {
   openEpicActionModal(
     `校验 Epic 账号 · ${acc?.name || accountId}`,
     '正在启动持久化浏览器并检测商城会话...',
-    ['初始化持久化配置', '打开 Epic 商城首页', '检测人机验证与覆盖层', '核验登录状态', '同步更新凭据'],
+    ['初始化持久化配置', '打开 Epic 商城首页', '核验登录状态', '同步游戏入库状态', '更新账号数据'],
     0,
     true
   );
@@ -4163,12 +4163,18 @@ async function verifyEpicSession(accountId) {
     if (res.success) {
       const d = res.data || {};
       if (d.valid) {
+        const gameLines = (d.gameStatuses || []).map(game => {
+          const label = game.status === 'owned'
+            ? '已在库'
+            : (game.status === 'available' ? '可领取' : '未确认');
+          return `• ${game.title}：${label}`;
+        });
         updateEpicActionModal({
           activeIndex: 5,
           progress: 100,
           badge: { text: '会话有效', cls: 'ok' },
-          message: '✅ 校验通过：会话有效且处于已登录状态！',
-          result: `账号 [${acc?.name || accountId}] 校验成功！\n状态：${d.message}\n已自动保留持久化指纹与 Cookie，可正常执行自动化领取。`
+          message: '✅ 校验通过，登录态与游戏入库状态已刷新',
+          result: `账号 [${acc?.name || accountId}] 校验成功！\n状态：${d.message}${gameLines.length ? `\n\n${gameLines.join('\n')}` : ''}\n\n已自动保留持久化指纹与 Cookie，可正常执行自动化领取。`
         });
       } else if (d.blocked) {
         updateEpicActionModal({

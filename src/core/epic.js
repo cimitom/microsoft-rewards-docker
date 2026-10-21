@@ -1192,11 +1192,17 @@ export class EpicManager {
   }
 
   /** 领取单个游戏；status: claimed(本次领到) / owned(本来就有) / skipped(无页面) / failed */
+  async detectOwnedState(page) {
+    const textCount = await page.getByText('已在库中', { exact: true }).count().catch(() => 0);
+    if (textCount > 0) return true;
+    const buttonCount = await page.getByRole('button', { name: /已在库中|In Library/i }).count().catch(() => 0);
+    return buttonCount > 0;
+  }
+
   async detectClaimOutcome(page) {
     const successCount = await page.getByText(EPIC_SUCCESS_TEXT_RE).count().catch(() => 0);
     if (successCount > 0) return { status: 'claimed', message: '领取成功' };
-    const ownedCount = await page.locator('text=已在库中').count().catch(() => 0);
-    if (ownedCount > 0) return { status: 'owned', message: '已在库中' };
+    if (await this.detectOwnedState(page)) return { status: 'owned', message: '已在库中' };
     return null;
   }
 
@@ -1340,6 +1346,13 @@ export class EpicManager {
           return result;
         }
 
+        // 验证码消失后，页面可能仍残留 “TRY AGAIN” 文案，但结账弹窗已经出现。
+        // 只要可见的“添加到库”按钮存在，就以结账界面为准。
+        if (await orderBtn.count().catch(() => 0) > 0 && await orderBtn.isVisible().catch(() => false)) {
+          checkoutReady = true;
+          break;
+        }
+
         const current = await this.detectPageState(page);
         if (current.state === 'challenge') {
           const resolved = await this.dismissChallengeOverlay(page);
@@ -1353,16 +1366,15 @@ export class EpicManager {
             return result;
           }
           if (resolved.state === 'challenge' || resolved.state === 'unknown') {
+            if (await orderBtn.count().catch(() => 0) > 0 && await orderBtn.isVisible().catch(() => false)) {
+              checkoutReady = true;
+              break;
+            }
             result.status = 'blocked';
             result.code = 'challenge';
             result.message = `结账前人机验证未通过（当前按钮：${await this.visibleButtonTexts(page)}）`;
             return result;
           }
-        }
-
-        if (await orderBtn.count().catch(() => 0) > 0 && await orderBtn.isVisible().catch(() => false)) {
-          checkoutReady = true;
-          break;
         }
 
         if (!escapeTried && Date.now() - checkoutStartedAt > 2500) {
@@ -1425,6 +1437,52 @@ export class EpicManager {
     }
   }
 
+  /**
+   * 校验按钮不仅确认登录，还要同步当前免费游戏的入库状态。
+   * 只读取页面状态，不点击“获取”，因此不会触发领取或下单。
+   */
+  async refreshGameOwnership(page, accountId) {
+    const acc = configManager.findEpicAccount(accountId);
+    const games = await this.fetchFreeGames();
+    const currentGames = games.filter(game => game.isFreeNow !== false && game.url);
+    const handledPatch = { ...(acc?.handledGames || {}) };
+    const statuses = [];
+
+    for (let i = 0; i < currentGames.length; i++) {
+      this.throwIfStopped();
+      const game = currentGames[i];
+      this.updateState({
+        status: 'verifying',
+        progress: 40 + Math.round(((i + 1) / Math.max(1, currentGames.length)) * 35),
+        gameTitle: game.title,
+        lastAction: `同步「${game.title}」入库状态...`
+      });
+
+      let status = 'unknown';
+      try {
+        const pageState = await this.navigateEpicPage(page, game.url, 30000);
+        if (await this.detectOwnedState(page)) {
+          status = 'owned';
+          handledPatch[game.id] = { at: Date.now(), status: 'owned', title: game.title };
+        } else if (pageState.state === 'product') {
+          const getBtn = page.getByRole('button', { name: /^获取$|^Get$/ }).first();
+          if (await getBtn.count().catch(() => 0) > 0 && await getBtn.isVisible().catch(() => false)) {
+            status = 'available';
+            delete handledPatch[game.id];
+          }
+        } else if (pageState.state === 'challenge') {
+          status = 'challenge';
+        }
+      } catch {
+        status = 'unknown';
+      }
+      statuses.push({ id: game.id, title: game.title, status });
+    }
+
+    configManager.updateEpicAccount(accountId, { handledGames: this.pruneHandled(handledPatch) });
+    return statuses;
+  }
+
   /** 校验会话是否仍然登录（打开商城首页，区分登录失效与人机验证） */
   async verifySession(accountId) {
     if (this.running || this.checking || this.verifying) throw new Error('Epic 任务正在运行中，请等待完成后再校验');
@@ -1460,6 +1518,7 @@ export class EpicManager {
       });
       const launched = await this.launchPersistentContext(acc, { engine: 'chromium' });
       context = launched.context;
+      const page = launched.page;
       this.activeContext = context;
       this.activeAccountId = accountId;
 
@@ -1478,6 +1537,15 @@ export class EpicManager {
         message = auth.message || 'Epic 登录态已失效，请重新登录';
       }
 
+      let gameStatuses = [];
+      if (valid) {
+        gameStatuses = await this.refreshGameOwnership(page, accountId);
+        const ownedCount = gameStatuses.filter(game => game.status === 'owned').length;
+        const availableCount = gameStatuses.filter(game => game.status === 'available').length;
+        const unknownCount = gameStatuses.length - ownedCount - availableCount;
+        message = `会话有效（已登录）；入库状态：${ownedCount} 个已在库，${availableCount} 个可领取${unknownCount ? `，${unknownCount} 个未确认` : ''}`;
+      }
+
       const patch = {
         lastVerifyAt: Date.now(),
         lastVerifyMessage: message
@@ -1488,7 +1556,7 @@ export class EpicManager {
       if (valid !== null) patch.sessionValid = valid;
       configManager.updateEpicAccount(accountId, patch);
       this.updateState({ status: 'done', progress: 100, lastAction: message });
-      return { valid, blocked, message };
+      return { valid, blocked, message, gameStatuses };
     } finally {
       this.verifying = false;
       if (this.activeContext === context) {

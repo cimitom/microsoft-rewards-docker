@@ -105,7 +105,8 @@ test('Epic 停止请求会关闭活动浏览器上下文并标记状态', async 
 test('手动完成验证后出现“已在库中”即可确认领取完成', async () => {
   const em = new EpicManager();
   const page = {
-    getByText: () => ({ count: async () => 0 }),
+    getByText: (_text, options) => ({ count: async () => options?.exact ? 1 : 0 }),
+    getByRole: () => ({ count: async () => 0 }),
     locator: () => ({ count: async () => 1 })
   };
   const outcome = await em.detectClaimOutcome(page);
@@ -127,4 +128,76 @@ test('停止后 claimOne 会把状态从 retrying 收尾为 idle', async () => {
   assert.equal(em.stopRequested, false);
   assert.equal(em.state.status, 'idle');
   assert.equal(em.state.code, 'stopped');
+});
+
+test('校验按钮会同步免费游戏的已在库与可领取状态', async () => {
+  const id = `epic_ownership_${Date.now()}`;
+  configManager.upsertEpicAccount({
+    id,
+    name: '入库状态测试',
+    handledGames: {
+      g2: { at: Date.now(), status: 'owned', title: '游戏二' }
+    }
+  });
+  const em = new EpicManager();
+  em.fetchFreeGames = async () => [
+    { id: 'g1', title: '游戏一', url: 'https://example.test/g1', isFreeNow: true },
+    { id: 'g2', title: '游戏二', url: 'https://example.test/g2', isFreeNow: true }
+  ];
+  const page = {
+    currentGameId: '',
+    getByRole: () => ({
+      first() { return this; },
+      count: async () => page.currentGameId === 'g2' ? 1 : 0,
+      isVisible: async () => true
+    })
+  };
+  em.navigateEpicPage = async (_page, url) => {
+    page.currentGameId = url.endsWith('/g1') ? 'g1' : 'g2';
+    return { state: page.currentGameId === 'g1' ? 'owned' : 'product' };
+  };
+  em.detectOwnedState = async () => page.currentGameId === 'g1';
+
+  const statuses = await em.refreshGameOwnership(page, id);
+  assert.deepEqual(statuses.map(x => x.status), ['owned', 'available']);
+  const saved = configManager.findEpicAccount(id);
+  assert.equal(saved.handledGames.g1.status, 'owned');
+  assert.equal(saved.handledGames.g2, undefined, '仍可领取的游戏必须从已入库记录中移除');
+});
+
+test('验证码残留 TRY AGAIN 时，可见的“添加到库”按钮优先执行', async () => {
+  const em = new EpicManager();
+  let orderClicked = false;
+  em.delay = async () => {};
+  em.checkEpicAccountSession = async () => ({ valid: true, state: 'logged-in' });
+  em.navigateEpicPage = async () => ({ state: 'product' });
+  em.detectPageState = async () => ({ state: 'challenge' });
+  em.dismissChallengeOverlay = async () => ({ state: 'challenge' });
+  em.detectClaimOutcome = async () => orderClicked ? { status: 'owned', message: '已在库中' } : null;
+
+  const makeLocator = (kind) => ({
+    first() { return this; },
+    count: async () => 1,
+    isVisible: async () => true,
+    click: async () => {
+      if (kind === 'order') orderClicked = true;
+    }
+  });
+  const page = {
+    getByRole: (_role, options) => {
+      const source = String(options?.name || '');
+      return makeLocator(source.includes('添加到库') ? 'order' : 'get');
+    },
+    locator: () => ({ count: async () => 0 })
+  };
+  const context = { pages: () => [page] };
+  const result = await em.claimSingle(page, {
+    id: 'order-priority',
+    title: '按钮优先级测试',
+    url: 'https://example.test/product'
+  }, context);
+
+  assert.equal(orderClicked, true);
+  assert.equal(result.status, 'owned');
+  assert.equal(result.message, '已在库中');
 });
