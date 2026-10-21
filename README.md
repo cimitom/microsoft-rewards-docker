@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.7.16-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.7.17-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -197,6 +197,12 @@
   - **校验按钮同步游戏入库状态**：点击账号“校验”会遍历当前免费游戏，刷新“已在库 / 可领取 / 未确认”状态并更新账号卡片；
   - **校验结果展示游戏明细**：校验完成弹窗会逐项列出游戏入库状态；
   - **新增结账按钮优先级与入库同步回归测试**，测试总数 137。
+- 🪶 **Epic 结账状态彻底修复与镜像瘦身 (v1.7.17)**：
+  - **结账弹窗成为独立页面状态**：只要可见“添加到库 / Add to Library”，即使页面残留 `TRY AGAIN` 也不会再按验证失败退出；
+  - **验证等待期间实时识别结账弹窗**：不再等待 8 秒后误按 `Escape` 关闭结账窗口；
+  - **移除 Playwright Firefox 引擎**：登录、领取、校验、指纹自检全部统一 Chromium，删除 Firefox 浏览器约 294MB 缓存和安装步骤；
+  - **移除 Firefox 专用源码与测试**，镜像只保留实际运行所需的 Chromium；
+  - **回归测试 129 项全部通过**。
 - 🧊 **搜索真实性、打孔卡状态机与账号暂停 (v1.7.9)**：
   - **搜索进度只认官网**：删除本地“每次搜索 +3 分”和 `max(本地, 官网)` 的假进度，官网不涨就保持 0/15、0/30、0/60，不再虚报打满；
   - **搜索停滞保护收紧为 5 次**：连续 5 次官网无增长立即停止当日搜索，避免新号观察期或搜索限流时持续空跑；
@@ -215,11 +221,11 @@
   - **单元测试增至 113 个**。
 - 🎮 **Epic 免费游戏自动领取 (v1.5.1 新增)**：
   - 顶部功能选项卡切换「微软积分 / Epic 游戏领取」两套独立面板；
-  - 免费游戏列表走 Epic 官方接口，领取由 Playwright Firefox 持久化浏览器驱动网页完成；
+- 免费游戏列表走 Epic 官方接口，领取由 Playwright Chromium 持久化浏览器驱动网页完成；
   - 支持多账号，每个账号导入一次浏览器会话即可长期自动领取，并保留最近领取记录。
-- 🦊 **Epic Firefox 可见浏览器与并行运行 (v1.7.0)**：
-  - Epic 使用 Firefox + stealth，微软使用 Chromium + Patchright，两个浏览器引擎使用独立资源锁，可并行执行；
-  - Docker 默认启用 Xvfb 可见 Firefox；遇到验证码时打开 `http://<NAS-IP>:5308/novnc/vnc.html` 手动处理，或直接在 WebUI 中打开内嵌小窗；
+- 🖥️ **Epic 可见浏览器与并行运行**：
+  - Epic 使用 Chromium + Patchright，并通过独立资源锁与微软任务协调，避免浏览器资源争抢；
+  - Docker 默认启用 Xvfb 可见 Chromium；遇到验证码时 WebUI 会自动打开内嵌 VNC 小窗；
   - 可通过 `EPIC_VISIBLE=0` 切回纯无头模式，通过 `NOVNC_PASSWORD` 为可见浏览器设置访问密码。
 - 🖥️ **完全脱离电脑与浏览器**：基于轻量 Docker 容器后台静默常驻，7×24 小时自动巡检。
 - 📊 **现代化 Fluent 毛玻璃 Web 控制台**：

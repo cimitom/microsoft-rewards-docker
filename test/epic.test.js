@@ -201,3 +201,19 @@ test('验证码残留 TRY AGAIN 时，可见的“添加到库”按钮优先执
   assert.equal(result.status, 'owned');
   assert.equal(result.message, '已在库中');
 });
+
+test('结账按钮存在时页面状态优先判为 checkout，而不是残留的挑战文本', async () => {
+  const em = new EpicManager();
+  em.readPageText = async () => 'TRY AGAIN';
+  const page = {
+    title: async () => 'Agent A',
+    url: () => 'https://store.epicgames.com/p/agent-a',
+    getByRole: () => ({
+      first() { return this; },
+      count: async () => 1,
+      isVisible: async () => true
+    })
+  };
+  const state = await em.detectPageState(page);
+  assert.equal(state.state, 'checkout');
+});

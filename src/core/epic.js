@@ -1,19 +1,13 @@
 import fs from 'fs';
 import path from 'path';
-import { firefox } from 'playwright-firefox';
 import { chromium } from 'patchright-core';
 import configManager from '../config.js';
 import logger from '../logger.js';
 import networkClient from '../network.js';
 import { firefoxSlotLock } from './contextLock.js';
 import { DATA_DIR, withTimeout } from '../fsUtil.js';
-import {
-  applyFirefoxStealth,
-  detectFirefoxVersion,
-  buildFirefoxUserAgent,
-  evaluateFirefoxFingerprint
-} from './firefoxStealth.js';
 import { findChromiumExecutable } from './chromiumExecutable.js';
+import { PC_USER_AGENT } from './fingerprint.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
@@ -24,22 +18,6 @@ const CHALLENGE_TEXT_RE = /verify you are human|确认您是真人|正在验证|
 const LOGIN_TEXT_RE = /sign in|log in|登录|登入/i;
 export const EPIC_ORDER_BUTTON_RE = /添加到库|添加至库|加入库|Add to Library|下订单|下单|确认订单|结账|Place Order|Checkout/i;
 export const EPIC_SUCCESS_TEXT_RE = /已添加到库|已加入库|已拥有|谢谢|感谢|订单已提交|Added to your library|In Library|Thanks|Thank you|Order confirmed/i;
-
-/**
- * Playwright Firefox 默认把 cookieBehavior 设为 4（拒绝跨站跟踪 Cookie）。
- * Epic 登录依赖 hCaptcha + Talon 的跨站 Cookie；被拦截时会表现为验证码加载慢，
- * 验证完成后却直接返回“服务暂时不可用”，连密码页都进不去。
- *
- * HTTP/3 在部分 NAS/容器网络中会被阻断，Firefox 先尝试 QUIC 再回退也会显著拖慢验证码。
- */
-export const EPIC_FIREFOX_PREFS = Object.freeze({
-  'network.cookie.cookieBehavior': 0,
-  'network.cookie.cookieBehavior.pbmode': 0,
-  'privacy.trackingprotection.enabled': false,
-  'privacy.trackingprotection.pbmode.enabled': false,
-  'network.http.http3.enable': false,
-  'network.dns.disableIPv6': true
-});
 
 function safeProfileId(accountId) {
   return String(accountId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_');
@@ -55,6 +33,23 @@ export function isEpicChallengeText(text) {
 
 export function isEpicLoginText(text) {
   return LOGIN_TEXT_RE.test(String(text || ''));
+}
+
+export function evaluateEpicBrowserFingerprint(signals = {}) {
+  const warnings = [];
+  const ua = String(signals.userAgent || '');
+  const platform = String(signals.platform || '');
+  const gl = `${signals.webglVendor || ''} ${signals.webglRenderer || ''}`.trim();
+  if (signals.webdriver !== false) warnings.push('navigator.webdriver 不是 false');
+  if (/HeadlessChrome/i.test(ua)) warnings.push('UA 暴露 HeadlessChrome');
+  if (ua && !/Chrome\//.test(ua)) warnings.push('UA 中缺少 Chrome 标识');
+  if (/Windows NT/.test(ua) && !/Win/.test(platform)) warnings.push('UA 与 navigator.platform 不一致');
+  if (/Macintosh/.test(ua) && !/Mac/.test(platform)) warnings.push('UA 与 navigator.platform 不一致');
+  if (/(X11|Linux)/.test(ua) && !/Linux/.test(platform)) warnings.push('UA 与 navigator.platform 不一致');
+  if (/llvmpipe|swiftshader|softpipe|software/i.test(gl)) warnings.push('WebGL 暴露软件渲染');
+  if (!signals.webglRenderer) warnings.push('WebGL 不可用');
+  if (!Array.isArray(signals.languages) || signals.languages.length === 0) warnings.push('navigator.languages 为空');
+  return warnings;
 }
 
 /**
@@ -77,17 +72,6 @@ class EpicStopError extends Error {
     this.code = 'EPIC_STOPPED';
   }
 }
-
-// Epic 使用 Firefox，不能复用 Chromium 的 UA 与 Sec-CH-UA。
-// 版本号从浏览器自身的 application.ini 读取，避免写死后与镜像里的 Firefox 版本脱节。
-export const FIREFOX_VERSION = detectFirefoxVersion(firefox.executablePath());
-const UA = buildFirefoxUserAgent(FIREFOX_VERSION);
-if (!UA) {
-  logger.log('🟡', '未能读取内置 Firefox 版本号，Epic 接口请求将不附带自定义 User-Agent');
-}
-const FIREFOX_HEADERS = {
-  'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8'
-};
 
 /**
  * Epic 免费游戏自动领取。
@@ -537,7 +521,7 @@ export class EpicManager {
     try {
       const launched = await this.launchPersistentContext(
         { id: 'selfcheck', storageState: null },
-        { cleanSession: true, profileDir: tmpProfile }
+        { cleanSession: true, profileDir: tmpProfile, engine: 'chromium' }
       );
       context = launched.context;
       const page = launched.page;
@@ -577,8 +561,8 @@ export class EpicManager {
       });
       return {
         signals,
-        warnings: evaluateFirefoxFingerprint(signals),
-        firefoxVersion: FIREFOX_VERSION
+        warnings: evaluateEpicBrowserFingerprint(signals),
+        browserVersion: context.browser()?.version?.() || ''
       };
     } finally {
       try {
@@ -602,92 +586,52 @@ export class EpicManager {
   }
 
   /**
-   * 启动 Firefox 持久化上下文。
+   * 启动 Chromium 持久化上下文。
    *
    * @param {object} acc 账号
    * @param {object} [opts]
    * @param {boolean} [opts.cleanSession] 不注入账号里已保存的 storageState。
-   *   登录流程必须用干净会话：拿一个多半已失效的旧凭据去登录，
-   *   会让登录请求带着互相矛盾的会话，Epic 官方排障也是建议清空站点数据后重登。
    * @param {string} [opts.profileDir] 覆盖 profile 目录（登录窗口用独立的临时目录）
-   * @param {'firefox'|'chromium'} [opts.engine] 登录使用 Chromium，领取仍使用 Firefox。
    */
-  async launchPersistentContext(acc, { cleanSession = false, profileDir = null, engine = 'firefox' } = {}) {
-    const dir = profileDir || (
-      engine === 'chromium'
-        ? `${epicProfilePath(acc.id)}-chromium`
-        : epicProfilePath(acc.id)
-    );
+  async launchPersistentContext(acc, { cleanSession = false, profileDir = null } = {}) {
+    const dir = profileDir || `${epicProfilePath(acc.id)}-chromium`;
     fs.mkdirSync(dir, { recursive: true });
     const proxy = this.getBrowserProxy();
     const headless = process.env.EPIC_VISIBLE !== '1';
 
-    if (engine === 'chromium') {
-      const executablePath = findChromiumExecutable();
-      if (!executablePath) {
-        throw new Error('未检测到 Chromium/Edge 浏览器内核，无法打开 Epic 登录窗口');
-      }
-      const context = await chromium.launchPersistentContext(dir, {
-        executablePath,
-        headless,
-        // 可见登录窗口直接跟随 Xvfb 的 1366x768 桌面，避免 Playwright
-        // 再给内容区强制 768px 高度后把浏览器工具栏挤出屏幕底部。
-        viewport: null,
-        locale: 'zh-CN',
-        timezoneId: 'Asia/Shanghai',
-        ...(cleanSession ? {} : {
-          storageState: {
-            cookies: acc.storageState?.cookies || [],
-            origins: acc.storageState?.origins || []
-          }
-        }),
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-quic',
-          '--window-size=1366,768',
-          '--window-position=0,0'
-        ],
-        ...(proxy ? { proxy } : {})
-      });
-      if (!cleanSession && acc.storageState?.cookies?.length) {
-        await context.addCookies(acc.storageState.cookies).catch(() => {});
-      }
-      const page = context.pages()[0] || await context.newPage();
-      return { context, page, engine: 'chromium' };
+    const executablePath = findChromiumExecutable();
+    if (!executablePath) {
+      throw new Error('未检测到 Chromium/Edge 浏览器内核，无法打开 Epic 浏览器');
     }
-
-    const context = await firefox.launchPersistentContext(dir, {
+    const context = await chromium.launchPersistentContext(dir, {
+      executablePath,
       headless,
-      viewport: { width: 1366, height: 768 },
+      viewport: null,
       locale: 'zh-CN',
       timezoneId: 'Asia/Shanghai',
-      firefoxUserPrefs: EPIC_FIREFOX_PREFS,
-      extraHTTPHeaders: FIREFOX_HEADERS,
       ...(cleanSession ? {} : {
         storageState: {
           cookies: acc.storageState?.cookies || [],
           origins: acc.storageState?.origins || []
         }
       }),
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-quic',
+        '--window-size=1366,768',
+        '--window-position=0,0'
+      ],
       ...(proxy ? { proxy } : {})
     });
-
-    // 配置里的会话是登录凭据的唯一来源；持久化 profile 负责保留 CF 信任 Cookie。
-    if (!cleanSession) {
-      const cookies = acc.storageState?.cookies || [];
-      if (cookies.length > 0) {
-        await context.addCookies(cookies).catch(() => {});
-      }
+    if (!cleanSession && acc.storageState?.cookies?.length) {
+      await context.addCookies(acc.storageState.cookies).catch(() => {});
     }
-    await applyFirefoxStealth(context);
-
     const page = context.pages()[0] || await context.newPage();
-    await page.setViewportSize({ width: 1366, height: 768 }).catch(() => {});
-    return { context, page, engine: 'firefox' };
+    return { context, page, engine: 'chromium' };
   }
 
   async readPageText(page) {
@@ -707,6 +651,13 @@ export class EpicManager {
     const pageUrl = page.url();
     const text = await this.readPageText(page);
     const combined = `${title}\n${text}`;
+
+    // 结账弹窗出现后，页面仍可能保留 “TRY AGAIN” 等旧验证文案。
+    // 可见的结账按钮是比文本更可靠的状态信号。
+    const orderBtn = page.getByRole('button', { name: EPIC_ORDER_BUTTON_RE }).first();
+    if (await orderBtn.count().catch(() => 0) > 0 && await orderBtn.isVisible().catch(() => false)) {
+      return { state: 'checkout', text: combined };
+    }
 
     if (isEpicChallengeText(combined)) return { state: 'challenge', text: combined };
     if (
@@ -750,7 +701,7 @@ export class EpicManager {
     }
     await page.waitForLoadState('domcontentloaded', { timeout: Math.max(5000, timeout - 15000) }).catch(() => {});
     this.throwIfStopped();
-    const result = await this.waitForPageState(page, ['product', 'challenge', 'login', 'owned'], timeout);
+    const result = await this.waitForPageState(page, ['product', 'checkout', 'challenge', 'login', 'owned'], timeout);
     return { ...result, navigationError };
   }
 
@@ -765,7 +716,7 @@ export class EpicManager {
       lastAction: '检测到 Epic 人机验证，等待验证层自动通过...'
     });
 
-    let state = await this.waitForPageState(page, ['product', 'owned', 'login'], 8000);
+    let state = await this.waitForPageState(page, ['product', 'checkout', 'owned', 'login'], 8000);
     if (state.state !== 'challenge' && state.state !== 'unknown') return state;
 
     // Epic 的验证层有时是覆盖在结账界面上的 UI 层。先尝试关闭覆盖层，
@@ -784,7 +735,7 @@ export class EpicManager {
     this.updateState({
       lastAction: `等待人工完成 Epic 人机验证（最多 ${waitSec} 秒），请打开可见浏览器操作`
     });
-    state = await this.waitForPageState(page, ['product', 'owned', 'login'], waitSec * 1000);
+    state = await this.waitForPageState(page, ['product', 'checkout', 'owned', 'login'], waitSec * 1000);
     return state;
   }
 
@@ -944,9 +895,10 @@ export class EpicManager {
   }
 
   async fetchFreeGamesFromApi() {
-    // 与浏览器保持同一个身份：UA 由内置 Firefox 的真实版本拼出，读不到就不发。
-    const headers = { 'accept': 'application/json' };
-    if (UA) headers['user-agent'] = UA;
+    const headers = {
+      'accept': 'application/json',
+      'user-agent': PC_USER_AGENT
+    };
     const res = await networkClient.request({
       url: FREE_GAMES_API,
       headers,
@@ -1273,7 +1225,7 @@ export class EpicManager {
       if (pageState.state === 'login') {
         // 商城页面很慢时，登录链接可能在页面水合完成前短暂出现。
         // 账号接口已经确认有效，此时继续等待商品按钮，不能据此直接判定掉登录。
-        pageState = await this.waitForPageState(page, ['product', 'owned', 'challenge'], 30000);
+        pageState = await this.waitForPageState(page, ['product', 'checkout', 'owned', 'challenge'], 30000);
         if (pageState.state === 'challenge' || pageState.state === 'login' || pageState.state === 'unknown') {
           result.status = 'blocked';
           result.code = 'page_timeout';

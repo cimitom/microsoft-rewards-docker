@@ -1,6 +1,6 @@
 FROM node:20-bookworm-slim
 
-# 安装 Chromium、Firefox 依赖、虚拟显示、字体与软件渲染的 OpenGL 支持
+# 安装 Chromium、虚拟显示、字体与软件渲染的 OpenGL 支持
 # libgl*/libgl1-mesa-dri：Xvfb 里没有 GPU，靠 Mesa llvmpipe 提供 WebGL。
 #   Epic 登录页的风控会采集 WebGL，缺了它会被判成异常浏览器。
 # fontconfig + 各字体包：--no-install-recommends 不会自动装推荐项，
@@ -29,7 +29,7 @@ ENV TZ=Asia/Shanghai
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV EPIC_VISIBLE=1
 ENV DISPLAY=:1
-# 容器内没有 GPU，固定走 Mesa 软件渲染，避免 Firefox 尝试 DRI 失败后直接禁用 WebGL。
+# 容器内没有 GPU，固定走 Mesa 软件渲染，保证 Chromium 下 WebGL 可用。
 ENV LIBGL_ALWAYS_SOFTWARE=1
 
 WORKDIR /app
@@ -39,9 +39,6 @@ COPY package*.json ./
 
 # 有 package-lock.json 时用 npm ci，构建结果可复现（不会因为依赖漂移导致线上行为变化）
 RUN npm ci --omit=dev
-
-# Playwright Firefox 是 Epic 专用引擎；同时安装 Firefox 运行依赖。
-RUN npx playwright install --with-deps firefox
 
 # 复制源码与资源
 COPY src/ ./src/
