@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV TZ=Asia/Shanghai
+ENV NODE_ENV=production
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV EPIC_VISIBLE=1
 ENV DISPLAY=:1

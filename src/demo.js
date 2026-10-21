@@ -8,7 +8,7 @@ const DEMO_DATA_DIR = path.join(PROJECT_ROOT, 'data', 'demo');
 
 // 强制使用独立演示目录与 Epic 演示模式，彻底隔离真实生产环境
 process.env.MSR_DATA_DIR = DEMO_DATA_DIR;
-process.env.EPIC_DEMO = '1';
+process.env.MSR_ENABLE_DEMO = '1';
 
 fs.mkdirSync(DEMO_DATA_DIR, { recursive: true });
 

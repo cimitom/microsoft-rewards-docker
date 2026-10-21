@@ -15,6 +15,7 @@ import historyManager from '../core/history.js';
 import browserManager from '../core/browser.js';
 import epicManager, { normalizeAutoClaimTime } from '../core/epic.js';
 import { accountContextLock } from '../core/contextLock.js';
+import { isDemoMode } from '../core/demoMode.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -713,7 +714,7 @@ export function createServer() {
       if (accountContextLock.isBusy()) {
         return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再领取额外积分' });
       }
-      if (process.env.EPIC_DEMO === '1' || process.env.MSR_DEMO === '1') {
+      if (isDemoMode()) {
         let totalClaimed = 0;
         const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
         const targets = accountId === 'all' ? accounts : accounts.filter(a => a.id === accountId);
@@ -1257,7 +1258,7 @@ export function createServer() {
       data: {
         ...epicManager.getState(),
         settings: epicManager.getSettings(),
-        demo: process.env.EPIC_DEMO === '1',
+        demo: isDemoMode(),
         records: configManager.getEpicClaimRecords(20)
       }
     });

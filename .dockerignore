@@ -7,3 +7,4 @@ data/
 *.md
 test
 cookie.txt
+src/demo.js

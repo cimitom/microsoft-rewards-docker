@@ -8,6 +8,7 @@ import { firefoxSlotLock } from './contextLock.js';
 import { DATA_DIR, withTimeout } from '../fsUtil.js';
 import { findChromiumExecutable } from './chromiumExecutable.js';
 import { PC_USER_AGENT } from './fingerprint.js';
+import { isDemoMode, isDemoEpicAccountId } from './demoMode.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
@@ -158,8 +159,13 @@ export class EpicManager {
       lastUpdate: Date.now(),
       startedAt: null
     };
-    // 演示模式下自动补齐示例账号，方便本地预览
-    this.seedDemoData();
+    if (this.isDemo()) {
+      // 演示模式下自动补齐示例账号，方便本地预览
+      this.seedDemoData();
+    } else {
+      // 正式实例启动时清理旧版本可能落盘的演示账号与领取记录。
+      this.purgeStaleDemoData();
+    }
   }
 
   delay(ms) {
@@ -1283,7 +1289,23 @@ export class EpicManager {
 
   /** 是否演示模式（不启动浏览器，仅模拟流程，用于本地验证） */
   isDemo() {
-    return process.env.EPIC_DEMO === '1';
+    return isDemoMode();
+  }
+
+  purgeStaleDemoData() {
+    const demoAccounts = configManager.getEpicAccounts().filter(acc => isDemoEpicAccountId(acc.id));
+    const cfg = configManager.get();
+    const records = Array.isArray(cfg.epic?.claimRecords) ? cfg.epic.claimRecords : [];
+    const hasDemoRecords = records.some(record => isDemoEpicAccountId(record.accountId));
+    if (demoAccounts.length === 0 && !hasDemoRecords) return;
+
+    demoAccounts.forEach(acc => configManager.deleteEpicAccount(acc.id));
+    const current = configManager.get();
+    if (Array.isArray(current.epic?.claimRecords)) {
+      current.epic.claimRecords = current.epic.claimRecords.filter(record => !isDemoEpicAccountId(record.accountId));
+      configManager.save();
+    }
+    logger.log('🧹', `已清理旧版演示 Epic 数据：${demoAccounts.length} 个账号`);
   }
 
   /** 演示模式：自动创建几个示例账号（只在没有任何 Epic 账号时） */
