@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.8.1</span>
+            <span class="version-label" id="version-label">v1.8.2</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -121,16 +121,16 @@
             <span class="hero-label">连续签到与印章</span>
             <div class="hero-streak-stamps" id="stat-stamps-pill" title="连签奖励印章进度">
               <span class="stamps-icon">🎖️</span>
-              <span class="stamps-text" id="stat-stamps">8 / 12</span>
+              <span class="stamps-text" id="stat-stamps">-- / 12</span>
             </div>
           </div>
           <div class="hero-val hero-gold" id="stat-streak">-- 天</div>
           <div class="stamps-grid-track" id="stamps-grid-track" title="赚取 12 个印章，赢取 1,000 奖励积分"></div>
           <div class="stamps-account-list" id="stamps-account-list" aria-label="各账号印章进度"></div>
           <div class="stamps-mini-bar" title="印章收集进度">
-            <div class="stamps-mini-fill" id="stat-stamps-fill" style="width: 66.6%;"></div>
+            <div class="stamps-mini-fill" id="stat-stamps-fill" style="width: 0%;"></div>
           </div>
-          <div class="hero-desc" id="stat-stamps-desc">差 4 个集满 1,000 分大奖</div>
+          <div class="hero-desc" id="stat-stamps-desc">等待官网同步印章进度</div>
         </div>
       </section>
 
@@ -541,6 +541,7 @@
           <div class="form-group">
             <label class="form-label">代理服务器地址 (HTTP / SOCKS5)</label>
             <input type="text" id="guide-proxy-url" class="form-input" placeholder="例如：http://192.168.1.5:7890 或 socks5://127.0.0.1:1080">
+            <small class="form-hint">这里配置全局默认代理；保存后可在配置中心添加多套代理，并为每个账号单独选择。</small>
           </div>
           <div class="form-group">
             <label class="form-label checkbox-label">
@@ -644,6 +645,30 @@
             </label>
           </div>
 
+          <div class="account-proxy-panel">
+            <div class="proxy-section-title">
+              <div>
+                <span>🌐 该账号的网络出口</span>
+                <small>每个账号可独立选择代理，避免多账号共用同一出口。</small>
+              </div>
+            </div>
+            <div class="form-grid-2">
+              <div class="form-group">
+                <label class="form-label">代理策略</label>
+                <select id="cfg-account-proxy-mode" class="form-select">
+                  <option value="inherit">跟随全局默认设置</option>
+                  <option value="direct">不使用代理（直连）</option>
+                  <option value="proxy">使用指定代理</option>
+                </select>
+              </div>
+              <div class="form-group" id="cfg-account-proxy-node-group" style="display: none;">
+                <label class="form-label">指定代理节点</label>
+                <select id="cfg-account-proxy-id" class="form-select"></select>
+              </div>
+            </div>
+            <small class="form-hint" id="cfg-account-proxy-hint"></small>
+          </div>
+
           <div class="form-group">
             <label class="form-label">必应网页端 Cookie (针对当前选中的账号)</label>
             <div class="input-with-btn">
@@ -704,27 +729,41 @@
           <div style="display: flex; gap: 10px; margin-top: 14px;">
             <button id="btn-test-account" class="btn btn-secondary">🔍 测试当前账号</button>
           </div>
+          <small class="form-hint">账号测试会使用已保存的凭据与代理出口，并显示实际访问 IP。</small>
           <div id="test-account-result" class="hint-msg"></div>
         </div>
 
         <!-- Tab: 网络与代理 -->
         <div class="tab-content" id="tab-network">
-          <div class="form-group">
-            <label class="form-label checkbox-label">
-              <input type="checkbox" id="cfg-use-proxy"> 启用网络代理
-            </label>
+          <div class="proxy-section-head">
+            <div>
+              <div class="proxy-section-title">代理节点</div>
+              <small class="form-hint">可保存多套 HTTP / HTTPS / SOCKS5 代理，并为每个账号单独选择。</small>
+            </div>
+            <button type="button" id="btn-add-proxy" class="btn btn-secondary btn-sm">＋ 添加代理</button>
           </div>
-          <div class="form-group">
-            <label class="form-label">代理地址 (支持 HTTP / HTTPS / SOCKS5)</label>
-            <input type="text" id="cfg-proxy-url" class="form-input" placeholder="例如：http://192.168.1.10:7890 或 socks5://127.0.0.1:1080">
+          <div id="proxy-list" class="proxy-list"></div>
+
+          <div class="proxy-policy-panel">
+            <div class="form-group">
+              <label class="form-label checkbox-label">
+                <input type="checkbox" id="cfg-use-proxy"> 启用全局默认代理
+              </label>
+              <small class="form-hint">仅影响选择「跟随全局默认设置」的账号；指定代理与直连账号不受此开关影响。</small>
+            </div>
+            <div class="form-group">
+              <label class="form-label">全局默认代理节点</label>
+              <select id="cfg-default-proxy" class="form-select"></select>
+            </div>
           </div>
+
           <div class="form-group">
             <label class="form-label checkbox-label">
               <input type="checkbox" id="cfg-lock-region"> 锁定中国大陆 IP（非 CN 出口自动停止，防封号）
             </label>
           </div>
-          <button id="btn-test-proxy-settings" class="btn btn-secondary">测试当前网络连通性与出口地区</button>
-          <div id="test-proxy-result" class="hint-msg"></div>
+          <button type="button" id="btn-test-default-network" class="btn btn-secondary">测试全局默认出口</button>
+          <div id="test-default-proxy-result" class="hint-msg"></div>
         </div>
 
         <!-- Tab: 任务与防风控 -->
@@ -732,7 +771,7 @@
           <div class="checkbox-grid">
             <label class="checkbox-label"><input type="checkbox" id="cfg-task-sign"> 移动端签到</label>
             <label class="checkbox-label"><input type="checkbox" id="cfg-task-read"> 新闻资讯自动阅读 (10篇)</label>
-            <label class="checkbox-label"><input type="checkbox" id="cfg-task-search"> 必应 PC 搜索任务 (60分)</label>
+            <label class="checkbox-label"><input type="checkbox" id="cfg-task-search"> 必应 PC 搜索任务 (会员 15 / 银牌 30 / 金牌 60 分)</label>
             <label class="checkbox-label"><input type="checkbox" id="cfg-task-promos"> 活动卡片与 Quiz 自动答题</label>
             <label class="checkbox-label"><input type="checkbox" id="cfg-task-dailyset"> 每日连续活动集 (Daily Set)</label>
             <label class="checkbox-label"><input type="checkbox" id="cfg-task-desktop"> 桌面端专属每周打孔卡 (70分/周)</label>

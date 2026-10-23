@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
 import { removeBrowserSession } from './core/browserSession.js';
+import { webIdentityKey } from './core/accountIdentity.js';
+import { normalizeProxyUrl, safeProxyId } from './core/proxy.js';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
@@ -22,6 +24,11 @@ const DEFAULT_CONFIG = {
       refreshToken: '',
       accessToken: '',
       tokenTime: 0,
+      webIdentityKey: '',
+      credentialUpdatedAt: 0,
+      identityChangedAt: 0,
+      proxyMode: 'inherit',
+      proxyId: '',
       timeSlot: {
         startHour: 9,
         endHour: 13,
@@ -41,6 +48,8 @@ const DEFAULT_CONFIG = {
   network: {
     useProxy: false,
     proxyUrl: '',
+    proxies: [],
+    defaultProxyId: '',
     lockRegion: true
   },
   tasks: {
@@ -140,6 +149,8 @@ class ConfigManager {
         this.config = this.mergeDeep(structuredClone(DEFAULT_CONFIG), parsed);
         // 平滑迁移旧版单账号数据到 accounts 列表
         this.migrateLegacyAccount(parsed);
+        // 旧版只有一套 proxyUrl；新版使用可增删的代理节点列表
+        this.migrateProxySettings();
         // 旧版默认时段（6-10 / 10-14 / 14-18 / 18-22）迁移到新默认时段
         this.migrateTimeSlots();
       } else {
@@ -237,6 +248,163 @@ class ConfigManager {
     if (changed) this.save();
   }
 
+  normalizeProxyRecords(records = [], existingRecords = []) {
+    if (!Array.isArray(records)) throw new Error('代理配置格式无效');
+    if (records.length > 20) throw new Error('最多保存 20 套代理配置');
+
+    const existingById = new Map(
+      (Array.isArray(existingRecords) ? existingRecords : [])
+        .filter(item => item?.id)
+        .map(item => [item.id, item])
+    );
+    const usedIds = new Set();
+
+    return records.map((item, index) => {
+      const source = item && typeof item === 'object' ? item : {};
+      const url = normalizeProxyUrl(source.url || source.proxyUrl || '');
+      if (!url) throw new Error(`第 ${index + 1} 套代理缺少地址`);
+
+      let id = safeProxyId(source.id);
+      if (!id || usedIds.has(id)) {
+        const existing = existingById.get(source.id);
+        id = safeProxyId(existing?.id) || `proxy_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`;
+      }
+      while (usedIds.has(id)) {
+        id = `proxy_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`;
+      }
+      usedIds.add(id);
+
+      return {
+        id,
+        name: String(source.name || `代理 ${index + 1}`).trim().slice(0, 60) || `代理 ${index + 1}`,
+        url
+      };
+    });
+  }
+
+  /**
+   * 把旧版单代理配置迁移为代理列表，并补齐账号的代理策略字段。
+   * 该方法可重复执行，不改变用户已选择的代理。
+   */
+  migrateProxySettings() {
+    if (!this.config.network || typeof this.config.network !== 'object') {
+      this.config.network = {};
+    }
+    const network = this.config.network;
+    const before = JSON.stringify({
+      proxies: network.proxies,
+      defaultProxyId: network.defaultProxyId,
+      proxyUrl: network.proxyUrl,
+      accounts: (this.config.accounts || []).map(acc => [acc.proxyMode, acc.proxyId])
+    });
+
+    let proxies = [];
+    if (Array.isArray(network.proxies) && network.proxies.length > 0) {
+      try {
+        proxies = this.normalizeProxyRecords(network.proxies, network.proxies);
+      } catch (e) {
+        console.error('[Config] 代理配置迁移失败，将忽略无效节点:', e.message);
+      }
+    }
+
+    if (proxies.length === 0 && network.proxyUrl) {
+      try {
+        proxies = [{
+          id: 'proxy_legacy',
+          name: '原有代理',
+          url: normalizeProxyUrl(network.proxyUrl)
+        }];
+      } catch {}
+    }
+
+    network.proxies = proxies;
+    if (!proxies.some(item => item.id === network.defaultProxyId)) {
+      network.defaultProxyId = proxies[0]?.id || '';
+    }
+    const defaultProxy = proxies.find(item => item.id === network.defaultProxyId) || null;
+    network.proxyUrl = defaultProxy?.url || '';
+    if (!defaultProxy) network.useProxy = false;
+
+    for (const acc of this.config.accounts || []) {
+      const mode = ['inherit', 'direct', 'proxy'].includes(acc.proxyMode)
+        ? acc.proxyMode
+        : (acc.proxyId ? 'proxy' : 'inherit');
+      acc.proxyMode = mode;
+      acc.proxyId = mode === 'proxy' && proxies.some(item => item.id === acc.proxyId)
+        ? acc.proxyId
+        : '';
+      if (mode === 'proxy' && !acc.proxyId) acc.proxyMode = 'inherit';
+    }
+
+    const after = JSON.stringify({
+      proxies: network.proxies,
+      defaultProxyId: network.defaultProxyId,
+      proxyUrl: network.proxyUrl,
+      accounts: (this.config.accounts || []).map(acc => [acc.proxyMode, acc.proxyId])
+    });
+    if (before !== after) this.save();
+  }
+
+  getProxies() {
+    this.migrateProxySettings();
+    return this.get().network?.proxies || [];
+  }
+
+  findProxy(proxyId) {
+    if (!proxyId) return null;
+    return this.getProxies().find(item => item.id === proxyId) || null;
+  }
+
+  getDefaultProxy() {
+    this.migrateProxySettings();
+    const network = this.get().network || {};
+    return this.findProxy(network.defaultProxyId);
+  }
+
+  getAccountProxyMode(acc) {
+    if (['inherit', 'direct', 'proxy'].includes(acc?.proxyMode)) return acc.proxyMode;
+    return acc?.proxyId ? 'proxy' : 'inherit';
+  }
+
+  /**
+   * 返回账号最终生效的代理。指定代理缺失时按直连处理，绝不静默回退到全局，
+   * 避免用户以为账号 A 走了专用节点，实际却共用默认出口。
+   */
+  getEffectiveProxy(acc) {
+    const mode = this.getAccountProxyMode(acc);
+    if (mode === 'direct') return null;
+    if (mode === 'proxy') return this.findProxy(acc?.proxyId);
+    const network = this.get().network || {};
+    if (!network.useProxy) return null;
+    return this.getDefaultProxy();
+  }
+
+  setNetworkProxyConfig(data = {}) {
+    const network = this.get().network || (this.get().network = {});
+    const proxies = this.normalizeProxyRecords(data.proxies || [], network.proxies || []);
+    const defaultProxyId = proxies.some(item => item.id === data.defaultProxyId)
+      ? data.defaultProxyId
+      : (proxies[0]?.id || '');
+    const defaultProxy = proxies.find(item => item.id === defaultProxyId) || null;
+
+    network.proxies = proxies;
+    network.defaultProxyId = defaultProxyId;
+    network.proxyUrl = defaultProxy?.url || '';
+    network.useProxy = data.useProxy === undefined ? !!network.useProxy : data.useProxy === true;
+    if (!defaultProxy) network.useProxy = false;
+    if (data.lockRegion !== undefined) network.lockRegion = data.lockRegion !== false;
+
+    for (const acc of this.config.accounts || []) {
+      if (acc.proxyMode === 'proxy' && !proxies.some(item => item.id === acc.proxyId)) {
+        acc.proxyMode = 'inherit';
+        acc.proxyId = '';
+      }
+    }
+
+    this.save();
+    return { network: this.get().network, accounts: this.get().accounts };
+  }
+
   save() {
     try {
       this.ensureDataDir();
@@ -306,12 +474,50 @@ class ConfigManager {
     return this.findAccount(accountId);
   }
 
+  applyCredentialMetadata(acc, existing = null, options = {}) {
+    if (!acc || typeof acc !== 'object') return acc;
+    const now = Math.max(
+      Date.now(),
+      Number(existing?.credentialUpdatedAt || 0) + 1,
+      Number(existing?.identityChangedAt || 0) + 1
+    );
+    const previousCookie = existing?.cookie || '';
+    const previousKey = existing?.webIdentityKey || webIdentityKey(previousCookie);
+    const nextKey = webIdentityKey(acc.cookie || '');
+    const cookieChanged = !!existing && String(acc.cookie || '') !== String(previousCookie);
+    const tokenChanged = !!existing && (
+      String(acc.refreshToken || '') !== String(existing.refreshToken || '')
+      || String(acc.authCodeUrl || '') !== String(existing.authCodeUrl || '')
+    );
+    const credentialChanged = !existing || cookieChanged || tokenChanged;
+
+    acc.webIdentityKey = nextKey;
+    acc.credentialUpdatedAt = options.preserveDiagnosis === true
+      ? Number(existing?.credentialUpdatedAt || 0)
+      : (credentialChanged ? now : Number(existing?.credentialUpdatedAt || 0));
+    acc.identityChangedAt = Number(existing?.identityChangedAt || 0);
+    if (existing && cookieChanged && previousKey !== nextKey) {
+      acc.identityChangedAt = now;
+    }
+
+    if (options.preserveDiagnosis === true) {
+      acc.authDiagnosis = existing?.authDiagnosis || null;
+    } else if (credentialChanged) {
+      // 新 Cookie/Token 尚未完成配对校验，不能沿用旧凭据的“有效”结论。
+      acc.authDiagnosis = null;
+    } else {
+      acc.authDiagnosis = existing?.authDiagnosis || null;
+    }
+    return acc;
+  }
+
   upsertAccount(accountData) {
     const cfg = this.get();
     if (!Array.isArray(cfg.accounts)) cfg.accounts = [];
 
     const id = accountData.id || `acc_${Date.now()}`;
     const idx = cfg.accounts.findIndex(a => a.id === id);
+    const preserveDiagnosis = accountData.preserveDiagnosis === true;
 
     // 如果没有填名字但有 cookie，尝试提取名字
     let name = accountData.name;
@@ -342,13 +548,16 @@ class ConfigManager {
         }
         delete mergedSecrets[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`];
       }
-      cfg.accounts[idx] = {
+      const updatedAccount = {
         ...existing,
         ...mergedSecrets,
         name: name || existing.name,
         order,
         timeSlot
       };
+      delete updatedAccount.preserveDiagnosis;
+      this.applyCredentialMetadata(updatedAccount, existing, { preserveDiagnosis });
+      cfg.accounts[idx] = updatedAccount;
       if (cfg.accounts[idx].enabled === false) {
         if (!cfg.accounts[idx].pausedAt) cfg.accounts[idx].pausedAt = Date.now();
       } else {
@@ -367,7 +576,7 @@ class ConfigManager {
         };
       }
       const order = accountData.order !== undefined ? Number(accountData.order) : (newIdx + 1);
-      cfg.accounts.push({
+      const newAccount = {
         id,
         name: name || `账号 ${newIdx + 1}`,
         order,
@@ -378,9 +587,13 @@ class ConfigManager {
         refreshToken: accountData.refreshToken || '',
         accessToken: accountData.accessToken || '',
         tokenTime: accountData.tokenTime || 0,
+        proxyMode: ['inherit', 'direct', 'proxy'].includes(accountData.proxyMode) ? accountData.proxyMode : 'inherit',
+        proxyId: accountData.proxyMode === 'proxy' ? (accountData.proxyId || '') : '',
         timeSlot,
         authDiagnosis: accountData.authDiagnosis || null
-      });
+      };
+      this.applyCredentialMetadata(newAccount, null);
+      cfg.accounts.push(newAccount);
     }
 
     this.save();
@@ -542,6 +755,7 @@ class ConfigManager {
             // 去掉 getPublicConfig() 附加的 hasXxx 派生标记，避免污染落盘配置
             delete merged[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`];
           }
+          this.applyCredentialMetadata(merged, existing);
           if (merged.enabled === false) {
             if (!merged.pausedAt) merged.pausedAt = Date.now();
           } else {
@@ -554,6 +768,20 @@ class ConfigManager {
     }
 
     this.config = this.mergeDeep(this.config, patch);
+    if (patch.network && !Array.isArray(patch.network.proxies) && patch.network.proxyUrl) {
+      // 配置向导仍提交单地址；将其写入默认节点，但保留配置中心里的其他节点。
+      const network = this.config.network;
+      const existingDefault = (network.proxies || []).find(item => item.id === network.defaultProxyId);
+      const url = normalizeProxyUrl(patch.network.proxyUrl);
+      const target = existingDefault || { id: `proxy_${Date.now()}`, name: '向导代理' };
+      target.url = url;
+      network.proxies = [
+        ...(network.proxies || []).filter(item => item.id !== target.id),
+        target
+      ];
+      network.defaultProxyId = target.id;
+    }
+    this.migrateProxySettings();
     this.save();
     return this.config;
   }
@@ -566,6 +794,8 @@ class ConfigManager {
     if (!acc) return null;
     acc.authDiagnosis = {
       checkedAt: Date.now(),
+      credentialUpdatedAt: Number(acc.credentialUpdatedAt || 0),
+      webIdentityKey: acc.webIdentityKey || '',
       cookieValid: !!diagnosis.cookieValid,
       tokenValid: !!diagnosis.tokenValid,
       overallValid: !!diagnosis.overallValid,

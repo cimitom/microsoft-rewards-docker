@@ -9,6 +9,7 @@ import { DATA_DIR, withTimeout } from '../fsUtil.js';
 import { findChromiumExecutable } from './chromiumExecutable.js';
 import { PC_USER_AGENT } from './fingerprint.js';
 import { isDemoMode, isDemoEpicAccountId } from './demoMode.js';
+import { toBrowserProxy } from './proxy.js';
 
 // Epic 官方商城静态接口：返回当前在售商品及促销信息（含每周免费游戏）
 const FREE_GAMES_API = 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN';
@@ -638,8 +639,9 @@ export class EpicManager {
 
   getBrowserProxy() {
     const cfg = configManager.get();
-    if (!cfg.network?.useProxy || !cfg.network?.proxyUrl) return null;
-    return { server: String(cfg.network.proxyUrl).trim() };
+    if (!cfg.network?.useProxy) return null;
+    const proxy = configManager.getDefaultProxy();
+    return proxy?.url ? toBrowserProxy(proxy.url) : null;
   }
 
   /**

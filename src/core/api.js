@@ -3,6 +3,7 @@ import configManager from '../config.js';
 import networkClient from '../network.js';
 import logger from '../logger.js';
 import authManager from './auth.js';
+import { extractAccountDisplayName, searchTierFromMax } from './accountIdentity.js';
 import {
   PC_USER_AGENT,
   MOBILE_USER_AGENT,
@@ -240,7 +241,7 @@ export class RewardsApi {
     //     绝不能传 null，否则 networkClient 会回退到 accounts[0] 的 Cookie，
     //     把副账号的操作算到主账号头上。
     // 只有完全没指定账号（acc 为空）时才用 null，保留「走默认账号」的旧语义。
-    networkClient.setActiveCookie(acc ? (acc.cookie || '') : null);
+    networkClient.setActiveAccount(acc);
     // 同步日志归属上下文：该账号下所有未显式传账号名的日志都会自动带上账号名
     logger.setAccountContext(acc?.name || this.currentAccountId);
   }
@@ -253,6 +254,7 @@ export class RewardsApi {
     return {
       accountId: this.currentAccountId,
       cookie: networkClient.getActiveCookie(),
+      proxyContext: networkClient.getActiveProxyContext(),
       logContext: logger.getAccountContext()
     };
   }
@@ -261,6 +263,7 @@ export class RewardsApi {
     if (!snapshot) return;
     this.currentAccountId = snapshot.accountId;
     networkClient.setActiveCookie(snapshot.cookie);
+    networkClient.setActiveProxyContext(snapshot.proxyContext);
     logger.setAccountContext(snapshot.logContext || '');
   }
 
@@ -289,21 +292,26 @@ export class RewardsApi {
   /**
    * 地区与 IP 检测
    */
-  async checkRegion(retryCount = 0) {
+  async checkRegion(retryCount = 0, options = {}) {
     const cfg = configManager.get();
-    if (!cfg.network?.lockRegion) return true;
+    if (!options.force && !cfg.network?.lockRegion) return true;
+    const maxRetries = Number.isFinite(Number(options.maxRetries))
+      ? Math.max(0, Math.min(2, Number(options.maxRetries)))
+      : 2;
 
     try {
       const html = await networkClient.request({
         url: `https://${this.host}/`,
-        headers: pcPageHeaders()
+        headers: pcPageHeaders(),
+        proxyUrl: options.proxyUrl,
+        useProxy: options.useProxy
       });
 
       if (!html) {
-        if (retryCount < 2) {
-          logger.log('🟡', `地区检测无返回，重试中 (${retryCount + 1}/2)...`);
+        if (retryCount < maxRetries) {
+          if (!options.silent) logger.log('🟡', `地区检测无返回，重试中 (${retryCount + 1}/${maxRetries})...`);
           await this.randomDelay(3000, 6000);
-          return await this.checkRegion(retryCount + 1);
+          return await this.checkRegion(retryCount + 1, options);
         }
         return false;
       }
@@ -312,43 +320,70 @@ export class RewardsApi {
       if (match) {
         this.region = match[3].toUpperCase();
         if (this.region !== 'CN') {
-          const ipInfo = await this.getIPInfo();
-          logger.log('🔴', `检测到当前出口 IP 位于非大陆地区 (${this.region})，为了避免被微软风控，自动化已停止！${ipInfo}`);
+          const ipInfo = await this.getIPInfo(options);
+          if (!options.silent) {
+            logger.log('🔴', `检测到当前出口 IP 位于非大陆地区 (${this.region})，为了避免被微软风控，自动化已停止！${ipInfo}`);
+          }
           return false;
         }
-        logger.log('🟢', `地区检测通过: ${this.region}（中国大陆）`);
+        if (!options.silent) logger.log('🟢', `地区检测通过: ${this.region}（中国大陆）`);
         return true;
       }
 
-      if (retryCount < 2) {
+      if (retryCount < maxRetries) {
         await this.randomDelay(3000, 6000);
-        return await this.checkRegion(retryCount + 1);
+        return await this.checkRegion(retryCount + 1, options);
       }
       return false;
     } catch (e) {
-      if (retryCount < 2) {
+      if (retryCount < maxRetries) {
         await this.randomDelay(3000, 6000);
-        return await this.checkRegion(retryCount + 1);
+        return await this.checkRegion(retryCount + 1, options);
       }
-      logger.log('🔴', `地区检测异常: ${e.message}`);
+      if (!options.silent) logger.log('🔴', `地区检测异常: ${e.message}`);
       return false;
     }
   }
 
-  async getIPInfo() {
+  async getIPInfoDetails(options = {}) {
     try {
       const res = await networkClient.request({
         url: 'https://disp-qryapi.3g.qq.com/v1/dispatch',
-        headers: { 'referer': 'https://3g.qq.com/' }
+        headers: { 'referer': 'https://3g.qq.com/' },
+        proxyUrl: options.proxyUrl,
+        useProxy: options.useProxy
       });
       const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
       if (data && data.code === 0) {
-        const ip = data.extra?.ip || '';
-        const rawInfo = (data.ipInfo || '').replace(/[#*]+/g, ' ').trim();
-        return ` 出口IP: ${ip} 所在地: ${rawInfo}`;
+        const ip = String(data.extra?.ip || data.ip || '').trim();
+        const rawInfo = String(data.ipInfo || data.location || '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;|&#160;/gi, ' ')
+          .replace(/[#*]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const fallbackLocation = [
+          data.country,
+          data.province,
+          data.city,
+          data.isp
+        ].filter(Boolean).join(' ').trim();
+        const location = rawInfo || fallbackLocation;
+        if (!ip && !location) return null;
+        return {
+          ip,
+          location,
+          rawInfo: rawInfo || fallbackLocation,
+          formatted: `出口 IP: ${ip || '未知'} | 归属地: ${location || '未知'}`
+        };
       }
     } catch {}
-    return '';
+    return null;
+  }
+
+  async getIPInfo(options = {}) {
+    const details = await this.getIPInfoDetails(options);
+    return details ? ` ${details.formatted}` : '';
   }
 
   /**
@@ -373,7 +408,7 @@ export class RewardsApi {
     return null;
   }
 
-  async getMobileBalance() {
+  async getMobileSnapshot() {
     try {
       const res = await this.withTokenRetry(token => networkClient.request({
         url: 'https://prod.rewardsplatform.microsoft.com/dapi/me?channel=SAAndroid&options=105',
@@ -389,11 +424,20 @@ export class RewardsApi {
       }));
       const data = typeof res === 'string' && this.isJSON(res) ? JSON.parse(res) : res;
       const balance = data?.response?.balance;
-      if (balance !== undefined && balance !== null && balance !== '') {
-        return Number(balance);
-      }
+      const normalizedBalance = balance !== undefined && balance !== null && balance !== ''
+        ? Number(balance)
+        : null;
+      return {
+        balance: Number.isFinite(normalizedBalance) ? normalizedBalance : null,
+        userName: extractAccountDisplayName(data?.response)
+      };
     } catch {}
     return null;
+  }
+
+  async getMobileBalance() {
+    const snapshot = await this.getMobileSnapshot();
+    return Number.isFinite(Number(snapshot?.balance)) ? Number(snapshot.balance) : null;
   }
 
   async getBalance() {
@@ -424,38 +468,42 @@ export class RewardsApi {
         ]);
         const clean = String(html || '').replace(/\\"/g, '"');
         const cleanDash = String(dashHtml || '').replace(/\\"/g, '"');
+        const quotaHtml = clean.includes('"pointsCounters"') ? clean : cleanDash;
         let balance = 0;
-        let pcMax = 60, pcCur = 0, mobMax = 0, mobCur = 0;
+        let webBalance = null;
+        let pcMax = 0, pcCur = 0, mobMax = 0, mobCur = 0;
         let dailyOffer = 0;
         let searchQuotaFound = false;
 
-        const pcIdx = clean.indexOf('"pointsCounters":{');
+        const pcIdx = quotaHtml.indexOf('"pointsCounters":{');
         if (pcIdx !== -1) {
           let start = pcIdx + 17, depth = 0, end = start;
-          for (let i = start; i < clean.length && i < start + 500; i++) {
-            if (clean[i] === '{') depth++;
-            if (clean[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+          for (let i = start; i < quotaHtml.length && i < start + 500; i++) {
+            if (quotaHtml[i] === '{') depth++;
+            if (quotaHtml[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
           }
           try {
-            const pts = JSON.parse(clean.substring(start, end));
-            pcMax = pts.pc?.max ?? 60;
+            const pts = JSON.parse(quotaHtml.substring(start, end));
+            pcMax = Number(pts.pc?.max);
             pcCur = pts.pc?.progress ?? 0;
             mobMax = pts.mobile?.max ?? 0;
             mobCur = pts.mobile?.progress ?? 0;
             dailyOffer = pts.dailyOffer ?? 0;
-            searchQuotaFound = true;
+            searchQuotaFound = Number.isFinite(pcMax) && pcMax > 0;
           } catch {}
         }
 
         const balMatch = clean.match(/"balance":(\d+)/) || clean.match(/"availablePoints":(\d+)/);
         if (balMatch) {
           balance = parseInt(balMatch[1], 10);
+          webBalance = balance;
         } else if (cleanDash) {
           const dashBalMatch = cleanDash.match(/"balance":(\d+)/)
             || cleanDash.match(/"availablePoints":(\d+)/)
             || cleanDash.match(/class="text-pageHeader">([\d,]+)</);
           if (dashBalMatch) {
             balance = parseInt(String(dashBalMatch[1]).replace(/,/g, ''), 10);
+            webBalance = balance;
           }
         }
 
@@ -492,7 +540,7 @@ export class RewardsApi {
 
         const todayDetails = [];
         const toNum = v => parseInt(String(v).replace(/,/g, ''), 10) || 0;
-        const searchRowMatch = clean.match(/<p>\s*必应搜索\s*<\/p>\s*<\/div>\s*<div(?=[^>]*justify-self-end)[^>]*>([\s\S]{0,500}?)<\/div>/i);
+        const searchRowMatch = quotaHtml.match(/<p>\s*必应搜索\s*<\/p>\s*<\/div>\s*<div(?=[^>]*justify-self-end)[^>]*>([\s\S]{0,500}?)<\/div>/i);
         const searchHtmlMatch = searchRowMatch
           ? (searchRowMatch[1].match(/<span[^>]*>([\d,]+)<\/span>\s*<span[^>]*>\s*\/\s*([\d,]+)\s*<\/span>/i)
               || searchRowMatch[1].match(/([\d,]+)\s*\/\s*([\d,]+)/))
@@ -504,7 +552,7 @@ export class RewardsApi {
           todayDetails.push({ title: '必应搜索', points: pcCur, max: pcMax });
         }
 
-        const searchRscMatch = clean.match(/"combinedSearch":\{[^}]*"progress":(\d+)[^}]*"max":(\d+)/);
+        const searchRscMatch = quotaHtml.match(/"combinedSearch":\{[^}]*"progress":(\d+)[^}]*"max":(\d+)/);
         if (searchRscMatch && !todayDetails.some(d => d.title === '必应搜索')) {
           pcCur = toNum(searchRscMatch[1]);
           pcMax = toNum(searchRscMatch[2]);
@@ -534,11 +582,14 @@ export class RewardsApi {
 
         // 印章进度提取 (如 8/12)
         let stampsProgress = 0, stampsMax = 12;
-        const stampMatch = clean.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
-          || clean.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
+        const stampText = cleanDash.includes('收集的印章') ? cleanDash : clean;
+        const stampMatch = stampText.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
+          || stampText.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
         if (stampMatch) {
-          stampsMax = parseInt(stampMatch[1], 10) || 12;
-          stampsProgress = parseInt(stampMatch[2], 10) || 8;
+          const parsedMax = parseInt(stampMatch[1], 10);
+          const parsedProgress = parseInt(stampMatch[2], 10);
+          stampsMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 12;
+          stampsProgress = Number.isFinite(parsedProgress) ? parsedProgress : 0;
         }
 
         // 平台待领取额外积分提取（位于 /dashboard 顶部卡片）
@@ -555,6 +606,8 @@ export class RewardsApi {
 
         return {
           balance,
+          webBalance,
+          balanceKnown: Number.isFinite(webBalance),
           todayPoints,
           claimablePoints,
           pc: searchQuotaFound ? { progress: pcCur, max: pcMax } : null,
@@ -566,6 +619,7 @@ export class RewardsApi {
           desktopApp,
           monthlyQuest,
           quests,
+          searchTier: searchQuotaFound ? searchTierFromMax(pcMax) : null,
           stamps: {
             progress: stampsProgress,
             max: stampsMax

@@ -100,3 +100,15 @@ test('顶部页签、账号切换和工具栏操作统一使用胶囊圆角', ()
   assert.match(styleCss, /\.chip-add[\s\S]*border-radius: 999px/);
   assert.match(styleCss, /\.ms-toolbar-actions \.btn[\s\S]*border-radius: 999px/);
 });
+
+test('网络配置支持多代理卡片、逐项测试与账号独立出口', () => {
+  assert.match(indexHtml, /id="proxy-list"/);
+  assert.match(indexHtml, /id="btn-add-proxy"/);
+  assert.match(indexHtml, /id="cfg-account-proxy-mode"/);
+  assert.match(indexHtml, /id="cfg-account-proxy-id"/);
+  assert.match(appJs, /data-proxy-action="test"/);
+  assert.match(appJs, /data-proxy-action="save"/);
+  assert.match(appJs, /data-proxy-action="delete"/);
+  assert.match(appJs, /当前访问 IP/);
+  assert.match(styleCss, /\.proxy-card-fields[\s\S]*grid-template-columns/);
+});

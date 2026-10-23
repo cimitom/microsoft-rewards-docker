@@ -43,6 +43,46 @@ test('getRewardsInfo 解析官网「今日积分」与余额', async () => {
   });
 });
 
+for (const { max, code, label } of [
+  { max: 15, code: 'member', label: '会员' },
+  { max: 30, code: 'silver', label: '银牌' },
+  { max: 60, code: 'gold', label: '金牌' }
+]) {
+  test(`getRewardsInfo 按官网 ${max} 分配额识别搜索等级`, async () => {
+    const html = `<script>self.__next_f.push([1,"x:\\"pointsCounters\\":{\\"pc\\":{\\"max\\":${max},\\"progress\\":3},\\"totalPoints\\":88}"])</script>`;
+    await withStubbedNetwork(html, async () => {
+      const info = await rewardsApi.getRewardsInfo(1);
+      assert.deepEqual(info.pc, { progress: 3, max });
+      assert.deepEqual(info.searchTier, { code, label, max });
+    });
+  });
+}
+
+test('getRewardsInfo 未解析到搜索配额时不回退为默认 60', async () => {
+  await withStubbedNetwork('<script>{"balance":88}</script>', async () => {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.equal(info.pc, null);
+    assert.equal(info.searchTier, null);
+  });
+});
+
+test('getRewardsInfo 可从 dashboard 读取搜索等级配额', async () => {
+  const origRequest = networkClient.request;
+  networkClient.request = async ({ url }) => {
+    if (url.includes('/dashboard')) {
+      return '<script>{"pointsCounters":{"pc":{"max":30,"progress":6},"totalPoints":100}}</script>';
+    }
+    return '<html><body>loading</body></html>';
+  };
+  try {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.deepEqual(info.pc, { progress: 6, max: 30 });
+    assert.equal(info.searchTier.code, 'silver');
+  } finally {
+    networkClient.request = origRequest;
+  }
+});
+
 test('getRewardsInfo 遇到多份「今日积分」Flight 数据时取最大值，不被首个 0 覆盖', async () => {
   const html = `
 <script>self.__next_f.push([1,"a:\\"children\\":\\"今日积分\\",\\"b\\":{\\"className\\":\\"text-pageHeader\\",\\"children\\":\\"0\\"}"])</script>
@@ -61,6 +101,35 @@ test('getRewardsInfo 解析必应应用连签真实状态', async () => {
     assert.equal(info.streaks.bingapp.isCurrentDayCompleted, true);
     assert.equal(info.streaks.bingapp.completedDays, 4);
   });
+});
+
+test('getRewardsInfo 保留官网印章 0/12，不用默认值 8 覆盖', async () => {
+  const html = `
+<script>self.__next_f.push([1,"a:\\"pointsCounters\\":{\\"pc\\":{\\"max\\":60,\\"progress\\":0}}"])</script>
+<div aria-label="收集的印章" aria-valuemax="12" aria-valuenow="0"></div>
+`;
+  await withStubbedNetwork(html, async () => {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.deepEqual(info.stamps, { progress: 0, max: 12 });
+  });
+});
+
+test('getRewardsInfo 以 dashboard 印章为准，不被 earn 旧数据 8/12 覆盖', async () => {
+  const origRequest = networkClient.request;
+  networkClient.request = async ({ url }) => {
+    if (url.includes('/dashboard')) {
+      return '<div aria-label="收集的印章" aria-valuemax="12" aria-valuenow="0"></div>';
+    }
+    return `
+<script>self.__next_f.push([1,"x:\\"pointsCounters\\":{\\"pc\\":{\\"max\\":15,\\"progress\\":0}}"])</script>
+<div aria-label="收集的印章" aria-valuemax="12" aria-valuenow="8"></div>`;
+  };
+  try {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.deepEqual(info.stamps, { progress: 0, max: 12 });
+  } finally {
+    networkClient.request = origRequest;
+  }
 });
 
 test('getActivityCardStatus 统计 activityCards 完成情况', async () => {

@@ -12,6 +12,7 @@ import configManager from '../config.js';
 import { browserSlotLock } from './contextLock.js';
 import { readBrowserSession, writeBrowserSession } from './browserSession.js';
 import { SearchStagnationGuard } from './searchStagnation.js';
+import { cookieValue } from './accountIdentity.js';
 import {
   isQuestSubtaskCompleted,
   parseQuestProgress,
@@ -30,6 +31,7 @@ import {
   buildUserAgentMetadata
 } from './fingerprint.js';
 import { findChromiumExecutable } from './chromiumExecutable.js';
+import { toBrowserProxy } from './proxy.js';
 
 export function classifyBingLoginState(signals = {}) {
   const userName = [signals.idN, signals.idA, signals.idName]
@@ -172,6 +174,8 @@ class BrowserManager extends EventEmitter {
       // 凭据换过账号时 readBrowserSession 会判定为过期并返回 null，自动回退到全新会话。
       const stored = readBrowserSession(acc);
       const storageState = stored?.storageState || null;
+      const accountProxy = configManager.getEffectiveProxy(acc);
+      const browserProxy = accountProxy?.url ? toBrowserProxy(accountProxy.url) : null;
       if (stored?.stale) {
         logger.log('🟡', `已丢弃该账号的旧浏览器会话（${stored.reason}），本次使用全新会话`, '', acc?.name);
       } else if (storageState) {
@@ -194,6 +198,7 @@ class BrowserManager extends EventEmitter {
           'sec-ch-ua-mobile': '?0',
           'sec-ch-ua-platform': PLATFORM.clientHint
         },
+        ...(browserProxy ? { proxy: browserProxy } : {}),
         ...(storageState ? { storageState } : {})
       });
 
@@ -384,9 +389,11 @@ class BrowserManager extends EventEmitter {
 
     const login = await this.getBingLoginState(page);
     if (login.isGuest) {
-      logger.log('🟡', '必应搜索页显示未登录（游客态），本次搜索不会累计 Rewards 积分', '', logAccountName);
+      throw new Error('必应搜索页处于游客态，已停止搜索，避免空跑不计分');
     } else if (login.userName) {
       logger.log('👤', `必应搜索登录态确认: ${login.userName}`, '', logAccountName);
+    } else {
+      logger.log('🟡', '未能从页面确认必应登录用户名，将继续依赖 Cookie 身份与官网计分回读', '', logAccountName);
     }
 
     const currentUrl = String(page.url() || '');
@@ -415,6 +422,9 @@ class BrowserManager extends EventEmitter {
     await this.delay(rewardsApi.randomRange(2500, 4500));
 
     const finalUrl = String(page.url() || '');
+    if (/login\.live\.com|account\.live\.com/i.test(finalUrl)) {
+      throw new Error('搜索被重定向到微软登录页，Cookie 登录态已失效');
+    }
     const title = await page.title().catch(() => '');
     const resultCount = await page.locator('#b_results li.b_algo, #b_results li.b_ans').count().catch(() => 0);
     const searchSubmitted = submitted || (/\/search\?/i.test(finalUrl) && /[?&]q=/i.test(finalUrl));
@@ -437,8 +447,11 @@ class BrowserManager extends EventEmitter {
     const accName = acc?.name || '当前账号';
     logger.log('🔍', `启动无头浏览器执行「单次安全验证搜索」...`, '', accName);
 
-    if (acc?.cookie && !acc.cookie.includes('_U=')) {
-      logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请前往 rewards.bing.com/dashboard 登录后重新抓取完整 Cookie`, '', accName);
+    if (acc?.cookie && !cookieValue(acc.cookie, '_U')) {
+      throw new Error(`当前账号 [${accName}] 的 Cookie 缺少 _U，已拒绝搜索；请重新抓取完整 Cookie`);
+    }
+    if (!acc?.cookie) {
+      throw new Error(`当前账号 [${accName}] 未配置网页 Cookie，无法执行搜索`);
     }
 
     try {
@@ -532,8 +545,11 @@ class BrowserManager extends EventEmitter {
       logger.log('⚠️', `为保证 ${totalSearches} 次搜索在 3 小时内完成，本次间隔已自动压缩为 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accName);
     }
 
-    if (acc?.cookie && !acc.cookie.includes('_U=')) {
-      logger.log('⚠️', `当前账号 [${accName}] 的 Cookie 中缺少关键标识 _U，必应搜索无法关联用户计分！请在配置中心更新包含 _U 的完整 Cookie`, '', accName);
+    if (acc?.cookie && !cookieValue(acc.cookie, '_U')) {
+      throw new Error(`当前账号 [${accName}] 的 Cookie 缺少 _U，已拒绝搜索；请在配置中心重新导入完整 Cookie`);
+    }
+    if (!acc?.cookie) {
+      throw new Error(`当前账号 [${accName}] 未配置网页 Cookie，无法执行搜索`);
     }
 
     logger.log('🖥️', `启动 Playwright 拟人真机搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动，预计约 ${(estimatedSec/60).toFixed(0)} 分钟（最长 ${(worstSec/60).toFixed(0)} 分钟，上限 180 分钟）`, '', accName);

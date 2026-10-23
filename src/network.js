@@ -2,6 +2,7 @@ import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import configManager from './config.js';
+import { normalizeProxyUrl } from './core/proxy.js';
 
 // 只有这些域名才允许附带微软账号 Cookie。
 // 否则推送渠道（企业微信/钉钉/飞书/Bark/PushMe/Telegram）、热搜词接口、IP 查询接口
@@ -55,6 +56,8 @@ class NetworkClient {
   constructor() {
     this.cookieJar = new Map();
     this.activeCookie = null;
+    // null 表示没有账号上下文，使用全局默认代理；对象用于明确记录账号的代理策略。
+    this.activeProxyContext = null;
     this.initDefaultCookies();
   }
 
@@ -62,6 +65,35 @@ class NetworkClient {
     this.activeCookie = (cookieStr === undefined || cookieStr === null)
       ? null
       : normalizeCookieString(String(cookieStr));
+  }
+
+  /**
+   * 切换账号时同时绑定代理上下文，确保 HTTP API 与浏览器使用同一出口。
+   * 指定节点缺失时保持“直连”，不回退到全局默认代理。
+   */
+  setActiveAccount(acc) {
+    this.setActiveCookie(acc ? (acc.cookie || '') : null);
+    if (!acc) {
+      this.activeProxyContext = null;
+      return;
+    }
+    const mode = configManager.getAccountProxyMode(acc);
+    const proxy = configManager.getEffectiveProxy(acc);
+    this.activeProxyContext = {
+      mode,
+      proxyId: proxy?.id || acc.proxyId || '',
+      proxyName: proxy?.name || '',
+      proxyUrl: proxy?.url || '',
+      missing: mode === 'proxy' && !proxy
+    };
+  }
+
+  getActiveProxyContext() {
+    return this.activeProxyContext ? structuredClone(this.activeProxyContext) : null;
+  }
+
+  setActiveProxyContext(context) {
+    this.activeProxyContext = context ? structuredClone(context) : null;
   }
 
   /** 读取当前生效的账号 Cookie（null 表示「未指定账号，走默认账号回退」） */
@@ -149,25 +181,36 @@ class NetworkClient {
     return Array.from(cookies.entries()).map(([k, v]) => `${k}=${v}`).join('; ');
   }
 
-  getAgent() {
-    const cfg = configManager.get();
-    if (!cfg.network?.useProxy || !cfg.network?.proxyUrl) {
-      return null;
+  getEffectiveProxyUrl(options = {}) {
+    if (options.proxyUrl !== undefined) {
+      if (options.useProxy === false) return '';
+      return normalizeProxyUrl(options.proxyUrl);
+    }
+    if (options.useProxy === false) return '';
+
+    const ctx = this.activeProxyContext;
+    if (ctx) {
+      if (ctx.mode === 'direct' || ctx.missing) return '';
+      if (ctx.mode === 'proxy') return ctx.proxyUrl || '';
     }
 
-    const proxyUrl = cfg.network.proxyUrl.trim();
-    if (!proxyUrl) return null;
+    const network = configManager.get().network || {};
+    if (!network.useProxy) return '';
+    const defaultProxy = configManager.getDefaultProxy();
+    return defaultProxy?.url || '';
+  }
 
-    try {
-      if (proxyUrl.startsWith('socks://') || proxyUrl.startsWith('socks5://') || proxyUrl.startsWith('socks5h://')) {
-        return new SocksProxyAgent(proxyUrl);
-      } else {
-        return new HttpsProxyAgent(proxyUrl);
-      }
-    } catch (e) {
-      console.error('[Network] 代理配置解析失败:', e.message);
-      return null;
+  createAgent(proxyUrl) {
+    const normalized = normalizeProxyUrl(proxyUrl);
+    if (!normalized) return null;
+    if (/^(socks|socks4|socks5|socks5h):\/\//i.test(normalized)) {
+      return new SocksProxyAgent(normalized);
     }
+    return new HttpsProxyAgent(normalized);
+  }
+
+  getAgent(options = {}) {
+    return this.createAgent(this.getEffectiveProxyUrl(options));
   }
 
   /**
@@ -182,10 +225,12 @@ class NetworkClient {
       timeout = 20000,
       followRedirects = true,
       cookieOverride = null,
-      responseType = 'text'
+      responseType = 'text',
+      proxyUrl,
+      useProxy
     } = options;
 
-    const agent = this.getAgent();
+    const agent = this.getAgent({ proxyUrl, useProxy });
     const finalHeaders = { ...headers };
     if (finalHeaders.cookie !== undefined) {
       finalHeaders.cookie = normalizeCookieString(String(finalHeaders.cookie));

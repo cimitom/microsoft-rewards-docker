@@ -16,11 +16,12 @@ import browserManager from '../core/browser.js';
 import epicManager, { normalizeAutoClaimTime } from '../core/epic.js';
 import { accountContextLock } from '../core/contextLock.js';
 import { isDemoMode } from '../core/demoMode.js';
+import { normalizeProxyUrl } from '../core/proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.8.1';
+const CURRENT_VERSION = '1.8.2';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -569,6 +570,8 @@ export function createServer() {
       hasAuthCodeUrl: !!a.authCodeUrl,
       tokenTime: a.tokenTime || 0,
       authDiagnosis: a.authDiagnosis || null,
+      proxyMode: configManager.getAccountProxyMode(a),
+      proxyId: configManager.getAccountProxyMode(a) === 'proxy' ? (a.proxyId || '') : '',
       timeSlot: a.timeSlot
     }));
     res.json({ success: true, data: accounts });
@@ -787,7 +790,7 @@ export function createServer() {
       if (targetAcc.enabled === false) {
         return res.status(409).json({ success: false, message: '该账号已停用，请先恢复自动巡检' });
       }
-      const blockReason = taskManager.getAccountBlockReason(targetAcc);
+      const blockReason = taskManager.getHardAccountBlockReason(targetAcc);
       if (blockReason) {
         return res.status(409).json({ success: false, message: `账号凭据异常，已拒绝执行：${blockReason}` });
       }
@@ -857,12 +860,18 @@ export function createServer() {
     }
   });
 
-  // 7.5 单独测试并保存 Cookie
+  // 7.5 单独测试候选 Cookie（不保存、不写统计）
   app.post('/api/auth/test-cookie', async (req, res) => {
     const { cookie, accountId } = req.body;
     if (!cookie) {
       return res.status(400).json({ success: false, message: '请提供 Cookie' });
     }
+    const lockOwner = `web-cookie-test:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    if (!accountContextLock.tryAcquire(lockOwner)) {
+      return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再测试 Cookie' });
+    }
+    const targetAcc = configManager.resolveAccount(accountId);
+    const prevContext = rewardsApi.snapshotAccountContext();
     try {
       let cookieToTest = cookie;
       if (cookie === SECRET_PLACEHOLDER) {
@@ -872,41 +881,57 @@ export function createServer() {
         }
         cookieToTest = acc.cookie;
       }
+      if (targetAcc) rewardsApi.setCurrentAccount(targetAcc);
       // 只做校验，不落库：以前这里会 upsertAccount，导致「测试 Cookie」按钮
       // 凭空创建出一个名为「账号 (xxx)」的账号。真正的保存由向导最后一步统一提交。
       const status = await authManager.checkCookieStatus(cookieToTest, accountId);
-      const existing = configManager.findAccount(accountId);
-      if (status.valid && existing) {
-        const accStats = taskManager.ensureAccountStats(existing.id);
-        if (status.balance > 0) accStats.balance = status.balance;
-        if (status.streakDays > 0) accStats.streakDays = status.streakDays;
-        if (status.stamps) accStats.stamps = status.stamps;
-        taskManager.saveStats();
-      }
+      // 测试的是尚未保存的候选 Cookie，不能把它的余额/印章写进当前账号统计，
+      // 否则 A 账号点一次“测试 B 的 Cookie”就会把 B 的数据串到 A 的面板。
       res.json({ success: true, data: status });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
+    } finally {
+      rewardsApi.restoreAccountContext(prevContext);
+      accountContextLock.release(lockOwner);
     }
   });
 
   // 8. 全面测试账户状态并在 Docker 中完成体检（结果落盘，供账号卡片展示）
   async function runAccountDiagnosis(accountId, options = {}) {
-    const targetAccountId = accountId || null;
-    // 手动体检是暂停账号明确允许的例外，需要允许刷新 Token 才能得到真实结果。
-    const result = await authManager.testAccount(targetAccountId, {
-      allowPaused: options.allowPaused === true
-    });
-    // 获取当前网络出口信息
-    const [ipInfo, regionPass] = await Promise.all([
-      rewardsApi.getIPInfo(),
-      rewardsApi.checkRegion(0)
-    ]);
+    let targetAccountId = accountId || null;
+    const acc = configManager.resolveAccount(targetAccountId);
+    if (!acc) throw new Error('账号未找到');
+    targetAccountId = acc.id;
+    const prevContext = rewardsApi.snapshotAccountContext();
+    rewardsApi.setCurrentAccount(acc);
 
-    result.network = {
-      region: rewardsApi.region,
-      regionPass,
-      ipInfo: ipInfo || '未知'
-    };
+    let result;
+    try {
+      // 手动体检是暂停账号明确允许的例外，需要允许刷新 Token 才能得到真实结果。
+      result = await authManager.testAccount(targetAccountId, {
+        allowPaused: options.allowPaused === true
+      });
+      // 账号体检必须读取该账号实际使用的出口，而不是全局默认网络。
+      const [ipDetails, regionPass] = await Promise.all([
+        rewardsApi.getIPInfoDetails(),
+        rewardsApi.checkRegion(0, { force: true, maxRetries: 1, silent: true })
+      ]);
+      const effectiveProxy = configManager.getEffectiveProxy(acc);
+      result.network = {
+        region: rewardsApi.region,
+        regionPass,
+        ip: ipDetails?.ip || '',
+        location: ipDetails?.location || '',
+        ipInfo: ipDetails?.formatted || '未能获取当前访问 IP',
+        proxyMode: configManager.getAccountProxyMode(acc),
+        proxyUsed: !!effectiveProxy,
+        proxy: effectiveProxy
+          ? { id: effectiveProxy.id, name: effectiveProxy.name, url: effectiveProxy.url }
+          : null
+      };
+    } finally {
+      rewardsApi.restoreAccountContext(prevContext);
+    }
 
     const diagnosis = configManager.recordAuthDiagnosis(result.accountId, {
       cookieValid: result.cookie?.valid,
@@ -937,7 +962,8 @@ export function createServer() {
   const accountTestTimes = new Map();
 
   app.post('/api/auth/test', async (req, res) => {
-    if (!accountContextLock.tryAcquire('web-diagnosis')) {
+    const lockOwner = `web-diagnosis:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    if (!accountContextLock.tryAcquire(lockOwner)) {
       return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再体检（避免账号上下文串台）' });
     }
     try {
@@ -960,13 +986,14 @@ export function createServer() {
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     } finally {
-      accountContextLock.release('web-diagnosis');
+      accountContextLock.release(lockOwner);
     }
   });
 
   // 8.5 一键体检全部账号（逐个串行，避免并发触发微软风控）
   app.post('/api/auth/test-all', async (req, res) => {
-    if (!accountContextLock.tryAcquire('web-diagnosis')) {
+    const lockOwner = `web-diagnosis-all:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    if (!accountContextLock.tryAcquire(lockOwner)) {
       return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再体检（避免账号上下文串台）' });
     }
     try {
@@ -1044,30 +1071,107 @@ export function createServer() {
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     } finally {
-      accountContextLock.release('web-diagnosis');
+      accountContextLock.release(lockOwner);
     }
   });
 
   // 9. 测试代理连通性及地区
   app.post('/api/proxy/test', async (req, res) => {
-    const { proxyUrl, useProxy } = req.body;
-    if (accountContextLock.isBusy()) {
-      return res.status(409).json({ success: false, message: '任务正在执行中，暂不能切换代理配置' });
-    }
-    if (useProxy && proxyUrl) {
-      configManager.update({ network: { useProxy, proxyUrl } });
-    }
+    const useProxy = req.body?.useProxy === true;
+    let proxyUrl = '';
     try {
-      const ipInfo = await rewardsApi.getIPInfo();
-      const regionPass = await rewardsApi.checkRegion(0);
+      if (useProxy) {
+        proxyUrl = normalizeProxyUrl(req.body?.proxyUrl);
+        if (!proxyUrl) {
+          return res.status(400).json({ success: false, message: '请填写要测试的代理地址' });
+        }
+      }
+      const startedAt = Date.now();
+      const testOptions = {
+        proxyUrl: useProxy ? proxyUrl : '',
+        useProxy,
+        force: true,
+        maxRetries: 0,
+        silent: true
+      };
+      const [ipDetails, regionPass] = await Promise.all([
+        rewardsApi.getIPInfoDetails(testOptions),
+        rewardsApi.checkRegion(0, testOptions)
+      ]);
+      const latencyMs = Date.now() - startedAt;
+      const reachable = !!ipDetails || regionPass === true;
+      if (!reachable) {
+        return res.status(502).json({
+          success: false,
+          message: useProxy ? '代理无法连接或目标站点不可达' : '网络请求失败',
+          proxyUrl,
+          latencyMs
+        });
+      }
       res.json({
         success: true,
+        proxyUrl,
+        ip: ipDetails?.ip || '',
+        location: ipDetails?.location || '',
+        latencyMs,
         region: rewardsApi.region,
         regionPass,
-        ipInfo: ipInfo || '未知'
+        ipInfo: ipDetails?.formatted || '代理已连通，但未能读取出口 IP'
       });
     } catch (e) {
-      res.status(500).json({ success: false, message: e.message });
+      res.status(502).json({ success: false, message: e.message, proxyUrl });
+    }
+  });
+
+  // 9.1 多套代理配置保存与删除
+  app.post('/api/network/proxies', (req, res) => {
+    try {
+      if (accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '任务正在执行中，暂不能修改代理配置' });
+      }
+      const result = configManager.setNetworkProxyConfig(req.body || {});
+      res.json({
+        success: true,
+        data: {
+          network: result.network,
+          accounts: (result.accounts || []).map(acc => ({
+            id: acc.id,
+            proxyMode: configManager.getAccountProxyMode(acc),
+            proxyId: acc.proxyMode === 'proxy' ? (acc.proxyId || '') : ''
+          }))
+        }
+      });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.delete('/api/network/proxies/:id', (req, res) => {
+    try {
+      if (accountContextLock.isBusy()) {
+        return res.status(409).json({ success: false, message: '任务正在执行中，暂不能删除代理配置' });
+      }
+      const network = configManager.get().network || {};
+      const proxies = (network.proxies || []).filter(item => item.id !== req.params.id);
+      const result = configManager.setNetworkProxyConfig({
+        proxies,
+        defaultProxyId: network.defaultProxyId === req.params.id ? '' : network.defaultProxyId,
+        useProxy: network.useProxy,
+        lockRegion: network.lockRegion
+      });
+      res.json({
+        success: true,
+        data: {
+          network: result.network,
+          accounts: (result.accounts || []).map(acc => ({
+            id: acc.id,
+            proxyMode: configManager.getAccountProxyMode(acc),
+            proxyId: acc.proxyMode === 'proxy' ? (acc.proxyId || '') : ''
+          }))
+        }
+      });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
     }
   });
 

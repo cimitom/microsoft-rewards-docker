@@ -56,7 +56,7 @@ test('子任务描述中的“(1/5 天已完成)”不能被误判为整个子�
   assert.equal(isQuestSubtaskCompleted({ hasSuccessIcon: true, hasEmptyCircle: false }), true);
 });
 
-test('凭据异常的账号会被标记为不可执行，手动任务必须拒绝', async () => {
+test('移动端凭据异常时必须拒绝移动端手动任务', async () => {
   const accountId = 'acc_blocked_175';
   configManager.upsertAccount({
     id: accountId,
@@ -75,7 +75,7 @@ test('凭据异常的账号会被标记为不可执行，手动任务必须拒�
   const acc = configManager.findAccount(accountId);
   assert.match(tm.getAccountBlockReason(acc), /Token/);
   await assert.rejects(
-    () => tm.runTaskAction(accountId, 'search'),
+    () => tm.runTaskAction(accountId, 'read'),
     /账号凭据异常，已拒绝执行/
   );
 });

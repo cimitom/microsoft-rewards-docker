@@ -2,7 +2,13 @@ import configManager from '../config.js';
 import networkClient from '../network.js';
 import logger from '../logger.js';
 import { APP_USER_AGENT, pcPageHeaders } from './fingerprint.js';
-import { isBalanceMismatch } from './accountIdentity.js';
+import {
+  accountNamesLikelyMatch,
+  cookieValue,
+  extractAccountDisplayName,
+  isBalanceMismatch,
+  searchTierFromMax
+} from './accountIdentity.js';
 
 export const AUTH_CONFIG = {
   clientId: '0000000040170455',
@@ -196,7 +202,8 @@ export class AuthManager {
           id: acc.id,
           accessToken: data.access_token,
           refreshToken: data.refresh_token,
-          tokenTime: Date.now()
+          tokenTime: Date.now(),
+          preserveDiagnosis: true
         });
         logger.log('🟢', `账号 [${acc.name}] OAuth Token 续期刷新成功！`);
         return true;
@@ -222,49 +229,63 @@ export class AuthManager {
 
     // 优先采用微软最新 Next.js earn 页面进行鉴权检测（解决官方 getuserinfo 接口频报 401 的缺陷）
     try {
-      const earnHtml = await networkClient.request({
-        url: 'https://rewards.bing.com/earn',
-        headers: pcPageHeaders({
-          'referer': 'https://rewards.bing.com/',
-          'cookie': cookie
-        })
+      const headers = pcPageHeaders({
+        'referer': 'https://rewards.bing.com/',
+        'cookie': cookie
       });
+      const [earnHtml, dashHtml] = await Promise.all([
+        networkClient.request({
+          url: 'https://rewards.bing.com/earn',
+          headers
+        }),
+        networkClient.request({
+          url: 'https://rewards.bing.com/dashboard',
+          headers
+        }).catch(() => '')
+      ]);
 
       const clean = String(earnHtml).replace(/\\"/g, '"');
-      const isAuthValid = clean.includes('pointsCounters') || clean.includes('pointsHistory') || clean.includes('activityCards');
+      const cleanDash = String(dashHtml).replace(/\\"/g, '"');
+      const authText = `${clean}\n${cleanDash}`;
+      const quotaText = clean.includes('"pointsCounters"') ? clean : cleanDash;
+      const isAuthValid = authText.includes('pointsCounters')
+        || authText.includes('pointsHistory')
+        || authText.includes('activityCards');
 
       if (isAuthValid) {
         let balance = 0;
-        let pcProgress = 0, pcMax = 60;
+        let pcProgress = 0, pcMax = 0;
         let streakDays = 0;
         let userName = '';
 
         // 1. 提取 PC 搜索配额
-        const pcIdx = clean.indexOf('"pointsCounters":{');
+        const pcIdx = quotaText.indexOf('"pointsCounters":{');
         if (pcIdx !== -1) {
           let start = pcIdx + 17, depth = 0, end = start;
-          for (let i = start; i < clean.length && i < start + 500; i++) {
-            if (clean[i] === '{') depth++;
-            if (clean[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+          for (let i = start; i < quotaText.length && i < start + 500; i++) {
+            if (quotaText[i] === '{') depth++;
+            if (quotaText[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
           }
           try {
-            const pts = JSON.parse(clean.substring(start, end));
-            pcMax = pts.pc?.max ?? 60;
+            const pts = JSON.parse(quotaText.substring(start, end));
+            pcMax = Number(pts.pc?.max);
             pcProgress = pts.pc?.progress ?? 0;
             if (pts.totalPoints != null) balance = Number(pts.totalPoints);
           } catch {}
         }
 
         // 2. 提取当前总积分余额
-        const balMatch = clean.match(/"balance":(\d+)/) 
+        const balMatch = clean.match(/"balance":(\d+)/)
           || clean.match(/"availablePoints":(\d+)/)
-          || clean.match(/class="text-pageHeader">([\d,]+)</);
+          || cleanDash.match(/"balance":(\d+)/)
+          || cleanDash.match(/"availablePoints":(\d+)/)
+          || authText.match(/class="text-pageHeader">([\d,]+)</);
         if (balMatch) {
           balance = parseInt(String(balMatch[1]).replace(/,/g, ''), 10);
         }
 
         // 3. 提取连续签到打卡天数
-        const streakMatch = clean.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').match(/每日连续打卡\s*(\d+)/);
+        const streakMatch = authText.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').match(/每日连续打卡\s*(\d+)/);
         if (streakMatch) {
           streakDays = parseInt(streakMatch[1], 10);
         }
@@ -277,20 +298,27 @@ export class AuthManager {
 
         // 5. 提取印章进度 (如 8/12)
         let stampsProgress = 0, stampsMax = 12;
-        const stampMatch = clean.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
-          || clean.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
+        const stampText = cleanDash.includes('收集的印章') ? cleanDash : clean;
+        const stampMatch = stampText.match(/"aria-label":"收集的印章"[^}]*?"aria-valuemax":(\d+)[^}]*?"aria-valuenow":(\d+)/)
+          || stampText.match(/aria-label="收集的印章"[^>]*?aria-valuemax="(\d+)"[^>]*?aria-valuenow="(\d+)"/);
         if (stampMatch) {
-          stampsMax = parseInt(stampMatch[1], 10) || 12;
-          stampsProgress = parseInt(stampMatch[2], 10) || 8;
+          const parsedMax = parseInt(stampMatch[1], 10);
+          const parsedProgress = parseInt(stampMatch[2], 10);
+          stampsMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 12;
+          stampsProgress = Number.isFinite(parsedProgress) ? parsedProgress : 0;
         }
 
         // 6. 检查是否存在必应搜索关键登录标头 _U
-        const hasU = cookie.includes('_U=');
+        const hasU = !!cookieValue(cookie, '_U');
+        const searchTier = Number.isFinite(pcMax) && pcMax > 0 ? searchTierFromMax(pcMax) : null;
+        const searchReady = hasU && !!searchTier && searchTier.code !== 'unknown';
         const uWarning = hasU ? '' : ' | ⚠️缺少 _U 登录标头，必应搜索无法关联账号计分！请在电脑登录 rewards.bing.com/dashboard 重新抓取完整 Cookie';
 
         return {
           valid: true,
           hasU,
+          searchReady,
+          searchTier,
           warning: !hasU,
           warningMessage: hasU ? '' : '缺少 _U 登录标头：必应搜索无法关联账号计分，请在电脑登录 rewards.bing.com/dashboard 后重新抓取完整 Cookie',
           balance,
@@ -300,13 +328,13 @@ export class AuthManager {
             progress: stampsProgress,
             max: stampsMax
           },
-          pcSearch: `${pcProgress}/${pcMax}`,
-          message: `网页端已登录成功！${userName ? `用户: ${userName} | ` : ''}积分: ${balance} | 连续签到: ${streakDays}天 | 印章进度: ${stampsProgress}/${stampsMax} | 搜索配额: ${pcProgress}/${pcMax}${uWarning}`
+          pcSearch: searchReady ? `${pcProgress}/${pcMax}` : '未读取',
+          message: `网页端已登录成功！${userName ? `用户: ${userName} | ` : ''}积分: ${balance} | 连续签到: ${streakDays}天 | 印章进度: ${stampsProgress}/${stampsMax} | 搜索配额: ${searchReady ? `${pcProgress}/${pcMax} (${searchTier?.label || '等级未知'})` : '官网未返回'}${uWarning}`
         };
       }
 
       // 如果返回了页面但未包含 pointsCounters，检测是否跳转到了微软登录页
-      if (clean.includes('login.live.com') || clean.includes('Sign in')) {
+      if (authText.includes('login.live.com') || authText.includes('Sign in')) {
         return { valid: false, message: 'Cookie 已过期失效，页面提示需要重新登录' };
       }
 
@@ -351,14 +379,16 @@ export class AuthManager {
       const data = typeof res === 'string' ? JSON.parse(res) : res;
       if (data?.response) {
         const balance = Number(data.response.balance || 0);
+        const userName = extractAccountDisplayName(data.response);
         const promos = data.response.promotions || [];
         const readTask = promos.find(x => x.attributes?.offerid === 'ENUS_readarticle3_30points');
         const readProg = readTask ? `${readTask.attributes.progress || 0}/${readTask.attributes.max || 30}` : '就绪';
         return {
           valid: true,
           balance,
+          userName,
           readProgress: readProg,
-          message: `移动端已登录 | 积分: ${balance} | 阅读进度: ${readProg}`
+          message: `移动端已登录${userName ? ` | 用户: ${userName}` : ''} | 积分: ${balance} | 阅读进度: ${readProg}`
         };
       }
       return { valid: true, message: '移动端 Token 有效' };
@@ -388,22 +418,34 @@ export class AuthManager {
       message: hasCode ? '授权码链接已配置' : (tokenStatus.valid ? '已通过历史授权码成功获取Token' : '尚未填写授权码链接')
     };
 
-    const balance = cookieStatus.balance || tokenStatus.balance || 0;
-    const tokenAccountMismatch = cookieStatus.valid && tokenStatus.valid
-      && Number(cookieStatus.balance) > 0 && Number(tokenStatus.balance) > 0
+    const balance = cookieStatus.valid
+      ? Number(cookieStatus.balance || 0)
+      : Number(tokenStatus.balance || 0);
+    const balanceMismatch = cookieStatus.valid && tokenStatus.valid
+      && Number.isFinite(Number(cookieStatus.balance)) && Number.isFinite(Number(tokenStatus.balance))
       && isBalanceMismatch(cookieStatus.balance, tokenStatus.balance);
+    const nameMatch = cookieStatus.valid && tokenStatus.valid
+      ? accountNamesLikelyMatch(cookieStatus.userName, tokenStatus.userName)
+      : null;
+    const nameMismatch = nameMatch === false;
+    const tokenAccountMismatch = balanceMismatch || nameMismatch;
     if (tokenAccountMismatch) {
       tokenStatus.mismatch = true;
-      tokenStatus.message += ` | ⚠️ Token 所属账号积分(${tokenStatus.balance}) 与网页端(${cookieStatus.balance}) 不一致，疑似绑定到了其他微软账号`;
+      tokenStatus.message += nameMismatch
+        ? ` | ⚠️ Token 用户(${tokenStatus.userName || '未知'}) 与网页端(${cookieStatus.userName || '未知'}) 不一致，疑似绑定到了其他微软账号`
+        : ` | ⚠️ Token 所属账号积分(${tokenStatus.balance}) 与网页端(${cookieStatus.balance}) 不一致，疑似绑定到了其他微软账号`;
     }
     // 缺少 _U 时虽然「已登录」，但 PC 搜索不会计分，不能算完全正常
-    const cookieUsable = cookieStatus.valid && !cookieStatus.warning;
+    const cookieUsable = cookieStatus.valid && !cookieStatus.warning && cookieStatus.searchReady;
     const allValid = cookieUsable && tokenStatus.valid && !tokenAccountMismatch;
     const partialValid = cookieStatus.valid || tokenStatus.valid;
-    const warning = !!cookieStatus.warning || tokenAccountMismatch;
+    const warning = !!cookieStatus.warning || !cookieStatus.searchReady || tokenAccountMismatch;
     const warningMessage = tokenAccountMismatch
-      ? `移动端 Token 与网页端 Cookie 疑似属于不同账号（余额 ${tokenStatus.balance} vs ${cookieStatus.balance}），请重新完成移动端授权`
-      : (cookieStatus.warningMessage || '');
+      ? (nameMismatch
+        ? `移动端 Token 与网页端 Cookie 疑似属于不同账号（用户 ${tokenStatus.userName || '未知'} vs ${cookieStatus.userName || '未知'}），请重新完成移动端授权`
+        : `移动端 Token 与网页端 Cookie 疑似属于不同账号（余额 ${tokenStatus.balance} vs ${cookieStatus.balance}），请重新完成移动端授权`)
+      : (cookieStatus.warningMessage
+        || (cookieStatus.valid && !cookieStatus.searchReady ? 'Cookie 有效，但官网未返回当日搜索等级配额，已暂停 PC 搜索以避免按错误上限执行' : ''));
 
     if (allValid) {
       logger.log('🟢', `账号 [${name}] 登录检测完全通过！网页端与移动端均在线，当前总积分: ${balance}`);

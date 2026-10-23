@@ -7,6 +7,7 @@ let currentTheme = 'dark';
 let selectedAccountId = 'all'; // 'all' 或具体账号 id (如 'acc_1')
 let editingAccountIdInModal = null;
 let editingAccountIdInQuickModal = null;
+let proxyDrafts = [];
 let webConfirmResolver = null;
 let epicActionPollTimer = null;
 let microsoftActionPollTimer = null;
@@ -1020,6 +1021,65 @@ function initUIEvents() {
     openQuickAddAccountModal();
   });
   document.getElementById('btn-modal-del-acc')?.addEventListener('click', handleDeleteCurrentAccountInModal);
+  document.getElementById('cfg-account-proxy-mode')?.addEventListener('change', () => {
+    updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
+  });
+  document.getElementById('cfg-use-proxy')?.addEventListener('change', () => {
+    updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
+  });
+  document.getElementById('cfg-default-proxy')?.addEventListener('change', (e) => {
+    const selectedId = e.target.value;
+    document.querySelectorAll('#proxy-list .proxy-card').forEach(card => {
+      const isDefault = card.getAttribute('data-proxy-id') === selectedId;
+      card.classList.toggle('is-default', isDefault);
+      const badge = card.querySelector('.proxy-default-badge');
+      if (isDefault && !badge) {
+        const span = document.createElement('span');
+        span.className = 'proxy-default-badge';
+        span.textContent = '全局默认';
+        card.querySelector('.proxy-card-head')?.appendChild(span);
+      } else if (!isDefault && badge) {
+        badge.remove();
+      }
+    });
+    updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
+  });
+  document.getElementById('btn-add-proxy')?.addEventListener('click', () => {
+    collectProxyDraftsFromDom();
+    const id = `draft_proxy_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    proxyDrafts.push({
+      id,
+      name: `代理 ${proxyDrafts.length + 1}`,
+      url: ''
+    });
+    const defaultId = getDefaultProxyId() || id;
+    renderProxyCards(defaultId);
+    renderDefaultProxyOptions(defaultId);
+    updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
+    const newCard = document.querySelector(`#proxy-list .proxy-card[data-proxy-id="${id}"]`);
+    newCard?.querySelector('[data-proxy-field="url"]')?.focus();
+  });
+  document.getElementById('proxy-list')?.addEventListener('input', (e) => {
+    const card = e.target.closest?.('.proxy-card');
+    if (!card) return;
+    const id = card.getAttribute('data-proxy-id');
+    const draft = proxyDrafts.find(item => item.id === id);
+    if (!draft) return;
+    const field = e.target.getAttribute('data-proxy-field');
+    if (field === 'name' || field === 'url') draft[field] = e.target.value;
+    updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
+  });
+  document.getElementById('proxy-list')?.addEventListener('click', async (e) => {
+    const button = e.target.closest?.('[data-proxy-action]');
+    if (!button) return;
+    const card = button.closest('.proxy-card');
+    const proxyId = card?.getAttribute('data-proxy-id');
+    if (!proxyId) return;
+    const action = button.getAttribute('data-proxy-action');
+    if (action === 'test') await testProxyCard(proxyId);
+    if (action === 'save') await saveProxySettingsFromCards();
+    if (action === 'delete') await deleteProxyCard(proxyId);
+  });
 
   // 向导换取 Token
   document.getElementById('guide-btn-exchange').addEventListener('click', async () => {
@@ -1265,19 +1325,23 @@ function initUIEvents() {
     const res = await fetch('/api/auth/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountId: targetId })
+      body: JSON.stringify({ accountId: targetId, force: true })
     }).then(r => r.json());
     if (res.success) {
       const c = res.data.cookie;
       const code = res.data.code;
       const t = res.data.token;
       const net = res.data.network;
+      const proxyLabel = net?.proxyUsed
+        ? `代理：${escapeHtml(net?.proxy?.name || '指定代理')}`
+        : '直连（未使用代理）';
       resultDiv.innerHTML = `
         <div style="background:var(--card-inner); padding:10px 14px; border-radius:10px; border:1px solid var(--border-color); display:flex; flex-direction:column; gap:8px; margin-top:8px;">
           <div><strong>1. 必应网页端 Cookie:</strong> ${c?.valid ? '<span style="color:#34D399; font-weight:700;">✅ 可用</span>' : '<span style="color:#F87171; font-weight:700;">❌ 不可用或失效</span>'} <small style="color:var(--text-sub);">(${escapeHtml(c?.message || '')})</small></div>
           <div><strong>2. 授权码链接 Code:</strong> ${code?.valid ? '<span style="color:#34D399; font-weight:700;">✅ 可用</span>' : '<span style="color:#F59E0B; font-weight:700;">⚠️ 待配置</span>'} <small style="color:var(--text-sub);">(${escapeHtml(code?.message || '')})</small></div>
           <div><strong>3. 移动端 OAuth Token:</strong> ${t?.valid ? '<span style="color:#34D399; font-weight:700;">✅ 可用</span>' : '<span style="color:#F87171; font-weight:700;">❌ 不可用或失效</span>'} <small style="color:var(--text-sub);">(${escapeHtml(t?.message || '')})</small></div>
-          <div><strong>4. 网络出口与 IP 地区:</strong> ${net?.regionPass ? '<span style="color:#34D399; font-weight:700;">✅ 中国大陆 (安全通过)</span>' : '<span style="color:#F59E0B; font-weight:700;">⚠️ 非大陆出口</span>'} <small style="color:var(--text-sub);">(${escapeHtml(net?.ipInfo || '')})</small></div>
+          <div><strong>4. 当前访问 IP:</strong> <span style="color:#38BDF8; font-weight:700; font-family:ui-monospace,monospace;">${escapeHtml(net?.ip || '未知')}</span> <small style="color:var(--text-sub);">${escapeHtml(net?.location || '归属地未知')}</small></div>
+          <div><strong>5. 网络出口:</strong> ${net?.regionPass ? '<span style="color:#34D399; font-weight:700;">✅ 中国大陆 (安全通过)</span>' : '<span style="color:#F59E0B; font-weight:700;">⚠️ 非大陆或地区未知</span>'} <small style="color:var(--text-sub);">${proxyLabel}</small></div>
         </div>
       `;
       fetchStatus();
@@ -1286,19 +1350,25 @@ function initUIEvents() {
     }
   });
 
-  // 配置中心：测试网络代理
-  document.getElementById('btn-test-proxy-settings')?.addEventListener('click', async () => {
+  // 配置中心：测试全局默认出口（账号专用代理在各自卡片中测试）
+  document.getElementById('btn-test-default-network')?.addEventListener('click', async () => {
+    const drafts = collectProxyDraftsFromDom();
+    const proxyId = getDefaultProxyId();
+    const proxy = drafts.find(item => item.id === proxyId);
     const useProxy = document.getElementById('cfg-use-proxy').checked;
-    const proxyUrl = document.getElementById('cfg-proxy-url').value.trim();
-    const resultDiv = document.getElementById('test-proxy-result');
-    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在测试网络与代理...</span>';
+    const resultDiv = document.getElementById('test-default-proxy-result');
+    if (useProxy && !proxy?.url) {
+      resultDiv.innerHTML = '<span style="color:#F59E0B;">请先添加并选择一个全局默认代理。</span>';
+      return;
+    }
+    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在测试全局默认出口...</span>';
     const res = await fetch('/api/proxy/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ useProxy, proxyUrl })
+      body: JSON.stringify({ useProxy, proxyUrl: proxy?.url || '' })
     }).then(r => r.json());
     if (res.success) {
-      resultDiv.innerHTML = `<div>地区检测: ${res.regionPass ? '✅ 通过 (' + escapeHtml(res.region) + ')' : '⚠️ 报警 (' + escapeHtml(res.region) + ')'}</div><div>${escapeHtml(res.ipInfo)}</div>`;
+      resultDiv.innerHTML = `<div>${escapeHtml(res.ipInfo)}</div><div>地区检测: ${res.regionPass ? '✅ 通过 (' + escapeHtml(res.region) + ')' : '⚠️ 非国区 (' + escapeHtml(res.region || '未知') + ')'} · ${Number(res.latencyMs || 0)} ms</div>`;
     } else {
       resultDiv.innerHTML = `<div style="color:#EF4444;">测试失败: ${escapeHtml(res.message)}</div>`;
     }
@@ -2175,7 +2245,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.1';
+  const current = updateInfo?.currentVersion || '1.8.2';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2230,8 +2300,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.1'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.1'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.2'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.2'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -2655,6 +2725,13 @@ function formatPunchCardTooltip(t) {
     if (key === 'search') {
       const searchStreak = stats.streaks?.bing;
       extraStreakHtml = render7DayStreakTrack(searchStreak, stats.streakDays, isDone, '必应搜索连续打卡');
+      if (Number(t.max || 0) > 0) {
+        const tierLabel = t.searchTier?.label ? ` · ${t.searchTier.label}` : '';
+        progressLabel = `进度: ${t.progress || 0} / ${t.max} ${t.unit || '分'}${tierLabel}`;
+      } else {
+        progressLabel = '进度: 等待官网同步会员等级配额';
+        pointsBadge = '配额待同步';
+      }
       if (t.statusMessage) {
         subtext = `${subtext} · ${t.statusMessage}`;
       }
@@ -3389,6 +3466,266 @@ function updateSearchRhythmHint() {
   return !err;
 }
 
+function cloneProxyDrafts(network = {}) {
+  const source = Array.isArray(network?.proxies) ? network.proxies : [];
+  return source.map((item, index) => ({
+    id: item.id || `draft_proxy_${Date.now()}_${index}`,
+    name: item.name || `代理 ${index + 1}`,
+    url: item.url || item.proxyUrl || ''
+  }));
+}
+
+function collectProxyDraftsFromDom() {
+  const cards = Array.from(document.querySelectorAll('#proxy-list .proxy-card'));
+  if (cards.length === 0 && proxyDrafts.length === 0) return [];
+  proxyDrafts = cards.map((card, index) => ({
+    id: card.getAttribute('data-proxy-id') || `draft_proxy_${Date.now()}_${index}`,
+    name: card.querySelector('[data-proxy-field="name"]')?.value.trim() || `代理 ${index + 1}`,
+    url: card.querySelector('[data-proxy-field="url"]')?.value.trim() || ''
+  }));
+  return proxyDrafts.map(item => ({ ...item }));
+}
+
+function getDefaultProxyId() {
+  const select = document.getElementById('cfg-default-proxy');
+  if (select) return select.value;
+  return currentConfig?.network?.defaultProxyId || '';
+}
+
+function renderProxyCards(defaultProxyId = '') {
+  const list = document.getElementById('proxy-list');
+  if (!list) return;
+  if (proxyDrafts.length === 0) {
+    list.innerHTML = '<div class="proxy-empty">还没有代理节点。点击右上角「＋ 添加代理」创建第一套配置。</div>';
+    return;
+  }
+  list.innerHTML = proxyDrafts.map((proxy, index) => `
+    <div class="proxy-card${proxy.id === defaultProxyId ? ' is-default' : ''}" data-proxy-id="${escapeHtml(proxy.id)}">
+      <div class="proxy-card-head">
+        <span class="proxy-card-index">PROXY ${String(index + 1).padStart(2, '0')}</span>
+        ${proxy.id === defaultProxyId ? '<span class="proxy-default-badge">全局默认</span>' : ''}
+      </div>
+      <div class="proxy-card-fields">
+        <div class="proxy-field">
+          <label>节点名称</label>
+          <input type="text" class="form-input" data-proxy-field="name" maxlength="60"
+            value="${escapeHtml(proxy.name)}" placeholder="例如：上海电信">
+        </div>
+        <div class="proxy-field">
+          <label>代理地址</label>
+          <input type="text" class="form-input" data-proxy-field="url" spellcheck="false"
+            value="${escapeHtml(proxy.url)}" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
+        </div>
+      </div>
+      <div class="proxy-card-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-proxy-action="test">测试</button>
+        <button type="button" class="btn btn-primary btn-sm" data-proxy-action="save">保存</button>
+        <button type="button" class="btn btn-danger-soft btn-sm" data-proxy-action="delete">删除</button>
+      </div>
+      <div class="proxy-card-status" data-proxy-status></div>
+    </div>
+  `).join('');
+}
+
+function renderDefaultProxyOptions(defaultProxyId = '') {
+  const select = document.getElementById('cfg-default-proxy');
+  if (!select) return;
+  const options = [
+    '<option value="">未选择默认代理</option>',
+    ...proxyDrafts.map(proxy => `
+      <option value="${escapeHtml(proxy.id)}" ${proxy.id === defaultProxyId ? 'selected' : ''}>
+        ${escapeHtml(proxy.name || '未命名代理')}
+      </option>
+    `)
+  ];
+  select.innerHTML = options.join('');
+}
+
+function renderProxySettings() {
+  const network = currentConfig?.network || {};
+  const defaultProxyId = network.defaultProxyId || proxyDrafts[0]?.id || '';
+  renderProxyCards(defaultProxyId);
+  renderDefaultProxyOptions(defaultProxyId);
+}
+
+function setProxyStatus(proxyId, kind, html) {
+  const card = Array.from(document.querySelectorAll('#proxy-list .proxy-card'))
+    .find(item => item.getAttribute('data-proxy-id') === proxyId);
+  const box = card?.querySelector('[data-proxy-status]');
+  if (!box) return;
+  box.className = `proxy-card-status${kind ? ` ${kind}` : ''}`;
+  box.innerHTML = html;
+}
+
+function updateAccountProxyControls(preferredProxyId = null) {
+  const modeEl = document.getElementById('cfg-account-proxy-mode');
+  const nodeGroup = document.getElementById('cfg-account-proxy-node-group');
+  const nodeEl = document.getElementById('cfg-account-proxy-id');
+  const hintEl = document.getElementById('cfg-account-proxy-hint');
+  if (!modeEl || !nodeGroup || !nodeEl || !hintEl) return;
+
+  const mode = ['inherit', 'direct', 'proxy'].includes(modeEl.value) ? modeEl.value : 'inherit';
+  nodeEl.innerHTML = proxyDrafts.map(proxy => `
+    <option value="${escapeHtml(proxy.id)}">${escapeHtml(proxy.name || '未命名代理')}</option>
+  `).join('');
+
+  if (mode === 'proxy') {
+    nodeGroup.style.display = '';
+    if (preferredProxyId && proxyDrafts.some(proxy => proxy.id === preferredProxyId)) {
+      nodeEl.value = preferredProxyId;
+    }
+    if (proxyDrafts.length === 0) {
+      nodeEl.innerHTML = '<option value="">暂无可用代理，请先在「网络与代理」中添加</option>';
+      hintEl.textContent = '当前账号需要指定代理，但尚未保存任何代理节点。';
+      hintEl.style.color = '#F59E0B';
+    } else {
+      const selected = proxyDrafts.find(proxy => proxy.id === nodeEl.value);
+      hintEl.textContent = `该账号的 HTTP API、浏览器搜索和账号测试将使用「${selected?.name || '指定代理'}」。`;
+      hintEl.style.color = '';
+    }
+    return;
+  }
+
+  nodeGroup.style.display = 'none';
+  if (mode === 'direct') {
+    hintEl.textContent = '该账号始终直连，不使用任何代理。';
+    hintEl.style.color = '';
+    return;
+  }
+
+  const useGlobal = document.getElementById('cfg-use-proxy')?.checked;
+  const defaultProxy = proxyDrafts.find(proxy => proxy.id === getDefaultProxyId());
+  if (useGlobal && defaultProxy) {
+    hintEl.textContent = `跟随全局：使用「${defaultProxy.name}」作为该账号出口。`;
+    hintEl.style.color = '';
+  } else {
+    hintEl.textContent = '跟随全局：全局默认代理当前未启用，该账号将直连。';
+    hintEl.style.color = '';
+  }
+}
+
+async function persistProxyDrafts(drafts, defaultProxyId, statusProxyId = '') {
+  const response = await fetch('/api/network/proxies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      proxies: drafts,
+      defaultProxyId,
+      useProxy: document.getElementById('cfg-use-proxy')?.checked === true,
+      lockRegion: document.getElementById('cfg-lock-region')?.checked !== false
+    })
+  }).then(r => r.json());
+  if (!response.success) throw new Error(response.message || '代理配置保存失败');
+
+  currentConfig.network = response.data.network;
+  const accountProxyUpdates = new Map(
+    (response.data.accounts || []).map(item => [item.id, item])
+  );
+  currentConfig.accounts = (currentConfig.accounts || []).map(account => {
+    const update = accountProxyUpdates.get(account.id);
+    return update
+      ? { ...account, proxyMode: update.proxyMode, proxyId: update.proxyId }
+      : account;
+  });
+  proxyDrafts = cloneProxyDrafts(response.data.network);
+  document.getElementById('cfg-use-proxy').checked = !!response.data.network.useProxy;
+  renderProxyCards(response.data.network.defaultProxyId || '');
+  renderDefaultProxyOptions(response.data.network.defaultProxyId || '');
+  const currentAccount = currentConfig.accounts.find(account => account.id === editingAccountIdInModal);
+  document.getElementById('cfg-account-proxy-mode').value = currentAccount?.proxyMode || 'inherit';
+  updateAccountProxyControls(currentAccount?.proxyId || '');
+
+  for (const proxy of proxyDrafts) {
+    setProxyStatus(proxy.id, 'ok', '✅ 已保存并生效');
+  }
+  if (statusProxyId) {
+    setProxyStatus(statusProxyId, 'ok', '✅ 已保存并生效');
+  }
+  return response.data;
+}
+
+async function saveProxySettingsFromCards() {
+  const drafts = collectProxyDraftsFromDom();
+  const invalid = drafts.find(item => !item.url);
+  if (invalid) {
+    setProxyStatus(invalid.id, 'err', '❌ 请先填写代理地址');
+    return;
+  }
+  const defaultProxyId = getDefaultProxyId() || drafts[0]?.id || '';
+  const activeCard = document.activeElement?.closest?.('.proxy-card');
+  const statusProxyId = activeCard?.getAttribute('data-proxy-id') || '';
+  try {
+    for (const proxy of drafts) setProxyStatus(proxy.id, '', '⏳ 正在保存代理配置...');
+    await persistProxyDrafts(drafts, defaultProxyId, statusProxyId);
+  } catch (e) {
+    const targetId = statusProxyId || drafts[0]?.id;
+    if (targetId) setProxyStatus(targetId, 'err', `❌ ${escapeHtml(e.message)}`);
+  }
+}
+
+async function testProxyCard(proxyId) {
+  const drafts = collectProxyDraftsFromDom();
+  const proxy = drafts.find(item => item.id === proxyId);
+  if (!proxy) return;
+  if (!proxy.url) {
+    setProxyStatus(proxyId, 'err', '❌ 请先填写代理地址');
+    return;
+  }
+  setProxyStatus(proxyId, '', '⏳ 正在通过该代理访问网络并查询出口 IP...');
+  try {
+    const res = await fetch('/api/proxy/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxyUrl: proxy.url, useProxy: true })
+    }).then(r => r.json());
+    if (!res.success) {
+      setProxyStatus(proxyId, 'err', `❌ ${escapeHtml(res.message || '代理不可用')}`);
+      return;
+    }
+    const regionText = res.regionPass
+      ? `中国大陆 ${escapeHtml(res.region || 'CN')} · 国区检测通过`
+      : `出口地区 ${escapeHtml(res.region || '未知')} · 非国区`;
+    setProxyStatus(
+      proxyId,
+      res.regionPass ? 'ok' : 'warn',
+      `✅ ${escapeHtml(res.ipInfo || '代理已连通')}<br>${regionText} · ${Number(res.latencyMs || 0)} ms`
+    );
+  } catch (e) {
+    setProxyStatus(proxyId, 'err', `❌ 测试请求失败：${escapeHtml(e.message)}`);
+  }
+}
+
+async function deleteProxyCard(proxyId) {
+  const drafts = collectProxyDraftsFromDom();
+  const proxy = drafts.find(item => item.id === proxyId);
+  if (!proxy) return;
+  const confirmed = await showWebConfirm(
+    `确定删除代理「${proxy.name || '未命名代理'}」吗？\n使用该节点的账号会自动改为跟随全局设置。`,
+    '删除代理配置'
+  );
+  if (!confirmed) return;
+
+  const remaining = drafts.filter(item => item.id !== proxyId);
+  const persisted = (currentConfig?.network?.proxies || []).some(item => item.id === proxyId);
+  if (!persisted) {
+    const oldDefault = getDefaultProxyId();
+    const nextDefault = oldDefault === proxyId ? (remaining[0]?.id || '') : oldDefault;
+    proxyDrafts = remaining;
+    renderProxyCards(nextDefault);
+    renderDefaultProxyOptions(nextDefault);
+    updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
+    return;
+  }
+
+  const oldDefault = getDefaultProxyId();
+  const nextDefault = oldDefault === proxyId ? (remaining[0]?.id || '') : oldDefault;
+  try {
+    await persistProxyDrafts(remaining, nextDefault);
+  } catch (e) {
+    setProxyStatus(proxyId, 'err', `❌ 删除失败：${escapeHtml(e.message)}`);
+  }
+}
+
 function populateSettingsForm() {
   if (!currentConfig) return;
   const c = currentConfig;
@@ -3407,12 +3744,13 @@ function populateSettingsForm() {
     }
   }
 
+  // 网络与代理。先准备代理列表，账号区域才能渲染代理节点下拉框。
+  proxyDrafts = cloneProxyDrafts(c.network);
+  renderProxySettings();
+  document.getElementById('cfg-use-proxy').checked = !!c.network?.useProxy;
+  document.getElementById('cfg-lock-region').checked = c.network?.lockRegion !== false;
   loadAccountIntoForm(editingAccountIdInModal);
 
-  // 网络
-  document.getElementById('cfg-use-proxy').checked = !!c.network?.useProxy;
-  document.getElementById('cfg-proxy-url').value = c.network?.proxyUrl || '';
-  document.getElementById('cfg-lock-region').checked = c.network?.lockRegion !== false;
   // 任务
   document.getElementById('cfg-task-sign').checked = c.tasks?.sign !== false;
   document.getElementById('cfg-task-read').checked = c.tasks?.read !== false;
@@ -3466,6 +3804,11 @@ function loadAccountIntoForm(accId) {
   const orderElem = document.getElementById('cfg-account-order');
   if (orderElem) orderElem.value = acc.order !== undefined ? acc.order : 1;
   document.getElementById('cfg-account-enabled').checked = acc.enabled !== false;
+  const proxyMode = ['inherit', 'direct', 'proxy'].includes(acc.proxyMode)
+    ? acc.proxyMode
+    : (acc.proxyId ? 'proxy' : 'inherit');
+  document.getElementById('cfg-account-proxy-mode').value = proxyMode;
+  updateAccountProxyControls(acc.proxyId || '');
 
   // 凭据字段：接口已脱敏，这里只回填占位符，避免把明文重新渲染到 DOM
   const cookieElem = document.getElementById('cfg-cookie');
@@ -3534,6 +3877,29 @@ async function saveSettingsFromModal() {
     return;
   }
   const searchRhythm = readSearchRhythmInputs();
+  const proxyDraftsForSave = collectProxyDraftsFromDom();
+  const invalidProxy = proxyDraftsForSave.find(item => !item.url);
+  if (invalidProxy) {
+    openEpicActionModal('代理配置不完整', '请为每一套代理填写地址，或删除不需要的空白节点。', ['检查代理地址', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'err' } });
+    return;
+  }
+  const useProxy = document.getElementById('cfg-use-proxy').checked;
+  const defaultProxyId = getDefaultProxyId() || proxyDraftsForSave[0]?.id || '';
+  if (useProxy && !defaultProxyId) {
+    openEpicActionModal('缺少默认代理', '启用全局默认代理后，请至少添加并选择一个代理节点。', ['添加代理', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'warn' } });
+    return;
+  }
+  const accountProxyMode = document.getElementById('cfg-account-proxy-mode')?.value || 'inherit';
+  const accountProxyId = accountProxyMode === 'proxy'
+    ? (document.getElementById('cfg-account-proxy-id')?.value || '')
+    : '';
+  if (accountProxyMode === 'proxy' && !accountProxyId) {
+    openEpicActionModal('缺少账号代理', '当前账号选择了「使用指定代理」，请先选择一套代理节点。', ['选择代理节点', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'warn' } });
+    return;
+  }
   const currentAccId = editingAccountIdInModal || 'acc_1';
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
@@ -3556,6 +3922,8 @@ async function saveSettingsFromModal() {
     enabled: document.getElementById('cfg-account-enabled').checked,
     cookie: document.getElementById('cfg-cookie').value.trim(),
     authCodeUrl: document.getElementById('cfg-authcode').value.trim(),
+    proxyMode: accountProxyMode,
+    proxyId: accountProxyId,
     timeSlot: {
       startHour: sh,
       endHour: (sh + 4) % 24,
@@ -3585,8 +3953,10 @@ async function saveSettingsFromModal() {
     accounts: currentAccounts,
     visual: visualConfig,
     network: {
-      useProxy: document.getElementById('cfg-use-proxy').checked,
-      proxyUrl: document.getElementById('cfg-proxy-url').value.trim(),
+      useProxy,
+      proxyUrl: proxyDraftsForSave.find(item => item.id === defaultProxyId)?.url || '',
+      proxies: proxyDraftsForSave,
+      defaultProxyId,
       lockRegion: document.getElementById('cfg-lock-region').checked
     },
     tasks: {
@@ -3649,6 +4019,11 @@ async function saveGuideSettings() {
   const useProxy = document.getElementById('guide-use-proxy').checked;
   const proxyUrl = document.getElementById('guide-proxy-url').value.trim();
   const lockRegion = document.getElementById('guide-lock-region').checked;
+  if (useProxy && !proxyUrl) {
+    openEpicActionModal('缺少代理地址', '已启用网络代理，请填写全局默认代理地址后再保存。', ['填写代理地址', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+    return;
+  }
 
   let sh = 9;
   const activePreset = document.querySelector('#guide-slot-presets .slot-pill-btn.active');
@@ -3913,19 +4288,24 @@ async function runSingleAccountDiagnosis(accountId) {
     // 4. 网络卡片
     const pillNet = document.getElementById('diag-pill-network');
     const detailNet = document.getElementById('diag-detail-network');
+    const networkRoute = net.proxyUsed
+      ? `代理：${escapeHtml(net.proxy?.name || '指定代理')}`
+      : '直连（未使用代理）';
     if (net.regionPass) {
       pillNet.className = 'diag-status-pill pill-ok';
       pillNet.innerText = '中国大陆 (安全)';
       detailNet.innerHTML = `
         <div>状态：✅ 出口 IP 符合微软国区要求 (${net.region})，防风控检测通过</div>
-        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">${escapeHtml(net.ipInfo || '')}</div>
+        <div style="margin-top:4px; color:#E2E8F0;">当前访问 IP：<strong style="font-family:ui-monospace,monospace;">${escapeHtml(net.ip || '未知')}</strong> · ${escapeHtml(net.location || '归属地未知')}</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">${networkRoute}</div>
       `;
     } else {
       pillNet.className = 'diag-status-pill pill-err';
       pillNet.innerText = `非大陆地区 (${net.region || '未知'})`;
       detailNet.innerHTML = `
         <div style="color:#F87171;">状态：⚠️ 出口位于非大陆地区，若开启国区保护将被自动停止打卡防风控。</div>
-        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">建议：如果是境外 VPS，请在配置中心设置走国内 HTTP/SOCKS5 代理。</div>
+        <div style="margin-top:4px; color:#E2E8F0;">当前访问 IP：<strong style="font-family:ui-monospace,monospace;">${escapeHtml(net.ip || '未知')}</strong> · ${escapeHtml(net.location || '归属地未知')}</div>
+        <div style="margin-top:4px; font-size:11.5px; color:#94A3B8;">${networkRoute}。建议在配置中心为该账号选择国内 HTTP / SOCKS5 代理。</div>
       `;
     }
 
