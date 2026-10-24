@@ -104,7 +104,7 @@ class NetworkClient {
     if (!selection || typeof selection !== 'object') return;
     const mode = ['inherit', 'direct', 'proxy'].includes(selection.mode)
       ? selection.mode
-      : 'inherit';
+      : 'direct';
     if (mode === 'inherit') {
       this.activeProxyContext = { mode, proxyId: '', proxyName: '', proxyUrl: '', missing: false };
       return;

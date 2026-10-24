@@ -2847,6 +2847,7 @@ body.mouse-follow-enabled .glass-surface::before {
 }
 
 .run-hour-option {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2873,6 +2874,24 @@ body.mouse-follow-enabled .glass-surface::before {
   border-color: rgba(56, 189, 248, 0.52);
   background: rgba(2, 132, 199, 0.16);
   color: var(--accent);
+}
+
+.run-hour-option.is-occupied,
+.run-hour-option.is-occupied:has(input:checked) {
+  border-color: rgba(245, 158, 11, 0.58);
+  background: rgba(245, 158, 11, 0.14);
+  color: #FBBF24;
+}
+
+.run-hour-occupied-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #F59E0B;
+  box-shadow: 0 0 5px rgba(245, 158, 11, 0.7);
 }
 
 .run-hour-option input {
@@ -3058,6 +3077,21 @@ body.mouse-follow-enabled .glass-surface::before {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.settings-save-status {
+  margin-right: auto;
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.settings-save-status.ok {
+  color: #34D399;
+}
+
+.settings-save-status.err {
+  color: #F87171;
 }
 
 /* Epic 领取成功庆祝层 */

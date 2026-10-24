@@ -22,7 +22,7 @@ import { normalizeProxyUrl } from '../core/proxy.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.8.3';
+const CURRENT_VERSION = '1.8.4';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -883,7 +883,7 @@ export function createServer() {
         id: accountId || `draft_${Date.now()}`,
         name: name || '候选账号',
         cookie: '',
-        proxyMode: 'inherit',
+        proxyMode: 'direct',
         proxyId: ''
       };
       rewardsApi.setCurrentAccount(candidateAccount);
@@ -926,7 +926,7 @@ export function createServer() {
         id: accountId || `cookie_${Date.now()}`,
         name: '候选账号',
         cookie: cookieToTest,
-        proxyMode: 'inherit',
+        proxyMode: 'direct',
         proxyId: ''
       };
       rewardsApi.setCurrentAccount(candidateAccount);

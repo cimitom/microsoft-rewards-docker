@@ -28,7 +28,7 @@ const DEFAULT_CONFIG = {
       webIdentityKey: '',
       credentialUpdatedAt: 0,
       identityChangedAt: 0,
-      proxyMode: 'inherit',
+      proxyMode: 'direct',
       proxyId: '',
       runHours: [9],
       timeSlot: {
@@ -359,12 +359,12 @@ class ConfigManager {
     for (const acc of this.config.accounts || []) {
       const mode = ['inherit', 'direct', 'proxy'].includes(acc.proxyMode)
         ? acc.proxyMode
-        : (acc.proxyId ? 'proxy' : 'inherit');
+        : (acc.proxyId ? 'proxy' : 'direct');
       acc.proxyMode = mode;
       acc.proxyId = mode === 'proxy' && proxies.some(item => item.id === acc.proxyId)
         ? acc.proxyId
         : '';
-      if (mode === 'proxy' && !acc.proxyId) acc.proxyMode = 'inherit';
+      if (mode === 'proxy' && !acc.proxyId) acc.proxyMode = 'direct';
     }
 
     const after = JSON.stringify({
@@ -394,7 +394,7 @@ class ConfigManager {
 
   getAccountProxyMode(acc) {
     if (['inherit', 'direct', 'proxy'].includes(acc?.proxyMode)) return acc.proxyMode;
-    return acc?.proxyId ? 'proxy' : 'inherit';
+    return acc?.proxyId ? 'proxy' : 'direct';
   }
 
   /**
@@ -427,7 +427,7 @@ class ConfigManager {
 
     for (const acc of this.config.accounts || []) {
       if (acc.proxyMode === 'proxy' && !proxies.some(item => item.id === acc.proxyId)) {
-        acc.proxyMode = 'inherit';
+        acc.proxyMode = 'direct';
         acc.proxyId = '';
       }
     }
@@ -611,7 +611,7 @@ class ConfigManager {
         refreshToken: accountData.refreshToken || '',
         accessToken: accountData.accessToken || '',
         tokenTime: accountData.tokenTime || 0,
-        proxyMode: ['inherit', 'direct', 'proxy'].includes(accountData.proxyMode) ? accountData.proxyMode : 'inherit',
+        proxyMode: ['inherit', 'direct', 'proxy'].includes(accountData.proxyMode) ? accountData.proxyMode : 'direct',
         proxyId: accountData.proxyMode === 'proxy' ? (accountData.proxyId || '') : '',
         runHours,
         timeSlot,

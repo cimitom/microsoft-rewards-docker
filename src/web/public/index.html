@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.8.3</span>
+            <span class="version-label" id="version-label">v1.8.4</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -492,8 +492,8 @@
           <div class="form-group">
             <label class="form-label">这个账号的网络出口</label>
             <select id="guide-account-proxy-mode" class="form-select">
-              <option value="inherit">跟随全局默认设置（推荐）</option>
-              <option value="direct">不使用代理（直连）</option>
+              <option value="direct" selected>不使用代理（直连）</option>
+              <option value="inherit">跟随全局默认设置</option>
               <option value="proxy">使用指定已有代理</option>
             </select>
           </div>
@@ -649,8 +649,8 @@
               <div class="form-group">
                 <label class="form-label">代理策略</label>
                 <select id="cfg-account-proxy-mode" class="form-select">
+                  <option value="direct" selected>不使用代理（直连）</option>
                   <option value="inherit">跟随全局默认设置</option>
-                  <option value="direct">不使用代理（直连）</option>
                   <option value="proxy">使用指定代理</option>
                 </select>
               </div>
@@ -1016,6 +1016,7 @@
         </div>
       </div>
       <div class="modal-footer">
+        <div class="settings-save-status" id="settings-save-status" aria-live="polite"></div>
         <button class="btn btn-secondary" id="btn-cancel-settings">取消</button>
         <button class="btn btn-primary" id="btn-save-settings">保存所有配置</button>
       </div>
@@ -1151,8 +1152,8 @@
             <div class="form-group">
               <label class="form-label">代理策略</label>
               <select id="quick-add-proxy-mode" class="form-select">
+                <option value="direct" selected>不使用代理（直连）</option>
                 <option value="inherit">跟随全局默认设置</option>
-                <option value="direct">不使用代理（直连）</option>
                 <option value="proxy">使用指定代理</option>
               </select>
             </div>

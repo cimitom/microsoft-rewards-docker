@@ -37,7 +37,7 @@ test('旧版单代理配置会迁移为默认代理节点', () => {
   assert.equal(network.proxies[0].url, 'http://127.0.0.1:7890');
   assert.equal(network.defaultProxyId, 'proxy_legacy');
   assert.equal(network.proxyUrl, 'http://127.0.0.1:7890');
-  assert.equal(configManager.findAccount('legacy_acc').proxyMode, 'inherit');
+  assert.equal(configManager.findAccount('legacy_acc').proxyMode, 'direct');
 });
 
 test('代理 URL 与浏览器代理参数会规范化', () => {
@@ -77,6 +77,10 @@ test('账号可独立选择跟随全局、直连或指定代理', () => {
   assert.equal(networkClient.getActiveProxyContext().proxyId, 'proxy_gz');
   rewardsApi.setCurrentAccount(configManager.findAccount('acc_direct'));
   assert.equal(networkClient.getActiveProxyContext().mode, 'direct');
+});
+
+test('未显式配置代理策略时默认直连', () => {
+  assert.equal(configManager.getAccountProxyMode({ id: 'default_direct' }), 'direct');
 });
 
 test('候选凭据请求可临时覆盖账号代理上下文', () => {

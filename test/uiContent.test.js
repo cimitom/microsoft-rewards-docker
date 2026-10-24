@@ -137,3 +137,22 @@ test('账号运行时间使用 9:00-22:00 的 14 个勾选档位', () => {
   assert.match(indexHtml, /id="cfg-search-interval"[^>]*value="60"/);
   assert.match(indexHtml, /id="cfg-search-jitter"[^>]*value="60"/);
 });
+
+test('配置保存保持窗口打开，时间档位展示其他账号占用', () => {
+  assert.match(indexHtml, /id="settings-save-status"/);
+  const saveStart = appJs.indexOf('async function saveSettingsFromModal');
+  const saveEnd = appJs.indexOf('async function saveGuideNetworkSettings', saveStart);
+  const saveFunction = appJs.slice(saveStart, saveEnd);
+  assert.ok(saveStart > 0 && saveEnd > saveStart);
+  assert.equal(saveFunction.includes("closeModal('settings-modal')"), false);
+  assert.match(appJs, /function buildRunHourOccupancy/);
+  assert.match(appJs, /已被以下账号占用/);
+  assert.match(styleCss, /\.run-hour-option\.is-occupied/);
+});
+
+test('账号代理策略默认选择直连', () => {
+  assert.match(indexHtml, /id="guide-account-proxy-mode"[\s\S]*?<option value="direct" selected>/);
+  assert.match(indexHtml, /id="cfg-account-proxy-mode"[\s\S]*?<option value="direct" selected>/);
+  assert.match(indexHtml, /id="quick-add-proxy-mode"[\s\S]*?<option value="direct" selected>/);
+  assert.match(appJs, /proxyMode: 'direct'/);
+});
