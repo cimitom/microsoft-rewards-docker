@@ -11,6 +11,7 @@ import authManager from '../core/auth.js';
 import notifier from '../core/notifier.js';
 import scheduler from '../scheduler.js';
 import rewardsApi from '../core/api.js';
+import networkClient from '../network.js';
 import historyManager from '../core/history.js';
 import browserManager from '../core/browser.js';
 import epicManager, { normalizeAutoClaimTime } from '../core/epic.js';
@@ -21,7 +22,7 @@ import { normalizeProxyUrl } from '../core/proxy.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.8.2';
+const CURRENT_VERSION = '1.8.3';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -572,23 +573,42 @@ export function createServer() {
       authDiagnosis: a.authDiagnosis || null,
       proxyMode: configManager.getAccountProxyMode(a),
       proxyId: configManager.getAccountProxyMode(a) === 'proxy' ? (a.proxyId || '') : '',
+      runHours: a.runHours || [a.timeSlot?.startHour || 9],
       timeSlot: a.timeSlot
     }));
     res.json({ success: true, data: accounts });
   });
 
   app.post('/api/accounts', async (req, res) => {
+    const needsTokenExchange = !!(
+      req.body?.authCodeUrl
+      && String(req.body.authCodeUrl).includes('code=')
+      && req.body?.tokenAlreadyExchanged !== true
+    );
+    const lockOwner = needsTokenExchange
+      ? `web-account-add:${Date.now()}:${Math.random().toString(36).slice(2)}`
+      : null;
     try {
       if (req.body?.id && accountContextLock.isBusy()) {
         return res.status(409).json({ success: false, message: '任务正在执行中，暂不能修改该账号凭据' });
       }
+      if (lockOwner && !accountContextLock.tryAcquire(lockOwner)) {
+        return res.status(409).json({ success: false, message: '任务正在执行中，暂不能换取该账号 Token' });
+      }
       const accountPayload = { ...(req.body || {}) };
       delete accountPayload.tokenAlreadyExchanged;
+      delete accountPayload.proxy;
+      if (accountPayload.proxyMode === 'proxy' && !configManager.findProxy(accountPayload.proxyId)) {
+        throw new Error('该账号选择了指定代理，但代理节点不存在');
+      }
       let saved = configManager.upsertAccount(accountPayload);
       taskManager.ensureAccountStats(saved.id);
       let tokenExchanged = false;
-      if (req.body?.authCodeUrl && String(req.body.authCodeUrl).includes('code=') && req.body?.tokenAlreadyExchanged !== true) {
+      if (needsTokenExchange) {
+        const prevContext = rewardsApi.snapshotAccountContext();
         try {
+          rewardsApi.setCurrentAccount(saved);
+          networkClient.setActiveProxySelection(req.body?.proxy);
           await authManager.exchangeCodeForToken(req.body.authCodeUrl, saved.id, {
             name: saved.name,
             order: saved.order
@@ -597,11 +617,15 @@ export function createServer() {
           tokenExchanged = true;
         } catch (eToken) {
           logger.log('🟡', `新建账号 [${saved.name}] 自动换取 Token 提示: ${eToken.message}`);
+        } finally {
+          rewardsApi.restoreAccountContext(prevContext);
         }
       }
       res.json({ success: true, data: { id: saved.id, name: saved.name }, tokenExchanged });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
+    } finally {
+      if (lockOwner) accountContextLock.release(lockOwner);
     }
   });
 
@@ -844,25 +868,40 @@ export function createServer() {
 
   // 7. 小白一键换取 Token
   app.post('/api/auth/exchange-code', async (req, res) => {
-    const { urlOrCode, accountId, name, order, draft } = req.body;
+    const { urlOrCode, accountId, name, order, draft, proxy } = req.body;
     if (!urlOrCode) {
       return res.status(400).json({ success: false, message: '请提供跳转链接或授权码' });
     }
-    if (accountId && accountContextLock.isBusy()) {
+    const lockOwner = `web-token-exchange:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    if (!accountContextLock.tryAcquire(lockOwner)) {
       return res.status(409).json({ success: false, message: '任务正在执行中，暂不能更新该账号的移动端凭据' });
     }
+    const prevContext = rewardsApi.snapshotAccountContext();
     try {
+      const savedAccount = accountId ? configManager.findAccount(accountId) : null;
+      const candidateAccount = savedAccount || {
+        id: accountId || `draft_${Date.now()}`,
+        name: name || '候选账号',
+        cookie: '',
+        proxyMode: 'inherit',
+        proxyId: ''
+      };
+      rewardsApi.setCurrentAccount(candidateAccount);
+      networkClient.setActiveProxySelection(proxy);
       // name/order 用于「配置向导」新建账号时带上名称与序号
       const result = await authManager.exchangeCodeForToken(urlOrCode, accountId, { name, order, persist: draft !== true });
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
+    } finally {
+      rewardsApi.restoreAccountContext(prevContext);
+      accountContextLock.release(lockOwner);
     }
   });
 
   // 7.5 单独测试候选 Cookie（不保存、不写统计）
   app.post('/api/auth/test-cookie', async (req, res) => {
-    const { cookie, accountId } = req.body;
+    const { cookie, accountId, proxy } = req.body;
     if (!cookie) {
       return res.status(400).json({ success: false, message: '请提供 Cookie' });
     }
@@ -870,7 +909,9 @@ export function createServer() {
     if (!accountContextLock.tryAcquire(lockOwner)) {
       return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再测试 Cookie' });
     }
-    const targetAcc = configManager.resolveAccount(accountId);
+    const targetAcc = accountId
+      ? configManager.findAccount(accountId)
+      : (configManager.getAccounts()[0] || null);
     const prevContext = rewardsApi.snapshotAccountContext();
     try {
       let cookieToTest = cookie;
@@ -881,7 +922,15 @@ export function createServer() {
         }
         cookieToTest = acc.cookie;
       }
-      if (targetAcc) rewardsApi.setCurrentAccount(targetAcc);
+      const candidateAccount = targetAcc || {
+        id: accountId || `cookie_${Date.now()}`,
+        name: '候选账号',
+        cookie: cookieToTest,
+        proxyMode: 'inherit',
+        proxyId: ''
+      };
+      rewardsApi.setCurrentAccount(candidateAccount);
+      networkClient.setActiveProxySelection(proxy);
       // 只做校验，不落库：以前这里会 upsertAccount，导致「测试 Cookie」按钮
       // 凭空创建出一个名为「账号 (xxx)」的账号。真正的保存由向导最后一步统一提交。
       const status = await authManager.checkCookieStatus(cookieToTest, accountId);
@@ -904,6 +953,7 @@ export function createServer() {
     targetAccountId = acc.id;
     const prevContext = rewardsApi.snapshotAccountContext();
     rewardsApi.setCurrentAccount(acc);
+    networkClient.setActiveProxySelection(options.proxy);
 
     let result;
     try {
@@ -916,14 +966,23 @@ export function createServer() {
         rewardsApi.getIPInfoDetails(),
         rewardsApi.checkRegion(0, { force: true, maxRetries: 1, silent: true })
       ]);
-      const effectiveProxy = configManager.getEffectiveProxy(acc);
+      const activeProxy = networkClient.getActiveProxyContext();
+      const effectiveProxyUrl = networkClient.getEffectiveProxyUrl();
+      const defaultProxy = configManager.getDefaultProxy();
+      const effectiveProxy = effectiveProxyUrl
+        ? {
+            id: activeProxy?.proxyId || defaultProxy?.id || 'candidate_proxy',
+            name: activeProxy?.proxyName || defaultProxy?.name || '候选代理',
+            url: effectiveProxyUrl
+          }
+        : null;
       result.network = {
         region: rewardsApi.region,
         regionPass,
         ip: ipDetails?.ip || '',
         location: ipDetails?.location || '',
         ipInfo: ipDetails?.formatted || '未能获取当前访问 IP',
-        proxyMode: configManager.getAccountProxyMode(acc),
+        proxyMode: activeProxy?.mode || configManager.getAccountProxyMode(acc),
         proxyUsed: !!effectiveProxy,
         proxy: effectiveProxy
           ? { id: effectiveProxy.id, name: effectiveProxy.name, url: effectiveProxy.url }
@@ -981,7 +1040,10 @@ export function createServer() {
         });
       }
       accountTestTimes.set(targetAccountId || 'default', now);
-      const result = await runAccountDiagnosis(targetAccountId, { allowPaused: true });
+      const result = await runAccountDiagnosis(targetAccountId, {
+        allowPaused: true,
+        proxy: req.body?.proxy
+      });
       res.json({ success: true, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });

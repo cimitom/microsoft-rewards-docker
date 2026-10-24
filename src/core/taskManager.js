@@ -1861,11 +1861,11 @@ export class TaskManager {
     // 每次搜索最多 +3 分，上限 20 次可覆盖单账号 60 分上限；
     // 旧实现写死最多 7 次（21 分），轻量模式下永远打不满搜索任务。
     const searchCount = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
-    // 与拟人模式共用全局搜索节奏，并同样受 3 小时执行窗口约束
+    // 与拟人模式共用全局搜索节奏，并同样受 40 分钟搜索预算约束
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-    const wantedIntervalSec = clamp(Number(globalCfg.tasks?.searchIntervalSec ?? 180) || 180, 60, 900);
-    const jitterSec = clamp(Number(globalCfg.tasks?.searchJitterSec ?? 30) || 30, 30, 300);
-    const perSearchBudget = Math.floor((3 * 3600) / searchCount);
+    const wantedIntervalSec = clamp(Number(globalCfg.tasks?.searchIntervalSec ?? 60) || 60, 60, 120);
+    const jitterSec = clamp(Number(globalCfg.tasks?.searchJitterSec ?? 60) || 60, 30, 60);
+    const perSearchBudget = Math.floor((40 * 60) / searchCount);
     const intervalSec = Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
     logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accountName);
 

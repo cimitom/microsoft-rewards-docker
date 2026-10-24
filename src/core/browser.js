@@ -508,7 +508,7 @@ class BrowserManager extends EventEmitter {
 
   /**
    * 平缓拉长模式：按全局「搜索节奏」设置（基础间隔 ± 随机浮动）完成 PC 搜索。
-   * 执行窗口硬性限制为 3 小时（对应 4 小时时段抛去首小时随机启动）。
+   * 搜索预算硬性限制为 40 分钟，为 0-10 分钟随机启动与其他任务预留时间。
    */
   async runPacedSearch(acc, neededPoints, options = {}) {
     const accName = acc?.name || '当前账号';
@@ -532,17 +532,17 @@ class BrowserManager extends EventEmitter {
     const cfg = configManager.get();
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
     // 安全下限：基础间隔 ≥ 60 秒、随机浮动 ≥ 30 秒，避免过于密集触发风控
-    const wantedIntervalSec = clamp(Number(cfg.tasks?.searchIntervalSec ?? 180) || 180, 60, 900);
-    const jitterSec = clamp(Number(cfg.tasks?.searchJitterSec ?? 30) || 30, 30, 300);
-    // 3 小时硬上限：任何情况下 次数 × (间隔 + 浮动) 不得超过 10800 秒
-    const MAX_WINDOW_SEC = 3 * 3600;
+    const wantedIntervalSec = clamp(Number(cfg.tasks?.searchIntervalSec ?? 60) || 60, 60, 120);
+    const jitterSec = clamp(Number(cfg.tasks?.searchJitterSec ?? 60) || 60, 30, 60);
+    // 40 分钟搜索上限：1 小时档位还要为启动随机和其他任务留出余量
+    const MAX_WINDOW_SEC = 40 * 60;
     const perSearchBudget = Math.floor(MAX_WINDOW_SEC / totalSearches);
     const intervalSec = Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
     // 随机浮动为「只延后」的叠加模型：单次实际等待 = 基础间隔 + 0~浮动 秒
     const estimatedSec = totalSearches * (intervalSec + Math.floor(jitterSec / 2));
     const worstSec = totalSearches * (intervalSec + jitterSec);
     if (intervalSec < wantedIntervalSec) {
-      logger.log('⚠️', `为保证 ${totalSearches} 次搜索在 3 小时内完成，本次间隔已自动压缩为 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accName);
+      logger.log('⚠️', `为保证 ${totalSearches} 次搜索在 40 分钟内完成，本次间隔已自动压缩为 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accName);
     }
 
     if (acc?.cookie && !cookieValue(acc.cookie, '_U')) {
@@ -552,7 +552,7 @@ class BrowserManager extends EventEmitter {
       throw new Error(`当前账号 [${accName}] 未配置网页 Cookie，无法执行搜索`);
     }
 
-    logger.log('🖥️', `启动 Playwright 拟人真机搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动，预计约 ${(estimatedSec/60).toFixed(0)} 分钟（最长 ${(worstSec/60).toFixed(0)} 分钟，上限 180 分钟）`, '', accName);
+    logger.log('🖥️', `启动 Playwright 拟人真机搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动，预计约 ${(estimatedSec/60).toFixed(0)} 分钟（最长 ${(worstSec/60).toFixed(0)} 分钟，上限 40 分钟）`, '', accName);
 
     this.shouldStop = false;
     let completed = 0;

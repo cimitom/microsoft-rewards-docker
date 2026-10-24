@@ -96,6 +96,38 @@ class NetworkClient {
     this.activeProxyContext = context ? structuredClone(context) : null;
   }
 
+  /**
+   * 在账号尚未落库时，为一次 Cookie 测试 / Token 换取临时指定出口。
+   * 选择必须是显式的，避免候选账号误用当前上下文中的其他账号代理。
+   */
+  setActiveProxySelection(selection) {
+    if (!selection || typeof selection !== 'object') return;
+    const mode = ['inherit', 'direct', 'proxy'].includes(selection.mode)
+      ? selection.mode
+      : 'inherit';
+    if (mode === 'inherit') {
+      this.activeProxyContext = { mode, proxyId: '', proxyName: '', proxyUrl: '', missing: false };
+      return;
+    }
+    if (mode === 'direct') {
+      this.activeProxyContext = { mode, proxyId: '', proxyName: '', proxyUrl: '', missing: false };
+      return;
+    }
+
+    const savedProxy = selection.proxyId ? configManager.findProxy(selection.proxyId) : null;
+    const proxyUrl = savedProxy?.url || normalizeProxyUrl(selection.url || selection.proxyUrl || '');
+    if (!proxyUrl) {
+      throw new Error('已选择指定代理，但代理节点不存在');
+    }
+    this.activeProxyContext = {
+      mode: 'proxy',
+      proxyId: savedProxy?.id || 'candidate_proxy',
+      proxyName: savedProxy?.name || '候选代理',
+      proxyUrl,
+      missing: false
+    };
+  }
+
   /** 读取当前生效的账号 Cookie（null 表示「未指定账号，走默认账号回退」） */
   getActiveCookie() {
     return this.activeCookie;

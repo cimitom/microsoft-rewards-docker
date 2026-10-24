@@ -112,3 +112,28 @@ test('网络配置支持多代理卡片、逐项测试与账号独立出口', ()
   assert.match(appJs, /当前访问 IP/);
   assert.match(styleCss, /\.proxy-card-fields[\s\S]*grid-template-columns/);
 });
+
+test('配置向导与新增账号会先确认代理再发起凭据会话', () => {
+  assert.match(indexHtml, /1\. 网络出口[\s\S]*2\. 移动端授权[\s\S]*3\. 网页端 Cookie/);
+  assert.match(indexHtml, /id="guide-btn-save-network"/);
+  assert.match(indexHtml, /id="guide-account-proxy-mode"/);
+  assert.match(indexHtml, /id="quick-add-proxy-mode"/);
+  assert.match(indexHtml, /id="quick-add-proxy-id"/);
+  assert.match(appJs, /async function saveGuideNetworkSettings/);
+  assert.match(appJs, /guideNetworkConfirmed/);
+  assert.match(appJs, /readProxySelection\('guide-account-proxy-mode', 'guide-account-proxy-id'\)/);
+  assert.match(appJs, /proxy: proxySelection/);
+  assert.match(appJs, /proxyMode: proxySelection\.mode/);
+});
+
+test('账号运行时间使用 9:00-22:00 的 14 个勾选档位', () => {
+  assert.match(indexHtml, /id="cfg-run-hours"/);
+  assert.match(indexHtml, /id="guide-run-hours"/);
+  assert.match(indexHtml, /id="quick-add-run-hours"/);
+  assert.match(appJs, /const RUN_HOURS = Array\.from\(\{ length: 14 \}/);
+  assert.match(appJs, /function renderRunHourGrid/);
+  assert.match(appJs, /randomDelayMin: 10/);
+  assert.match(styleCss, /\.run-hour-grid[\s\S]*grid-template-columns/);
+  assert.match(indexHtml, /id="cfg-search-interval"[^>]*value="60"/);
+  assert.match(indexHtml, /id="cfg-search-jitter"[^>]*value="60"/);
+});

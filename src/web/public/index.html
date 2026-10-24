@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.8.2</span>
+            <span class="version-label" id="version-label">v1.8.3</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -469,14 +469,53 @@
       </div>
       <div class="modal-body">
         <div class="steps-nav">
-          <div class="step-nav-item active" data-step="1">1. 移动端授权</div>
-          <div class="step-nav-item" data-step="2">2. 网页端 Cookie</div>
-          <div class="step-nav-item" data-step="3">3. 代理与地区</div>
+          <div class="step-nav-item active" data-step="1">1. 网络出口</div>
+          <div class="step-nav-item" data-step="2">2. 移动端授权</div>
+          <div class="step-nav-item" data-step="3">3. 网页端 Cookie</div>
           <div class="step-nav-item" data-step="4">4. 完成</div>
         </div>
 
         <!-- Step 1 -->
         <div class="step-content active" id="step-1">
+          <h3 class="step-title">第一步：先确认网络出口与代理</h3>
+          <p class="step-desc">Cookie 测试、Token 换取和后续体检都会立即访问微软。必须先保存代理策略，再绑定任何账号凭据。</p>
+          <div class="form-group">
+            <label class="form-label checkbox-label">
+              <input type="checkbox" id="guide-use-proxy"> 启用全局默认代理
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">全局默认代理地址 (HTTP / HTTPS / SOCKS5 / SOCKS5H)</label>
+            <input type="text" id="guide-proxy-url" class="form-input" placeholder="例如：http://192.168.1.5:7890 或 socks5h://127.0.0.1:1080">
+            <small class="form-hint">保存后仍可在配置中心添加更多代理节点。</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">这个账号的网络出口</label>
+            <select id="guide-account-proxy-mode" class="form-select">
+              <option value="inherit">跟随全局默认设置（推荐）</option>
+              <option value="direct">不使用代理（直连）</option>
+              <option value="proxy">使用指定已有代理</option>
+            </select>
+          </div>
+          <div class="form-group" id="guide-account-proxy-node-group" style="display: none;">
+            <label class="form-label">指定代理节点</label>
+            <select id="guide-account-proxy-id" class="form-select"></select>
+          </div>
+          <small class="form-hint" id="guide-account-proxy-hint"></small>
+          <div class="form-group" style="margin-top: 12px;">
+            <label class="form-label checkbox-label">
+              <input type="checkbox" id="guide-lock-region" checked> 开启国区保护（非大陆出口 IP 自动停止打卡）
+            </label>
+          </div>
+          <button type="button" id="guide-btn-test-proxy" class="btn btn-secondary">一键检测出口 IP 与地区</button>
+          <div id="guide-proxy-result" class="hint-msg"></div>
+          <div class="step-footer">
+            <button type="button" class="btn btn-primary" id="guide-btn-save-network">保存出口并继续 ➜</button>
+          </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="step-content" id="step-2">
           <div class="form-group" style="background: var(--card-inner); padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color); margin-bottom: 16px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
               <span style="font-size: 13px; font-weight: 700; color: var(--accent);">👤 新账号基础信息</span>
@@ -493,8 +532,8 @@
               </div>
             </div>
           </div>
-
-          <h3 class="step-title">第一步：获取移动端与 App 签到授权 (OAuth Token)</h3>
+          <div id="guide-token-network-summary" class="guide-network-summary"></div>
+          <h3 class="step-title">第二步：获取移动端与 App 签到授权 (OAuth Token)</h3>
           <p class="step-desc">该授权用于自动完成「每日移动端签到」与「新闻资讯阅读（30分）」，一次绑定长期自动续期，无需反复操作。</p>
           <div class="step-action-box">
             <p>1. 点击下方按钮，将在新窗口打开微软官方登录授权页：</p>
@@ -509,73 +548,27 @@
             <div id="guide-token-result" class="hint-msg"></div>
           </div>
           <div class="step-footer">
-            <button class="btn btn-primary" onclick="switchStep(2)">下一步：配置网页 Cookie ➜</button>
+            <button class="btn btn-secondary" onclick="switchStep(1)">上一步</button>
+            <button class="btn btn-primary" onclick="switchStep(3)">下一步：配置网页 Cookie ➜</button>
           </div>
         </div>
 
-        <!-- Step 2 -->
-        <div class="step-content" id="step-2">
-          <h3 class="step-title">第二步：配置必应网页端 Cookie</h3>
-          <p class="step-desc">该 Cookie 用于「必应 PC 搜索（60分）」、「每日活动集 Daily Set」与「桌面专享任务」。</p>
+        <!-- Step 3 -->
+        <div class="step-content" id="step-3">
+          <div id="guide-cookie-network-summary" class="guide-network-summary"></div>
+          <h3 class="step-title">第三步：配置必应网页端 Cookie</h3>
+          <p class="step-desc">该 Cookie 用于「必应 PC 搜索」、「每日活动集 Daily Set」与「桌面专享任务」。</p>
           <div class="step-action-box">
             <p>在电脑浏览器中登录 <a href="https://rewards.bing.com/dashboard" target="_blank" style="color:#38BDF8;">rewards.bing.com/dashboard</a>，按 <code>F12</code> 打开控制台，在【网络/Network】或【应用程序/Application】中复制 Cookie 字符串，粘贴在下方：</p>
             <textarea id="guide-cookie-input" class="form-textarea" rows="4" placeholder="粘贴完整的 Cookie 字符串（必须包含 _U，否则 PC 搜索不计分）"></textarea>
             <button id="guide-btn-test-cookie" class="btn btn-secondary" style="margin-top: 8px;">测试 Cookie 有效性</button>
             <div id="guide-cookie-result" class="hint-msg"></div>
           </div>
-          <div class="step-footer">
-            <button class="btn btn-secondary" onclick="switchStep(1)">上一步</button>
-            <button class="btn btn-primary" onclick="switchStep(3)">下一步：网络与代理 ➜</button>
-          </div>
-        </div>
 
-        <!-- Step 3 -->
-        <div class="step-content" id="step-3">
-          <h3 class="step-title">第三步：网络代理、国区保护与拟人错峰时段 (防风控)</h3>
-          <p class="step-desc">为避免被微软风控锁区或封号，系统默认仅允许在中国大陆 IP 环境下打卡。如果您的 NAS/VPS 在境外，必须配置国内代理。</p>
-          <div class="form-group">
-            <label class="form-label checkbox-label">
-              <input type="checkbox" id="guide-use-proxy"> 启用网络代理
-            </label>
-          </div>
-          <div class="form-group">
-            <label class="form-label">代理服务器地址 (HTTP / SOCKS5)</label>
-            <input type="text" id="guide-proxy-url" class="form-input" placeholder="例如：http://192.168.1.5:7890 或 socks5://127.0.0.1:1080">
-            <small class="form-hint">这里配置全局默认代理；保存后可在配置中心添加多套代理，并为每个账号单独选择。</small>
-          </div>
-          <div class="form-group">
-            <label class="form-label checkbox-label">
-              <input type="checkbox" id="guide-lock-region" checked> 开启国区保护（非大陆出口 IP 自动停止打卡）
-            </label>
-          </div>
-          <button id="guide-btn-test-proxy" class="btn btn-secondary">一键检测出口 IP 与地区</button>
-          <div id="guide-proxy-result" class="hint-msg"></div>
-
-          <hr class="divider">
-
-          <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color);">
-            <label class="form-label">🕒 拟人化错峰时段选择 (4小时作息窗口)</label>
-            <div class="slot-presets-wrap" id="guide-slot-presets">
-              <button type="button" class="slot-pill-btn active" data-start="9">🌅 09:00 - 13:00 (上午)</button>
-              <button type="button" class="slot-pill-btn" data-start="13">☀️ 13:00 - 17:00 (下午)</button>
-              <button type="button" class="slot-pill-btn" data-start="17">☕ 17:00 - 21:00 (傍晚)</button>
-              <button type="button" class="slot-pill-btn" data-start="21">🌙 21:00 - 次日 01:00 (夜间)</button>
-              <button type="button" class="slot-pill-btn" data-start="custom">✏️ 自定义时间</button>
-            </div>
-            
-            <div id="guide-custom-slot-box" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);">
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
-                <div>
-                  <label style="font-size: 11.5px; color: var(--text-sub);">开始时间 (0-23点)</label>
-                  <input type="number" id="guide-account-starthour" class="form-input" min="0" max="23" value="9">
-                </div>
-                <div>
-                  <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动计算 +4h)</label>
-                  <input type="text" id="guide-account-endhour" class="form-input" readonly value="13:00" style="opacity: 0.85;">
-                </div>
-              </div>
-            </div>
-            <small class="form-hint" style="margin-top: 6px;">时段内 0~60 分钟随机启动，PC 搜索将在 2 小时内平缓分散执行，彻底模拟真实作息防风控。</small>
+          <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color); margin-top: 14px;">
+            <label class="form-label">🕒 每天运行时间档位</label>
+            <div class="run-hour-grid" id="guide-run-hours"></div>
+            <small class="form-hint" style="margin-top: 8px;">可勾选多个档位作为备用。每档为 1 小时，启动延迟固定为 0-10 分钟；系统每天只在最早可用的已勾选档位执行一次。</small>
           </div>
 
           <div class="step-footer">
@@ -702,28 +695,9 @@
           </div>
 
           <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color); margin-top: 10px;">
-            <label class="form-label">🕒 拟人化错峰时段设定 (4小时时间窗)</label>
-            <div class="slot-presets-wrap" id="cfg-slot-presets">
-              <button type="button" class="slot-pill-btn active" data-start="9">🌅 09:00 - 13:00 (上午)</button>
-              <button type="button" class="slot-pill-btn" data-start="13">☀️ 13:00 - 17:00 (下午)</button>
-              <button type="button" class="slot-pill-btn" data-start="17">☕ 17:00 - 21:00 (傍晚)</button>
-              <button type="button" class="slot-pill-btn" data-start="21">🌙 21:00 - 次日 01:00 (夜间)</button>
-              <button type="button" class="slot-pill-btn" data-start="custom">✏️ 自定义时间</button>
-            </div>
-            
-            <div id="cfg-custom-slot-box" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-color);">
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;">
-                <div>
-                  <label style="font-size: 11.5px; color: var(--text-sub);">自定义开始时间 (0-23点)</label>
-                  <input type="number" id="cfg-account-starthour" class="form-input" min="0" max="23" value="9">
-                </div>
-                <div>
-                  <label style="font-size: 11.5px; color: var(--text-sub);">结束时间 (自动计算 +4h)</label>
-                  <input type="text" id="cfg-account-endhour" class="form-input" readonly value="13:00" style="opacity: 0.85;">
-                </div>
-              </div>
-            </div>
-            <small class="form-hint" id="cfg-account-slot-hint" style="margin-top: 8px;">区间内 0~60 分钟随机启动，PC 搜索将在 2 小时内平缓分散执行，彻底模拟真人上网作息</small>
+            <label class="form-label">🕒 每天运行时间档位</label>
+            <div class="run-hour-grid" id="cfg-run-hours"></div>
+            <small class="form-hint" id="cfg-account-slot-hint" style="margin-top: 8px;">每档为 1 小时，启动延迟 0-10 分钟；可多选作为备用，每天只在最早可用的已勾选档位执行一次。</small>
           </div>
 
           <div style="display: flex; gap: 10px; margin-top: 14px;">
@@ -783,11 +757,11 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
               <div>
                 <label style="font-size:11.5px; color:var(--text-sub); display:block; margin-bottom:4px;">每次搜索基础间隔（秒）</label>
-                <input type="number" id="cfg-search-interval" class="form-input" min="60" max="900" step="10" value="180">
+                <input type="number" id="cfg-search-interval" class="form-input" min="60" max="120" step="5" value="60">
               </div>
               <div>
                 <label style="font-size:11.5px; color:var(--text-sub); display:block; margin-bottom:4px;">每次随机浮动（秒，只会延后）</label>
-                <input type="number" id="cfg-search-jitter" class="form-input" min="30" max="300" step="5" value="30">
+                <input type="number" id="cfg-search-jitter" class="form-input" min="30" max="60" step="5" value="60">
               </div>
             </div>
             <div style="margin-top:10px;">
@@ -1165,6 +1139,34 @@
             <label class="form-label">排列序号</label>
             <input type="number" id="quick-add-order" class="form-input" min="1" max="99" value="2">
           </div>
+        </div>
+        <div class="account-proxy-panel">
+          <div class="proxy-section-title">
+            <div>
+              <span>🌐 网络出口（先确认）</span>
+              <small>保存时若自动换取 Token，会立即使用这里选择的代理。</small>
+            </div>
+          </div>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label class="form-label">代理策略</label>
+              <select id="quick-add-proxy-mode" class="form-select">
+                <option value="inherit">跟随全局默认设置</option>
+                <option value="direct">不使用代理（直连）</option>
+                <option value="proxy">使用指定代理</option>
+              </select>
+            </div>
+            <div class="form-group" id="quick-add-proxy-node-group" style="display: none;">
+              <label class="form-label">指定代理节点</label>
+              <select id="quick-add-proxy-id" class="form-select"></select>
+            </div>
+          </div>
+          <small class="form-hint" id="quick-add-proxy-hint"></small>
+        </div>
+        <div class="form-group">
+          <label class="form-label">每天运行时间档位</label>
+          <div class="run-hour-grid" id="quick-add-run-hours"></div>
+          <small class="form-hint">每档 1 小时，启动延迟 0-10 分钟；可多选作为备用，每天只执行一次。</small>
         </div>
         <div class="form-group">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">

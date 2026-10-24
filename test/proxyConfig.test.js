@@ -23,6 +23,7 @@ process.env.MSR_DATA_DIR = tmpDir;
 
 const { default: configManager } = await import('../src/config.js');
 const { default: rewardsApi } = await import('../src/core/api.js');
+const { default: authManager } = await import('../src/core/auth.js');
 const { default: networkClient } = await import('../src/network.js');
 const { normalizeProxyUrl, toBrowserProxy } = await import('../src/core/proxy.js');
 const { createServer: createApp } = await import('../src/web/server.js');
@@ -78,6 +79,25 @@ test('账号可独立选择跟随全局、直连或指定代理', () => {
   assert.equal(networkClient.getActiveProxyContext().mode, 'direct');
 });
 
+test('候选凭据请求可临时覆盖账号代理上下文', () => {
+  configManager.setNetworkProxyConfig({
+    proxies: [
+      { id: 'proxy_candidate', name: '候选节点', url: 'socks5h://127.0.0.1:1080' }
+    ],
+    defaultProxyId: 'proxy_candidate',
+    useProxy: true,
+    lockRegion: true
+  });
+  rewardsApi.setCurrentAccount({ id: 'candidate', name: '候选', cookie: '', proxyMode: 'inherit' });
+
+  networkClient.setActiveProxySelection({ mode: 'direct' });
+  assert.equal(networkClient.getEffectiveProxyUrl(), '');
+  networkClient.setActiveProxySelection({ mode: 'proxy', proxyId: 'proxy_candidate' });
+  assert.equal(networkClient.getEffectiveProxyUrl(), 'socks5h://127.0.0.1:1080');
+  networkClient.setActiveProxySelection({ mode: 'proxy', url: 'http://127.0.0.1:18888' });
+  assert.equal(networkClient.getEffectiveProxyUrl(), 'http://127.0.0.1:18888');
+});
+
 test('代理测试接口只测试候选节点，不修改已保存的默认代理', async (t) => {
   const originalIPDetails = rewardsApi.getIPInfoDetails;
   const originalCheckRegion = rewardsApi.checkRegion;
@@ -131,4 +151,77 @@ test('代理测试接口只测试候选节点，不修改已保存的默认代�
   assert.equal(saveResponse.success, true);
   assert.equal(saveResponse.data.network.proxies.length, 2);
   assert.equal(saveResponse.data.network.defaultProxyId, 'proxy_new_2');
+});
+
+test('Cookie 测试、Token 换取和新增账号会先使用选定代理', async (t) => {
+  configManager.setNetworkProxyConfig({
+    proxies: [
+      { id: 'proxy_session', name: '会话节点', url: 'socks5h://127.0.0.1:1080' }
+    ],
+    defaultProxyId: 'proxy_session',
+    useProxy: true,
+    lockRegion: true
+  });
+  const seen = [];
+  const originalCheckCookie = authManager.checkCookieStatus;
+  const originalExchange = authManager.exchangeCodeForToken;
+  authManager.checkCookieStatus = async () => {
+    seen.push({ type: 'cookie', context: networkClient.getActiveProxyContext() });
+    return { valid: true, message: 'ok' };
+  };
+  authManager.exchangeCodeForToken = async (urlOrCode, accountId) => {
+    seen.push({ type: 'token', accountId, context: networkClient.getActiveProxyContext() });
+    return {
+      success: true,
+      accountId,
+      accessToken: 'mock_access',
+      refreshToken: 'mock_refresh'
+    };
+  };
+
+  const app = createApp();
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    authManager.checkCookieStatus = originalCheckCookie;
+    authManager.exchangeCodeForToken = originalExchange;
+    server.closeAllConnections?.();
+    await new Promise(resolve => server.close(resolve));
+  });
+  const port = server.address().port;
+  const post = (url, body) => fetch(`http://127.0.0.1:${port}${url}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(res => res.json());
+
+  const cookieResponse = await post('/api/auth/test-cookie', {
+    cookie: '_U=CANDIDATE',
+    accountId: 'draft_cookie_account',
+    proxy: { mode: 'proxy', proxyId: 'proxy_session' }
+  });
+  assert.equal(cookieResponse.success, true);
+
+  const tokenResponse = await post('/api/auth/exchange-code', {
+    urlOrCode: 'https://login.live.com/oauth20_desktop.srf?code=MOCK',
+    accountId: 'draft_token_account',
+    draft: true,
+    proxy: { mode: 'proxy', proxyId: 'proxy_session' }
+  });
+  assert.equal(tokenResponse.success, true);
+
+  const accountResponse = await post('/api/accounts', {
+    id: 'acc_add_with_proxy',
+    name: '新增代理账号',
+    cookie: '_U=ADD',
+    authCodeUrl: 'https://login.live.com/oauth20_desktop.srf?code=MOCK_ADD',
+    proxyMode: 'proxy',
+    proxyId: 'proxy_session'
+  });
+  assert.equal(accountResponse.success, true);
+  assert.equal(accountResponse.tokenExchanged, true);
+
+  assert.equal(seen.length, 3);
+  assert.ok(seen.every(item => item.context?.proxyUrl === 'socks5h://127.0.0.1:1080'));
+  assert.equal(configManager.findAccount('acc_add_with_proxy').proxyId, 'proxy_session');
 });

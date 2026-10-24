@@ -4,6 +4,7 @@ import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
 import { removeBrowserSession } from './core/browserSession.js';
 import { webIdentityKey } from './core/accountIdentity.js';
 import { normalizeProxyUrl, safeProxyId } from './core/proxy.js';
+import { RUN_HOURS, buildTimeSlot, normalizeRunHours } from './core/scheduleWindow.js';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
@@ -29,11 +30,12 @@ const DEFAULT_CONFIG = {
       identityChangedAt: 0,
       proxyMode: 'inherit',
       proxyId: '',
+      runHours: [9],
       timeSlot: {
         startHour: 9,
-        endHour: 13,
-        randomDelayMin: 60,
-        durationHours: 2
+        endHour: 10,
+        randomDelayMin: 10,
+        durationHours: 1
       },
       authDiagnosis: null
     }
@@ -59,8 +61,8 @@ const DEFAULT_CONFIG = {
     promos: true,
     desktopApp: true,
     dailySet: true,
-    searchIntervalSec: 180, // 全局搜索节奏：每次搜索基础间隔（秒）
-    searchJitterSec: 30,    // 全局搜索节奏：每次随机浮动（±秒）
+    searchIntervalSec: 60,  // 全局搜索节奏：每次搜索基础间隔（秒）
+    searchJitterSec: 60,    // 全局搜索节奏：每次随机浮动（秒，只会延后）
     searchStagnantLimit: 5, // 停滞保护：连续多少次搜索官网进度不涨就主动停手
     searchApi: 'baidu.official', // 'offline' | 'baidu.official' | 'hot.nntool.cc' | 'hot.cnxiaobai.com'
     searchEngineMode: 'browser', // 'browser' (Playwright 真机拟人) | 'http' (轻量HTTP)
@@ -153,6 +155,8 @@ class ConfigManager {
         this.migrateProxySettings();
         // 旧版默认时段（6-10 / 10-14 / 14-18 / 18-22）迁移到新默认时段
         this.migrateTimeSlots();
+        this.migrateRunHours();
+        this.migrateSearchRhythm();
       } else {
         this.config = structuredClone(DEFAULT_CONFIG);
         this.save();
@@ -165,19 +169,11 @@ class ConfigManager {
   }
 
   getDefaultTimeSlot(index = 0) {
-    const slots = [
-      { startHour: 9, endHour: 13 },
-      { startHour: 13, endHour: 17 },
-      { startHour: 17, endHour: 21 },
-      { startHour: 21, endHour: 1 }
-    ];
-    const s = slots[index % slots.length];
-    return {
-      startHour: s.startHour,
-      endHour: s.endHour,
-      randomDelayMin: 60,
-      durationHours: 2
-    };
+    return buildTimeSlot(this.getDefaultRunHours(index));
+  }
+
+  getDefaultRunHours(index = 0) {
+    return [RUN_HOURS[index % RUN_HOURS.length]];
   }
 
   migrateLegacyAccount(parsed) {
@@ -246,6 +242,41 @@ class ConfigManager {
       changed = true;
     }
     if (changed) this.save();
+  }
+
+  /**
+   * v1.8.3 起每个账号使用 9:00-22:00 的 14 个一小时档位。
+   * 旧版四小时窗口取其开始小时作为默认档位。
+   */
+  migrateRunHours() {
+    let changed = false;
+    (this.config.accounts || []).forEach((acc, index) => {
+      const legacyHour = Number(acc.timeSlot?.startHour);
+      const fallbackHour = RUN_HOURS.includes(legacyHour)
+        ? legacyHour
+        : this.getDefaultRunHours(index)[0];
+      const runHours = normalizeRunHours(acc.runHours, [fallbackHour]);
+      const timeSlot = buildTimeSlot(runHours);
+      if (JSON.stringify(acc.runHours) !== JSON.stringify(runHours)) {
+        acc.runHours = runHours;
+        changed = true;
+      }
+      if (JSON.stringify(acc.timeSlot) !== JSON.stringify(timeSlot)) {
+        acc.timeSlot = timeSlot;
+        changed = true;
+      }
+    });
+    if (changed) this.save();
+  }
+
+  migrateSearchRhythm() {
+    const tasks = this.config.tasks;
+    if (!tasks) return;
+    if (Number(tasks.searchIntervalSec) === 180 && Number(tasks.searchJitterSec) === 30) {
+      tasks.searchIntervalSec = 60;
+      tasks.searchJitterSec = 60;
+      this.save();
+    }
   }
 
   normalizeProxyRecords(records = [], existingRecords = []) {
@@ -528,16 +559,12 @@ class ConfigManager {
 
     if (idx !== -1) {
       const existing = cfg.accounts[idx];
-      let timeSlot = accountData.timeSlot || existing.timeSlot || this.getDefaultTimeSlot(idx);
-      if (accountData.timeSlot?.startHour !== undefined) {
-        const sh = Number(accountData.timeSlot.startHour);
-        timeSlot = {
-          startHour: sh,
-          endHour: (sh + 4) % 24,
-          randomDelayMin: Number(accountData.timeSlot.randomDelayMin) || 60,
-          durationHours: Number(accountData.timeSlot.durationHours) || 2
-        };
-      }
+      const legacyHour = Number(accountData.timeSlot?.startHour);
+      const requestedHours = accountData.runHours !== undefined
+        ? accountData.runHours
+        : (RUN_HOURS.includes(legacyHour) ? [legacyHour] : existing.runHours);
+      const runHours = normalizeRunHours(requestedHours, this.getDefaultRunHours(idx));
+      const timeSlot = buildTimeSlot(runHours);
       const order = accountData.order !== undefined ? Number(accountData.order) : (existing.order || idx + 1);
       const mergedSecrets = { ...accountData };
       for (const field of SECRET_ACCOUNT_FIELDS) {
@@ -553,6 +580,7 @@ class ConfigManager {
         ...mergedSecrets,
         name: name || existing.name,
         order,
+        runHours,
         timeSlot
       };
       delete updatedAccount.preserveDiagnosis;
@@ -565,16 +593,12 @@ class ConfigManager {
       }
     } else {
       const newIdx = cfg.accounts.length;
-      let timeSlot = accountData.timeSlot || this.getDefaultTimeSlot(newIdx);
-      if (accountData.timeSlot?.startHour !== undefined) {
-        const sh = Number(accountData.timeSlot.startHour);
-        timeSlot = {
-          startHour: sh,
-          endHour: (sh + 4) % 24,
-          randomDelayMin: Number(accountData.timeSlot.randomDelayMin) || 60,
-          durationHours: Number(accountData.timeSlot.durationHours) || 2
-        };
-      }
+      const legacyHour = Number(accountData.timeSlot?.startHour);
+      const requestedHours = accountData.runHours !== undefined
+        ? accountData.runHours
+        : (RUN_HOURS.includes(legacyHour) ? [legacyHour] : this.getDefaultRunHours(newIdx));
+      const runHours = normalizeRunHours(requestedHours, this.getDefaultRunHours(newIdx));
+      const timeSlot = buildTimeSlot(runHours);
       const order = accountData.order !== undefined ? Number(accountData.order) : (newIdx + 1);
       const newAccount = {
         id,
@@ -589,6 +613,7 @@ class ConfigManager {
         tokenTime: accountData.tokenTime || 0,
         proxyMode: ['inherit', 'direct', 'proxy'].includes(accountData.proxyMode) ? accountData.proxyMode : 'inherit',
         proxyId: accountData.proxyMode === 'proxy' ? (accountData.proxyId || '') : '',
+        runHours,
         timeSlot,
         authDiagnosis: accountData.authDiagnosis || null
       };
@@ -755,6 +780,12 @@ class ConfigManager {
             // 去掉 getPublicConfig() 附加的 hasXxx 派生标记，避免污染落盘配置
             delete merged[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`];
           }
+          const legacyHour = Number(merged.timeSlot?.startHour);
+          const fallbackHours = RUN_HOURS.includes(legacyHour)
+            ? [legacyHour]
+            : this.getDefaultRunHours(idx);
+          merged.runHours = normalizeRunHours(merged.runHours, fallbackHours);
+          merged.timeSlot = buildTimeSlot(merged.runHours);
           this.applyCredentialMetadata(merged, existing);
           if (merged.enabled === false) {
             if (!merged.pausedAt) merged.pausedAt = Date.now();

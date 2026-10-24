@@ -27,6 +27,7 @@ let accountsOverviewRenderSignature = '';
 // 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
 const SECRET_CLEAR = '__MSR_SECRET_CLEAR__';
+let guideNetworkConfirmed = false;
 let guideDraftAccount = {
   id: '',
   name: '新账号',
@@ -35,7 +36,9 @@ let guideDraftAccount = {
   authCodeUrl: '',
   refreshToken: '',
   accessToken: '',
-  tokenTime: 0
+  tokenTime: 0,
+  proxyMode: 'inherit',
+  proxyId: ''
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -831,64 +834,6 @@ function initUIEvents() {
     }
   });
 
-  // 时段开始时间联动计算结束时间 (+4h)
-  const syncEndHour = (startInputId, endInputId) => {
-    const sElem = document.getElementById(startInputId);
-    const eElem = document.getElementById(endInputId);
-    if (!sElem || !eElem) return;
-    let sh = parseInt(sElem.value, 10);
-    if (isNaN(sh)) sh = 9;
-    sh = Math.max(0, Math.min(23, sh));
-    const eh = (sh + 4) % 24;
-    eElem.value = `${String(eh).padStart(2, '0')}:00`;
-  };
-
-  document.getElementById('cfg-account-starthour')?.addEventListener('input', () => {
-    syncEndHour('cfg-account-starthour', 'cfg-account-endhour');
-  });
-
-  document.getElementById('guide-account-starthour')?.addEventListener('input', () => {
-    syncEndHour('guide-account-starthour', 'guide-account-endhour');
-  });
-
-  // 配置中心：拟人错峰时段 4 个快捷按钮 + 自定义交互
-  document.querySelectorAll('#cfg-slot-presets .slot-pill-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#cfg-slot-presets .slot-pill-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const startVal = btn.getAttribute('data-start');
-      const customBox = document.getElementById('cfg-custom-slot-box');
-      const shInput = document.getElementById('cfg-account-starthour');
-      if (startVal === 'custom') {
-        if (customBox) customBox.style.display = 'block';
-        if (shInput) shInput.focus();
-      } else {
-        if (customBox) customBox.style.display = 'none';
-        if (shInput) shInput.value = startVal;
-        syncEndHour('cfg-account-starthour', 'cfg-account-endhour');
-      }
-    });
-  });
-
-  // 配置向导：拟人错峰时段 4 个快捷按钮 + 自定义交互
-  document.querySelectorAll('#guide-slot-presets .slot-pill-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#guide-slot-presets .slot-pill-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const startVal = btn.getAttribute('data-start');
-      const customBox = document.getElementById('guide-custom-slot-box');
-      const shInput = document.getElementById('guide-account-starthour');
-      if (startVal === 'custom') {
-        if (customBox) customBox.style.display = 'block';
-        if (shInput) shInput.focus();
-      } else {
-        if (customBox) customBox.style.display = 'none';
-        if (shInput) shInput.value = startVal;
-        syncEndHour('guide-account-starthour', 'guide-account-endhour');
-      }
-    });
-  });
-
   // 测试词库来源按钮
   document.getElementById('btn-test-search-api')?.addEventListener('click', handleTestSearchApi);
   document.getElementById('btn-close-words-modal')?.addEventListener('click', () => closeModal('search-words-modal'));
@@ -899,6 +844,12 @@ function initUIEvents() {
   document.getElementById('btn-close-quick-add')?.addEventListener('click', () => closeModal('account-quick-add-modal'));
   document.getElementById('btn-cancel-quick-add')?.addEventListener('click', () => closeModal('account-quick-add-modal'));
   document.getElementById('btn-save-quick-add')?.addEventListener('click', handleQuickAddAccount);
+  document.getElementById('quick-add-proxy-mode')?.addEventListener('change', () => {
+    updateQuickAddProxyControls(document.getElementById('quick-add-proxy-id')?.value || '');
+  });
+  document.getElementById('quick-add-proxy-id')?.addEventListener('change', (e) => {
+    updateQuickAddProxyControls(e.target.value);
+  });
 
   // 通用网页确认框
   document.getElementById('btn-web-confirm-ok')?.addEventListener('click', () => resolveWebConfirm(true));
@@ -920,6 +871,21 @@ function initUIEvents() {
   document.getElementById('btn-guide').addEventListener('click', openGuideModal);
   document.getElementById('btn-close-guide').addEventListener('click', () => closeModal('guide-modal'));
   document.getElementById('btn-finish-guide').addEventListener('click', () => closeModal('guide-modal'));
+  document.getElementById('guide-account-proxy-mode')?.addEventListener('change', () => {
+    updateGuideProxyControls(document.getElementById('guide-account-proxy-id')?.value || '');
+  });
+  document.getElementById('guide-account-proxy-id')?.addEventListener('change', (e) => {
+    updateGuideProxyControls(e.target.value);
+  });
+  document.getElementById('guide-use-proxy')?.addEventListener('change', () => {
+    updateGuideProxyControls(document.getElementById('guide-account-proxy-id')?.value || '');
+  });
+  ['guide-use-proxy', 'guide-proxy-url', 'guide-lock-region', 'guide-account-proxy-mode', 'guide-account-proxy-id'].forEach(id => {
+    const el = document.getElementById(id);
+    el?.addEventListener('input', () => { guideNetworkConfirmed = false; });
+    el?.addEventListener('change', () => { guideNetworkConfirmed = false; });
+  });
+  document.getElementById('guide-btn-save-network')?.addEventListener('click', saveGuideNetworkSettings);
 
   // 任务清单栏的快捷编辑当前账号按钮
   document.getElementById('btn-edit-current-account-header')?.addEventListener('click', () => {
@@ -1024,6 +990,9 @@ function initUIEvents() {
   document.getElementById('cfg-account-proxy-mode')?.addEventListener('change', () => {
     updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
   });
+  document.getElementById('cfg-account-proxy-id')?.addEventListener('change', (e) => {
+    updateAccountProxyControls(e.target.value);
+  });
   document.getElementById('cfg-use-proxy')?.addEventListener('change', () => {
     updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
   });
@@ -1085,6 +1054,11 @@ function initUIEvents() {
   document.getElementById('guide-btn-exchange').addEventListener('click', async () => {
     const input = document.getElementById('guide-code-input').value.trim();
     const resultDiv = document.getElementById('guide-token-result');
+    const proxySelection = readProxySelection('guide-account-proxy-mode', 'guide-account-proxy-id');
+    if (!guideNetworkConfirmed) {
+      resultDiv.innerHTML = '<span style="color:#EF4444;">请先返回第一步保存网络出口。</span>';
+      return;
+    }
     if (!input) {
       resultDiv.innerHTML = '<span style="color:#EF4444;">请先填入地址栏跳转后的完整 URL</span>';
       return;
@@ -1103,7 +1077,8 @@ function initUIEvents() {
           accountId: guideDraftAccount.id,
           name: guideDraftAccount.name,
           order: guideDraftAccount.order,
-          draft: true
+          draft: true,
+          proxy: proxySelection
         })
       }).then(r => r.json());
       if (res.success) {
@@ -1123,6 +1098,11 @@ function initUIEvents() {
   document.getElementById('guide-btn-test-cookie').addEventListener('click', async () => {
     const cookie = document.getElementById('guide-cookie-input').value.trim();
     const resultDiv = document.getElementById('guide-cookie-result');
+    const proxySelection = readProxySelection('guide-account-proxy-mode', 'guide-account-proxy-id');
+    if (!guideNetworkConfirmed) {
+      resultDiv.innerHTML = '<span style="color:#EF4444;">请先返回第一步保存网络出口。</span>';
+      return;
+    }
     if (!cookie) {
       resultDiv.innerHTML = '<span style="color:#EF4444;">请先粘贴 Cookie</span>';
       return;
@@ -1133,7 +1113,7 @@ function initUIEvents() {
       const testRes = await fetch('/api/auth/test-cookie', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookie, accountId: guideDraftAccount.id })
+        body: JSON.stringify({ cookie, accountId: guideDraftAccount.id, proxy: proxySelection })
       }).then(r => r.json());
       if (testRes.success && testRes.data?.valid) {
         resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(testRes.data.message)}</span>`;
@@ -1197,7 +1177,11 @@ function initUIEvents() {
     const res = await fetch('/api/auth/exchange-code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urlOrCode: input, accountId: targetId })
+      body: JSON.stringify({
+        urlOrCode: input,
+        accountId: targetId,
+        proxy: readProxySelection('cfg-account-proxy-mode', 'cfg-account-proxy-id')
+      })
     }).then(r => r.json());
     if (res.success) {
       if (resDiv) resDiv.innerHTML = '<span style="color:#34D399;">✅ Token 换取并自动保存成功！</span>';
@@ -1229,7 +1213,11 @@ function initUIEvents() {
       const testRes = await fetch('/api/auth/test-cookie', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookie: input || SECRET_PLACEHOLDER, accountId: targetId })
+        body: JSON.stringify({
+          cookie: input || SECRET_PLACEHOLDER,
+          accountId: targetId,
+          proxy: readProxySelection('cfg-account-proxy-mode', 'cfg-account-proxy-id')
+        })
       }).then(r => r.json());
       if (testRes.success && testRes.data?.valid) {
         if (resDiv) resDiv.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(testRes.data.message)}</span>`;
@@ -1325,7 +1313,11 @@ function initUIEvents() {
     const res = await fetch('/api/auth/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountId: targetId, force: true })
+      body: JSON.stringify({
+        accountId: targetId,
+        force: true,
+        proxy: readProxySelection('cfg-account-proxy-mode', 'cfg-account-proxy-id')
+      })
     }).then(r => r.json());
     if (res.success) {
       const c = res.data.cookie;
@@ -1405,7 +1397,7 @@ function initUIEvents() {
     diagAccountId = e.target.value;
   });
 
-  // 搜索节奏：输入时实时刷新预估执行时间与 3 小时窗口校验
+  // 搜索节奏：输入时实时刷新预估执行时间与 40 分钟搜索预算校验
   document.getElementById('cfg-search-interval')?.addEventListener('input', updateSearchRhythmHint);
   document.getElementById('cfg-search-jitter')?.addEventListener('input', updateSearchRhythmHint);
 
@@ -1467,11 +1459,21 @@ function updateCookieHint(hasStoredSecret = null) {
   }
 }
 
-function switchStep(stepNum) {
+function switchStep(stepNum, options = {}) {
+  const targetStep = Number(stepNum);
+  const guideVisible = document.getElementById('guide-modal')?.classList.contains('show');
+  if (guideVisible && targetStep >= 2 && !guideNetworkConfirmed && options.force !== true) {
+    const result = document.getElementById('guide-proxy-result');
+    if (result) {
+      result.innerHTML = '<span style="color:#F59E0B;">请先保存网络出口，再继续绑定 Cookie 或 Token，避免真实会话提前从错误 IP 发出。</span>';
+    }
+    return false;
+  }
   document.querySelectorAll('.step-nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.step-content').forEach(c => c.classList.remove('active'));
   document.querySelector(`.step-nav-item[data-step="${stepNum}"]`)?.classList.add('active');
   document.getElementById(`step-${stepNum}`)?.classList.add('active');
+  return true;
 }
 
 function openModal(id) {
@@ -1993,6 +1995,7 @@ let quickAddCookieCleared = false;
 function openQuickAddAccountModal(accountId = null) {
   editingAccountIdInQuickModal = accountId;
   quickAddCookieCleared = false;
+  proxyDrafts = cloneProxyDrafts(currentConfig?.network);
   const modalTitle = document.getElementById('quick-add-modal-title');
   const saveBtn = document.getElementById('btn-save-quick-add');
   const nameInput = document.getElementById('quick-add-name');
@@ -2002,6 +2005,7 @@ function openQuickAddAccountModal(accountId = null) {
   const enabledInput = document.getElementById('quick-add-enabled');
   const cookieHint = document.getElementById('quick-add-cookie-hint');
   const clearCookieBtn = document.getElementById('btn-quick-clear-cookie');
+  const proxyModeInput = document.getElementById('quick-add-proxy-mode');
 
   if (clearCookieBtn) {
     clearCookieBtn.style.display = 'none';
@@ -2016,6 +2020,13 @@ function openQuickAddAccountModal(accountId = null) {
     if (nameInput) nameInput.value = acc?.name || '';
     if (orderInput) orderInput.value = acc?.order !== undefined ? acc.order : 1;
     if (enabledInput) enabledInput.checked = acc?.enabled !== false;
+    if (proxyModeInput) {
+      proxyModeInput.value = ['inherit', 'direct', 'proxy'].includes(acc?.proxyMode)
+        ? acc.proxyMode
+        : 'inherit';
+    }
+    updateQuickAddProxyControls(acc?.proxyId || '');
+    renderRunHourGrid('quick-add-run-hours', acc?.runHours || [acc?.timeSlot?.startHour || 9]);
     if (cookieInput) {
       cookieInput.value = '';
       cookieInput.placeholder = acc?.hasCookie
@@ -2039,6 +2050,9 @@ function openQuickAddAccountModal(accountId = null) {
     if (nameInput) nameInput.value = `账号 ${nextOrder}`;
     if (orderInput) orderInput.value = nextOrder;
     if (enabledInput) enabledInput.checked = true;
+    if (proxyModeInput) proxyModeInput.value = 'inherit';
+    updateQuickAddProxyControls('');
+    renderRunHourGrid('quick-add-run-hours', [RUN_HOURS[(nextOrder - 1) % RUN_HOURS.length]]);
     if (cookieInput) {
       cookieInput.value = '';
       cookieInput.placeholder = '粘贴该账号 rewards.bing.com 的 Cookie';
@@ -2054,6 +2068,8 @@ function openQuickAddAccountModal(accountId = null) {
 
 function openGuideModal() {
   const nextOrder = (currentConfig?.accounts?.length || 1) + 1;
+  proxyDrafts = cloneProxyDrafts(currentConfig?.network);
+  guideNetworkConfirmed = false;
   guideDraftAccount = {
     id: `acc_${Date.now()}`,
     name: `账号 ${nextOrder}`,
@@ -2062,7 +2078,9 @@ function openGuideModal() {
     authCodeUrl: '',
     refreshToken: '',
     accessToken: '',
-    tokenTime: 0
+    tokenTime: 0,
+    proxyMode: 'inherit',
+    proxyId: ''
   };
   const nameInput = document.getElementById('guide-account-name');
   if (nameInput) nameInput.value = guideDraftAccount.name;
@@ -2072,6 +2090,15 @@ function openGuideModal() {
   document.getElementById('guide-token-result').innerHTML = '';
   document.getElementById('guide-cookie-input').value = '';
   document.getElementById('guide-cookie-result').innerHTML = '';
+  document.getElementById('guide-proxy-result').innerHTML = '';
+  document.getElementById('guide-use-proxy').checked = currentConfig?.network?.useProxy === true;
+  document.getElementById('guide-proxy-url').value = currentConfig?.network?.proxyUrl || '';
+  document.getElementById('guide-lock-region').checked = currentConfig?.network?.lockRegion !== false;
+  document.getElementById('guide-account-proxy-mode').value = 'inherit';
+  document.getElementById('guide-account-proxy-node-group').style.display = 'none';
+  renderRunHourGrid('guide-run-hours', [9]);
+  document.querySelectorAll('.guide-network-summary').forEach(el => { el.textContent = ''; });
+  updateGuideProxyControls('');
   switchStep(1);
   openModal('guide-modal');
 }
@@ -2085,9 +2112,21 @@ async function handleQuickAddAccount() {
   const cookieVal = cookieInput?.value.trim();
   const authCodeUrl = document.getElementById('quick-add-authcode')?.value.trim();
   const enabled = document.getElementById('quick-add-enabled')?.checked !== false;
+  const proxySelection = readProxySelection('quick-add-proxy-mode', 'quick-add-proxy-id');
+  const runHours = readRunHours('quick-add-run-hours');
 
   if (!isEditing && !name && !cookieVal) {
     openEpicActionModal('无法保存微软账号', '请至少填写账号备注名称或粘贴 Cookie。', ['填写账号资料', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+    return;
+  }
+  if (proxySelection.mode === 'proxy' && !proxySelection.proxyId) {
+    openEpicActionModal('请选择代理节点', '当前账号选择了指定代理，但尚未选择可用节点。', ['选择代理节点', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+    return;
+  }
+  if (runHours.length === 0) {
+    openEpicActionModal('请选择运行时间', '请至少勾选一个每日运行时间档位。', ['勾选时间档位', '重新保存'], 0);
     updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
     return;
   }
@@ -2095,7 +2134,11 @@ async function handleQuickAddAccount() {
   const payload = {
     name: name || (isEditing ? '账号' : '新账号'),
     order,
-    enabled
+    enabled,
+    proxyMode: proxySelection.mode,
+    proxyId: proxySelection.proxyId,
+    runHours,
+    timeSlot: buildLegacyTimeSlot(runHours)
   };
   if (isEditing) {
     payload.id = editingAccountIdInQuickModal;
@@ -2245,7 +2288,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.2';
+  const current = updateInfo?.currentVersion || '1.8.3';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2300,8 +2343,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.2'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.2'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.3'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.3'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -3392,11 +3435,11 @@ async function fetchConfig() {
 
 // ===== 全局搜索节奏（任务与防风控） =====
 const SEARCH_MAX_ROUNDS = 20;            // 单账号最多 20 次搜索（60 分 ÷ 3 分/次）
-const SEARCH_WINDOW_MAX_SEC = 3 * 3600;  // 4 小时时段抛去首小时随机启动 = 3 小时执行窗口
+const SEARCH_WINDOW_MAX_SEC = 40 * 60;   // 1 小时档位中为启动随机与其他任务预留 20 分钟
 const SEARCH_INTERVAL_MIN = 60;          // 安全下限：基础间隔（秒）
-const SEARCH_INTERVAL_MAX = 900;
+const SEARCH_INTERVAL_MAX = 120;
 const SEARCH_JITTER_MIN = 30;            // 安全下限：随机浮动（秒）
-const SEARCH_JITTER_MAX = 300;
+const SEARCH_JITTER_MAX = 60;
 const SEARCH_STAGNANT_MIN = 1;           // 停滞保护下限
 const SEARCH_STAGNANT_MAX = 5;
 
@@ -3412,8 +3455,8 @@ function readSearchRhythmInputs() {
   const jitterEl = document.getElementById('cfg-search-jitter');
   let interval = parseInt(intervalEl?.value, 10);
   let jitter = parseInt(jitterEl?.value, 10);
-  if (isNaN(interval)) interval = 180;
-  if (isNaN(jitter)) jitter = 30;
+  if (isNaN(interval)) interval = 60;
+  if (isNaN(jitter)) jitter = 60;
   interval = Math.max(1, Math.min(SEARCH_INTERVAL_MAX, interval));
   jitter = Math.max(0, Math.min(SEARCH_JITTER_MAX, jitter));
   return { interval, jitter };
@@ -3439,7 +3482,7 @@ function validateSearchRhythm() {
   const slowestSec = (interval + jitter) * SEARCH_MAX_ROUNDS;
   if (slowestSec > SEARCH_WINDOW_MAX_SEC) {
     return `按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算最慢需要 ${formatDurationCN(slowestSec)}，`
-      + `超过 3 小时上限；请让「基础间隔 + 随机浮动」≤ 540 秒`;
+      + `超过 40 分钟搜索上限；请让「基础间隔 + 随机浮动」≤ 120 秒`;
   }
   return '';
 }
@@ -3457,13 +3500,55 @@ function updateSearchRhythmHint() {
   if (!err) {
     hint.innerHTML = `按最多 ${SEARCH_MAX_ROUNDS} 次搜索估算：单次 ${interval}~${interval + jitter} 秒，`
       + `总耗时约 <strong>${formatDurationCN(fastestSec)} ~ ${formatDurationCN(slowestSec)}</strong>，`
-      + `在 3 小时执行窗口内 ✅（安全下限：间隔 ≥ ${SEARCH_INTERVAL_MIN} 秒、浮动 ≥ ${SEARCH_JITTER_MIN} 秒）`;
+      + `在 40 分钟搜索预算内 ✅（1 小时档位另留 20 分钟给随机启动与其他任务）`;
     hint.style.color = '';
   } else {
     hint.innerHTML = `⚠️ ${err}`;
     hint.style.color = '#F87171';
   }
   return !err;
+}
+
+const RUN_HOURS = Array.from({ length: 14 }, (_, index) => index + 9);
+
+function normalizeRunHoursInput(value, fallback = [9]) {
+  const values = Array.isArray(value) ? value : [];
+  const valid = [...new Set(values
+    .map(item => Number(item))
+    .filter(item => Number.isInteger(item) && RUN_HOURS.includes(item)))]
+    .sort((a, b) => a - b);
+  return valid.length > 0 ? valid : fallback;
+}
+
+function renderRunHourGrid(containerId, selectedHours = [9]) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const selected = new Set(normalizeRunHoursInput(selectedHours));
+  container.innerHTML = RUN_HOURS.map(hour => `
+    <label class="run-hour-option">
+      <input type="checkbox" value="${hour}" ${selected.has(hour) ? 'checked' : ''}>
+      <span>${String(hour).padStart(2, '0')}:00</span>
+    </label>
+  `).join('');
+}
+
+function readRunHours(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return [];
+  return [...container.querySelectorAll('input[type="checkbox"]:checked')]
+    .map(input => Number(input.value))
+    .filter(hour => RUN_HOURS.includes(hour))
+    .sort((a, b) => a - b);
+}
+
+function buildLegacyTimeSlot(runHours) {
+  const [startHour] = normalizeRunHoursInput(runHours);
+  return {
+    startHour,
+    endHour: (startHour + 1) % 24,
+    randomDelayMin: 10,
+    durationHours: 1
+  };
 }
 
 function cloneProxyDrafts(network = {}) {
@@ -3602,6 +3687,110 @@ function updateAccountProxyControls(preferredProxyId = null) {
     hintEl.textContent = '跟随全局：全局默认代理当前未启用，该账号将直连。';
     hintEl.style.color = '';
   }
+}
+
+function updateAuxiliaryProxyControls({
+  modeId,
+  groupId,
+  nodeId,
+  hintId,
+  preferredProxyId = '',
+  globalToggleId,
+  useGlobalOverride,
+  inheritHint = '跟随全局默认设置'
+}) {
+  const modeEl = document.getElementById(modeId);
+  const nodeGroup = document.getElementById(groupId);
+  const nodeEl = document.getElementById(nodeId);
+  const hintEl = document.getElementById(hintId);
+  if (!modeEl || !nodeGroup || !nodeEl || !hintEl) return;
+
+  const mode = ['inherit', 'direct', 'proxy'].includes(modeEl.value) ? modeEl.value : 'inherit';
+  nodeEl.innerHTML = proxyDrafts.map(proxy => `
+    <option value="${escapeHtml(proxy.id)}">${escapeHtml(proxy.name || '未命名代理')}</option>
+  `).join('');
+
+  if (mode === 'proxy') {
+    nodeGroup.style.display = '';
+    if (preferredProxyId && proxyDrafts.some(proxy => proxy.id === preferredProxyId)) {
+      nodeEl.value = preferredProxyId;
+    }
+    if (proxyDrafts.length === 0) {
+      nodeEl.innerHTML = '<option value="">暂无可用代理节点</option>';
+      hintEl.textContent = '需要先在「网络与代理」中保存至少一个代理节点。';
+      hintEl.style.color = '#F59E0B';
+    } else {
+      const selected = proxyDrafts.find(proxy => proxy.id === nodeEl.value);
+      hintEl.textContent = `该账号的凭据测试、Token 换取和后续任务将使用「${selected?.name || '指定代理'}」。`;
+      hintEl.style.color = '';
+    }
+    return;
+  }
+
+  nodeGroup.style.display = 'none';
+  if (mode === 'direct') {
+    hintEl.textContent = '该账号将直连，不使用任何代理。';
+    hintEl.style.color = '#F59E0B';
+    return;
+  }
+
+  const useGlobal = useGlobalOverride !== undefined
+    ? useGlobalOverride
+    : document.getElementById(globalToggleId)?.checked;
+  const defaultProxyId = document.getElementById('cfg-default-proxy')?.value
+    || currentConfig?.network?.defaultProxyId
+    || '';
+  const defaultProxy = proxyDrafts.find(proxy => proxy.id === defaultProxyId);
+  hintEl.textContent = useGlobal && defaultProxy
+    ? `${inheritHint}：使用「${defaultProxy.name}」。`
+    : `${inheritHint}：全局默认代理未启用，该账号将直连。`;
+  hintEl.style.color = useGlobal && defaultProxy ? '' : '#F59E0B';
+}
+
+function updateQuickAddProxyControls(preferredProxyId = '') {
+  updateAuxiliaryProxyControls({
+    modeId: 'quick-add-proxy-mode',
+    groupId: 'quick-add-proxy-node-group',
+    nodeId: 'quick-add-proxy-id',
+    hintId: 'quick-add-proxy-hint',
+    preferredProxyId,
+    globalToggleId: 'cfg-use-proxy',
+    useGlobalOverride: currentConfig?.network?.useProxy === true,
+    inheritHint: '跟随全局默认设置'
+  });
+}
+
+function updateGuideProxyControls(preferredProxyId = '') {
+  updateAuxiliaryProxyControls({
+    modeId: 'guide-account-proxy-mode',
+    groupId: 'guide-account-proxy-node-group',
+    nodeId: 'guide-account-proxy-id',
+    hintId: 'guide-account-proxy-hint',
+    preferredProxyId,
+    globalToggleId: 'guide-use-proxy',
+    inheritHint: '跟随全局默认设置'
+  });
+}
+
+function readProxySelection(modeId, nodeId) {
+  const mode = document.getElementById(modeId)?.value || 'inherit';
+  const proxyId = mode === 'proxy' ? (document.getElementById(nodeId)?.value || '') : '';
+  return {
+    mode: ['inherit', 'direct', 'proxy'].includes(mode) ? mode : 'inherit',
+    proxyId
+  };
+}
+
+function describeProxySelection(selection) {
+  if (selection.mode === 'direct') return '直连（不使用代理）';
+  if (selection.mode === 'proxy') {
+    const proxy = proxyDrafts.find(item => item.id === selection.proxyId);
+    return proxy ? `指定代理：${proxy.name}` : '指定代理未选择';
+  }
+  const defaultProxyId = currentConfig?.network?.defaultProxyId || '';
+  const defaultProxy = proxyDrafts.find(item => item.id === defaultProxyId);
+  const enabled = currentConfig?.network?.useProxy && defaultProxy;
+  return enabled ? `跟随全局：${defaultProxy.name}` : '跟随全局：当前为直连';
 }
 
 async function persistProxyDrafts(drafts, defaultProxyId, statusProxyId = '') {
@@ -3761,8 +3950,8 @@ function populateSettingsForm() {
   document.getElementById('cfg-task-keep').checked = c.tasks?.keepRunning !== false;
   const intervalEl = document.getElementById('cfg-search-interval');
   const jitterEl = document.getElementById('cfg-search-jitter');
-  if (intervalEl) intervalEl.value = c.tasks?.searchIntervalSec ?? 180;
-  if (jitterEl) jitterEl.value = c.tasks?.searchJitterSec ?? 30;
+  if (intervalEl) intervalEl.value = c.tasks?.searchIntervalSec ?? 60;
+  if (jitterEl) jitterEl.value = c.tasks?.searchJitterSec ?? 60;
   const stagnantEl = document.getElementById('cfg-search-stagnant');
   if (stagnantEl) stagnantEl.value = Math.min(5, c.tasks?.searchStagnantLimit ?? 5);
   const gapEl = document.getElementById('cfg-account-gap');
@@ -3834,31 +4023,7 @@ function loadAccountIntoForm(accId) {
   const authRes = document.getElementById('cfg-auth-test-result');
   if (authRes) authRes.innerHTML = '';
 
-  // 拟人化错峰时段
-  const slot = acc.timeSlot || { startHour: 9, endHour: 13, randomDelayMin: 60, durationHours: 2 };
-  const sh = slot.startHour ?? 9;
-  const eh = slot.endHour ?? ((sh + 4) % 24);
-  const shInput = document.getElementById('cfg-account-starthour');
-  if (shInput) shInput.value = sh;
-  const ehInput = document.getElementById('cfg-account-endhour');
-  if (ehInput) ehInput.value = `${String(eh).padStart(2, '0')}:00`;
-
-  // 联动高亮 4 个快捷按钮或自定义
-  const standardHours = [9, 13, 17, 21];
-  const customBox = document.getElementById('cfg-custom-slot-box');
-  document.querySelectorAll('#cfg-slot-presets .slot-pill-btn').forEach(b => {
-    const bStart = b.getAttribute('data-start');
-    if (standardHours.includes(sh) && bStart === String(sh)) {
-      b.classList.add('active');
-    } else if (!standardHours.includes(sh) && bStart === 'custom') {
-      b.classList.add('active');
-    } else {
-      b.classList.remove('active');
-    }
-  });
-  if (customBox) {
-    customBox.style.display = standardHours.includes(sh) ? 'none' : 'block';
-  }
+  renderRunHourGrid('cfg-run-hours', acc.runHours || [acc.timeSlot?.startHour || 9]);
 }
 
 async function saveSettingsFromModal() {
@@ -3868,7 +4033,7 @@ async function saveSettingsFromModal() {
     updateEpicActionModal({ progress: 100, badge: { text: '暂不可保存', cls: 'warn' } });
     return;
   }
-  // 搜索节奏必须满足安全下限并落在 3 小时执行窗口内，否则拒绝保存
+  // 搜索节奏必须满足安全下限并落在 40 分钟搜索预算内，否则拒绝保存
   const rhythmError = validateSearchRhythm();
   if (rhythmError) {
     updateSearchRhythmHint();
@@ -3900,20 +4065,15 @@ async function saveSettingsFromModal() {
     updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'warn' } });
     return;
   }
+  const runHours = readRunHours('cfg-run-hours');
+  if (runHours.length === 0) {
+    openEpicActionModal('缺少运行时间', '请至少勾选一个每日运行时间档位。', ['勾选时间档位', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'warn' } });
+    return;
+  }
   const currentAccId = editingAccountIdInModal || 'acc_1';
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
-
-  let sh = 9;
-  const activePreset = document.querySelector('#cfg-slot-presets .slot-pill-btn.active');
-  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '9';
-  if (presetVal === 'custom') {
-    sh = parseInt(document.getElementById('cfg-account-starthour')?.value, 10);
-    if (isNaN(sh)) sh = 9;
-  } else {
-    sh = parseInt(presetVal, 10) || 9;
-  }
-  sh = Math.max(0, Math.min(23, sh));
 
   const updatedAccountData = {
     id: currentAccId,
@@ -3924,12 +4084,8 @@ async function saveSettingsFromModal() {
     authCodeUrl: document.getElementById('cfg-authcode').value.trim(),
     proxyMode: accountProxyMode,
     proxyId: accountProxyId,
-    timeSlot: {
-      startHour: sh,
-      endHour: (sh + 4) % 24,
-      randomDelayMin: 60,
-      durationHours: 2
-    }
+    runHours,
+    timeSlot: buildLegacyTimeSlot(runHours)
   };
   if (document.getElementById('cfg-refresh-token')?.dataset.clear === '1') {
     updatedAccountData.refreshToken = SECRET_CLEAR;
@@ -4015,27 +4171,72 @@ async function saveSettingsFromModal() {
   }
 }
 
-async function saveGuideSettings() {
+async function saveGuideNetworkSettings() {
   const useProxy = document.getElementById('guide-use-proxy').checked;
   const proxyUrl = document.getElementById('guide-proxy-url').value.trim();
   const lockRegion = document.getElementById('guide-lock-region').checked;
+  const proxySelection = readProxySelection('guide-account-proxy-mode', 'guide-account-proxy-id');
+  const result = document.getElementById('guide-proxy-result');
   if (useProxy && !proxyUrl) {
-    openEpicActionModal('缺少代理地址', '已启用网络代理，请填写全局默认代理地址后再保存。', ['填写代理地址', '重新保存'], 0);
+    if (result) result.innerHTML = '<span style="color:#EF4444;">已启用全局代理，请填写代理地址。</span>';
+    return;
+  }
+  if (proxySelection.mode === 'proxy' && !proxySelection.proxyId) {
+    if (result) result.innerHTML = '<span style="color:#EF4444;">当前账号选择了指定代理，请选择可用节点。</span>';
+    return;
+  }
+
+  const button = document.getElementById('guide-btn-save-network');
+  const originalText = button?.innerText || '';
+  if (button) {
+    button.disabled = true;
+    button.innerText = '正在保存网络出口...';
+  }
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ network: { useProxy, proxyUrl, lockRegion } })
+    }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '网络配置保存失败');
+
+    currentConfig = res.data;
+    proxyDrafts = cloneProxyDrafts(currentConfig.network);
+    guideDraftAccount.proxyMode = proxySelection.mode;
+    guideDraftAccount.proxyId = proxySelection.proxyId;
+    guideNetworkConfirmed = true;
+    updateGuideProxyControls(proxySelection.proxyId);
+
+    const routeText = describeProxySelection(proxySelection);
+    const summary = `本次账号会话出口：${routeText}。后续 Cookie 测试与 Token 换取将使用该出口。`;
+    document.getElementById('guide-token-network-summary').textContent = summary;
+    document.getElementById('guide-cookie-network-summary').textContent = summary;
+    if (result) result.innerHTML = `<span style="color:#34D399;">✅ 网络出口已保存：${escapeHtml(routeText)}</span>`;
+    switchStep(2, { force: true });
+  } catch (e) {
+    guideNetworkConfirmed = false;
+    if (result) result.innerHTML = `<span style="color:#EF4444;">保存失败：${escapeHtml(e.message)}</span>`;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.innerText = originalText;
+    }
+  }
+}
+
+async function saveGuideSettings() {
+  if (!guideNetworkConfirmed) {
+    openEpicActionModal('请先确认网络出口', '必须先保存代理策略，才能绑定 Cookie 或 Token。', ['返回网络出口', '重新保存'], 0);
     updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
     return;
   }
 
-  let sh = 9;
-  const activePreset = document.querySelector('#guide-slot-presets .slot-pill-btn.active');
-  const presetVal = activePreset ? activePreset.getAttribute('data-start') : '9';
-  if (presetVal === 'custom') {
-    sh = parseInt(document.getElementById('guide-account-starthour')?.value, 10);
-    if (isNaN(sh)) sh = 9;
-  } else {
-    sh = parseInt(presetVal, 10) || 9;
+  const runHours = readRunHours('guide-run-hours');
+  if (runHours.length === 0) {
+    openEpicActionModal('缺少运行时间', '请至少勾选一个每日运行时间档位。', ['勾选时间档位', '重新保存'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+    return;
   }
-  sh = Math.max(0, Math.min(23, sh));
-  const eh = (sh + 4) % 24;
 
   // 1) 保存账号本身：名称 / 序号 / Cookie / Token / 时段
   //    以前这里只提交 account.timeSlot，会被 update() 写到第一个账号上，
@@ -4058,8 +4259,11 @@ async function saveGuideSettings() {
         refreshToken: guideDraftAccount.refreshToken,
         accessToken: guideDraftAccount.accessToken,
         tokenTime: guideDraftAccount.tokenTime,
+        proxyMode: guideDraftAccount.proxyMode || 'inherit',
+        proxyId: guideDraftAccount.proxyId || '',
+        runHours,
         tokenAlreadyExchanged: !!(guideDraftAccount.refreshToken && guideDraftAccount.accessToken),
-        timeSlot: { startHour: sh, endHour: eh, randomDelayMin: 60, durationHours: 2 }
+        timeSlot: buildLegacyTimeSlot(runHours)
       })
     }).then(r => r.json());
     if (!accRes.success || !accRes.data?.id) {
@@ -4067,21 +4271,7 @@ async function saveGuideSettings() {
     }
     selectedAccountId = accRes.data.id;
   } catch (e) {
-    openEpicActionModal('向导保存失败', e.message, ['保存账号资料', '写入网络配置'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, result: `保存失败：${e.message}` });
-    return;
-  }
-
-  // 2) 保存网络与代理设置
-  try {
-    const netRes = await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ network: { useProxy, proxyUrl, lockRegion } })
-    }).then(r => r.json());
-    if (!netRes.success) throw new Error(netRes.message || '网络配置保存失败');
-  } catch (e) {
-    openEpicActionModal('向导保存失败', e.message, ['保存账号资料', '写入网络配置'], 1);
+    openEpicActionModal('向导保存失败', e.message, ['保存账号资料', '校验网络出口'], 0);
     updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, result: `保存失败：${e.message}` });
     return;
   }

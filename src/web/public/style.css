@@ -2840,6 +2840,48 @@ body.mouse-follow-enabled .glass-surface::before {
   box-shadow: 0 3px 10px rgba(0, 120, 212, 0.35);
 }
 
+.run-hour-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.run-hour-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 6px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-inner);
+  color: var(--text-sub);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+
+.run-hour-option:hover {
+  border-color: rgba(56, 189, 248, 0.32);
+  color: var(--text-main);
+}
+
+.run-hour-option:has(input:checked) {
+  border-color: rgba(56, 189, 248, 0.52);
+  background: rgba(2, 132, 199, 0.16);
+  color: var(--accent);
+}
+
+.run-hour-option input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
 /* Bottom Grid: Timeline + Terminal */
 .bottom-grid {
   display: grid;
@@ -3371,6 +3413,21 @@ body.mouse-follow-enabled .glass-surface::before {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--card-inner);
+}
+
+.guide-network-summary {
+  margin-bottom: 14px;
+  padding: 9px 11px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 8px;
+  background: rgba(2, 132, 199, 0.08);
+  color: var(--text-sub);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.guide-network-summary:empty {
+  display: none;
 }
 
 .proxy-section-head {
@@ -4178,6 +4235,7 @@ body.mouse-follow-enabled .glass-surface::before {
   .proxy-card-fields,
   .proxy-policy-panel,
   .form-grid-2 { grid-template-columns: 1fr; }
+  .run-hour-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (max-width: 480px) {
@@ -4190,6 +4248,7 @@ body.mouse-follow-enabled .glass-surface::before {
   .proxy-section-head .btn { align-self: flex-start; }
   .proxy-card { padding: 10px; }
   .proxy-card-actions .btn { flex: 1 1 auto; }
+  .run-hour-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .badge-version { font-size: 10px; padding: 1px 6px; }
   
   .header-actions { gap: 5px; }

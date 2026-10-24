@@ -6,8 +6,16 @@ import logger from './logger.js';
 import taskManager from './core/taskManager.js';
 import epicManager from './core/epic.js';
 import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
+import {
+  MAX_START_DELAY_MINUTES,
+  RUN_HOURS,
+  RUN_WINDOW_MINUTES,
+  normalizeRunHours,
+  selectRunHour
+} from './core/scheduleWindow.js';
 
 const PLAN_FILE = path.join(DATA_DIR, 'schedule_plan.json');
+const PLAN_VERSION = 2;
 
 class Scheduler {
   constructor() {
@@ -81,35 +89,31 @@ class Scheduler {
     const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
     for (let i = 0; i < accounts.length; i++) {
       const acc = accounts[i];
-      if (plans[acc.id]) continue;
-
-      const slot = acc.timeSlot || configManager.getDefaultTimeSlot(i);
-      const startHour = slot.startHour ?? 9;
-      const endHour = slot.endHour ?? ((startHour + 4) % 24);
-      const startMin = startHour * 60;
-      const endMin = endHour * 60;
-      // 支持跨零点窗口（例如 22:00 - 02:00）
-      const wraps = endMin <= startMin;
-      const windowLength = wraps ? (1440 - startMin + endMin) : (endMin - startMin);
-
-      // 窗口内随机偏移 0 ~ randomDelayMin 分钟
-      const maxDelay = Math.max(1, Math.min(59, slot.randomDelayMin || 60));
-      let offset = Math.floor(Math.random() * maxDelay);
-
-      if (isToday) {
-        // 容器在窗口中途启动时不要立刻开跑，仍然随机延后 1~20 分钟（保持拟人化）
-        const nowOffset = this.minutesIntoWindow(startMin, wraps, nowMin);
-        if (nowOffset >= offset && nowOffset < windowLength) {
-          offset = Math.min(windowLength - 1, nowOffset + 1 + Math.floor(Math.random() * 20));
-        }
+      const existingPlan = plans[acc.id];
+      if (existingPlan?.version === PLAN_VERSION) continue;
+      if (existingPlan?.executed === true) {
+        existingPlan.version = PLAN_VERSION;
+        continue;
       }
+      if (existingPlan) delete plans[acc.id];
+
+      const runHours = normalizeRunHours(acc.runHours, configManager.getDefaultRunHours(i));
+      const selected = selectRunHour(runHours, { isToday, nowMin });
+      const startMin = selected.hour * 60;
+      const endMin = startMin + RUN_WINDOW_MINUTES;
+      const offset = selected.expired
+        ? 0
+        : Math.floor(Math.random() * (MAX_START_DELAY_MINUTES + 1));
 
       plans[acc.id] = {
+        version: PLAN_VERSION,
+        runHour: selected.hour,
         startMin,
         endMin,
-        wraps,
-        windowLength,
+        wraps: false,
+        windowLength: RUN_WINDOW_MINUTES,
         offset,
+        expired: selected.expired,
         executed: false
       };
     }
@@ -165,15 +169,14 @@ class Scheduler {
     const result = {};
 
     configManager.getAccounts().forEach((acc, index) => {
-      const slot = acc.timeSlot || configManager.getDefaultTimeSlot(index);
-      const startHour = slot.startHour ?? 9;
-      const endHour = slot.endHour ?? ((startHour + 4) % 24);
+      const runHours = normalizeRunHours(acc.runHours, configManager.getDefaultRunHours(index));
+      const firstRunHour = runHours[0];
       const info = {
         status: 'unknown',
         minutesUntil: null,
         nextRunAt: null,
-        windowStart: fmt(startHour * 60),
-        windowEnd: fmt(endHour * 60)
+        windowStart: fmt(firstRunHour * 60),
+        windowEnd: fmt((firstRunHour + 1) * 60)
       };
 
       if (acc.enabled === false) {
@@ -187,10 +190,8 @@ class Scheduler {
         const tomorrowPlan = tomorrowPlans[acc.id];
         let nextAt = null;
 
-        if (todayPlan && !todayPlan.executed) {
-          // 跨零点窗口处于凌晨尾部时，窗口起点在昨天
-          const baseDayOffset = (todayPlan.wraps && nowMin < todayPlan.endMin) ? -1 : 0;
-          const plannedAt = this.planTimestamp(today, todayPlan, baseDayOffset);
+        if (todayPlan && !todayPlan.executed && !todayPlan.expired) {
+          const plannedAt = this.planTimestamp(today, todayPlan, 0);
           if (plannedAt > now.getTime()) {
             nextAt = plannedAt;
           } else {
@@ -201,6 +202,12 @@ class Scheduler {
         }
         if (nextAt === null && tomorrowPlan) {
           nextAt = this.planTimestamp(tomorrow, tomorrowPlan, 0);
+        }
+
+        const displayPlan = (todayPlan && !todayPlan.expired) ? todayPlan : tomorrowPlan;
+        if (displayPlan) {
+          info.windowStart = fmt(displayPlan.startMin);
+          info.windowEnd = fmt(displayPlan.endMin);
         }
 
         if (nextAt !== null) {
@@ -241,7 +248,7 @@ class Scheduler {
         if (!acc.cookie && !acc.refreshToken) continue;
 
         const plan = todayPlans[acc.id];
-        if (!plan || plan.executed) continue;
+        if (!plan || plan.executed || plan.expired) continue;
 
         // 距离窗口起点的分钟数（跨零点窗口也能正确计算）
         const nowOffset = this.minutesIntoWindow(plan.startMin, plan.wraps, nowMin);
@@ -251,7 +258,7 @@ class Scheduler {
           plan.executed = true;
           this.savePlans();
           const fmt = (m) => `${String(Math.floor((m % 1440) / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-          logger.log('⏰', `到达账号 [${acc.name}] 拟人作息窗口 (${fmt(plan.startMin)} - ${fmt(plan.endMin)}，今日随机命中 ${fmt(plan.startMin + plan.offset)})，启动打卡...`, '', acc.name);
+          logger.log('⏰', `到达账号 [${acc.name}] 小时窗口 (${fmt(plan.startMin)} - ${fmt(plan.endMin)}，今日随机命中 ${fmt(plan.startMin + plan.offset)})，启动打卡...`, '', acc.name);
           try {
             await taskManager.runAll(false, acc.id);
           } catch (e) {
@@ -262,7 +269,7 @@ class Scheduler {
       }
     });
 
-    logger.log('🟢', `后台时段拟人调度引擎已就绪 (9-13 / 13-17 / 17-21 / 21-次日01 时段错峰 + 60分钟随机浮动)`);
+    logger.log('🟢', `后台小时窗口调度引擎已就绪 (${RUN_HOURS[0]}:00-${RUN_HOURS[RUN_HOURS.length - 1] + 1}:00，共 ${RUN_HOURS.length} 个一小时档位，每档 0-${MAX_START_DELAY_MINUTES} 分钟随机启动)`);
     this.startEpicJob();
   }
 
