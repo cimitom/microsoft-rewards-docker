@@ -2301,7 +2301,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.5';
+  const current = updateInfo?.currentVersion || '1.8.6';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2356,8 +2356,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.5'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.5'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.6'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.6'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -2612,7 +2612,7 @@ function renderDashboard(data) {
   }
   if (statStampsDesc) {
     if (isAllMode) {
-      statStampsDesc.innerText = '各账号印章进度，账号较多时可滚动查看';
+      statStampsDesc.innerText = `全部 ${accountCount} 个账号印章进度`;
     } else {
       const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 0));
       statStampsDesc.innerText = diff > 0 ? `差 ${diff} 个集满 1,000 分大奖` : '1,000 奖励印章已集满！';
@@ -3621,6 +3621,42 @@ function setGlobalProxyEnabled(enabled) {
   if (proxy) proxy.checked = enabled;
 }
 
+function getProxyAssignedAccounts(proxyId) {
+  if (!proxyId) return [];
+  const network = currentConfig?.network || {};
+  return (currentConfig?.accounts || []).flatMap(account => {
+    if (account.proxyMode === 'proxy' && account.proxyId === proxyId) {
+      return [{ name: account.name || account.id, mode: '指定' }];
+    }
+    if (
+      account.proxyMode === 'inherit'
+      && network.useProxy === true
+      && network.defaultProxyId === proxyId
+    ) {
+      return [{ name: account.name || account.id, mode: '跟随全局' }];
+    }
+    return [];
+  });
+}
+
+function renderProxyAssignedAccounts(proxyId) {
+  const assigned = getProxyAssignedAccounts(proxyId);
+  const chips = assigned.length > 0
+    ? assigned.map(account => `
+      <span class="proxy-assignment-chip" title="${escapeHtml(account.name)} · ${escapeHtml(account.mode)}">
+        <span>${escapeHtml(account.name)}</span>
+        <small>${escapeHtml(account.mode)}</small>
+      </span>
+    `).join('')
+    : '<span class="proxy-assignment-empty">暂无账号使用</span>';
+  return `
+    <div class="proxy-card-assignments">
+      <span class="proxy-assignments-label">当前分配账号</span>
+      <div class="proxy-assignment-list">${chips}</div>
+    </div>
+  `;
+}
+
 function renderProxyCards(defaultProxyId = '') {
   const list = document.getElementById('proxy-list');
   if (!list) return;
@@ -3646,6 +3682,7 @@ function renderProxyCards(defaultProxyId = '') {
             value="${escapeHtml(proxy.url)}" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
         </div>
       </div>
+      ${renderProxyAssignedAccounts(proxy.id)}
       <div class="proxy-card-actions">
         <button type="button" class="btn btn-secondary btn-sm" data-proxy-action="test">测试</button>
         <button type="button" class="btn btn-primary btn-sm" data-proxy-action="save">保存</button>

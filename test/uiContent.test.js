@@ -66,10 +66,13 @@ test('鼠标只驱动边框高光角度，不再生成跟随光斑', () => {
   assert.match(styleCss, /conic-gradient\([\s\S]*--pointer-angle/);
 });
 
-test('账号汇总使用可滚动迷你印章并优化任务卡与统计块排版', () => {
+test('账号汇总完整展开迷你印章并优化任务卡与统计块排版', () => {
   assert.match(indexHtml, /id="stamps-account-list"/);
   assert.match(appJs, /renderAccountStampsList/);
-  assert.match(styleCss, /\.stamps-account-list[\s\S]*overflow-y: auto/);
+  const stampsBlock = styleCss.match(/\.stamps-account-list\s*\{([\s\S]*?)\}/)?.[1] || '';
+  assert.match(stampsBlock, /max-height:\s*none/);
+  assert.match(stampsBlock, /overflow:\s*visible/);
+  assert.doesNotMatch(stampsBlock, /overflow-y:\s*auto/);
   assert.match(styleCss, /\.task-card-featured[\s\S]*min-height: 0/);
   assert.match(styleCss, /\.acc-stat-box[\s\S]*border-radius: 10px/);
 });

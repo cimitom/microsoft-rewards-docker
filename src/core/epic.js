@@ -1173,7 +1173,7 @@ export class EpicManager {
     try {
       games = await this.fetchFreeGamesFromApi();
     } catch (e) {
-      logger.log('🟡', `Epic 免费游戏接口异常（演示模式继续）: ${e.message}`);
+      logger.log('🟡', `Epic 免费游戏接口异常，本轮跳过: ${e.message}`);
     }
     return games;
   }
@@ -1186,7 +1186,10 @@ export class EpicManager {
     const res = await networkClient.request({
       url: FREE_GAMES_API,
       headers,
-      timeout: 20000
+      timeout: 20000,
+      // 免费游戏列表是全局数据，不得继承最后一个微软账号的代理上下文。
+      // 这里仍会遵循配置中心的全局网络策略。
+      ignoreAccountProxy: true
     });
     const data = typeof res === 'string' ? JSON.parse(res) : res;
     const elements = data?.data?.Catalog?.searchStore?.elements || [];

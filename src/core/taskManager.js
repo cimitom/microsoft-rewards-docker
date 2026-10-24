@@ -1826,14 +1826,14 @@ export class TaskManager {
 
     if (!this.running || this.isAccountPaused(accountId)) return;
 
-    // 5. 连签检测与额外积分检测
+    // 5. 连签检测与额外积分领取
     //    视觉搜索补签只在任务执行期尝试（每账号每天一次），读取进度的同步流程不再触发
     const streakInfo = await rewardsApi.checkStreak({ allowVisualSearchCheckIn: true });
     if (streakInfo?.streakDays) {
       accStats.streakDays = streakInfo.streakDays;
       logger.log('🔥', `连续打卡记录: ${accStats.streakDays} 天`, accountName);
     }
-    await rewardsApi.checkClaimablePoints();
+    await this.claimExtraPointsAfterTasks(acc, accStats);
 
     // 6. 结算单账号总积分
     // 余额与「今日已增」都以官网为准：这里再取一次，把本轮新做的部分算进去
@@ -1845,11 +1845,54 @@ export class TaskManager {
       const endBalance = await rewardsApi.getBalance();
       if (endBalance !== null) accStats.balance = endBalance;
     }
+    if (finalInfo?.claimablePoints !== undefined) {
+      accStats.claimablePoints = Number(finalInfo.claimablePoints || 0);
+    }
     this.applyEarned(accStats, finalInfo?.todayPoints);
     accStats.lastUpdate = Date.now();
     this.saveStats();
 
     logger.log('✅', `账号 [${accountName}] 任务完成！今日新增: +${accStats.earned} | 当前余额: ${accStats.balance}`, accountName);
+  }
+
+  /**
+   * 单个账号完成全部任务后，立即检查并领取 Dashboard 额外积分。
+   * 此方法运行在 task-run 上下文锁内，不能调用会重复抢锁的 Web API 方法。
+   */
+  async claimExtraPointsAfterTasks(acc, accStats) {
+    if (!acc?.id || !accStats) return { pending: 0, claimed: 0 };
+    const accountName = acc.name || acc.id;
+    const currentPending = Math.max(0, Number(accStats.claimablePoints || 0));
+    logger.log('🎁', '任务执行完毕，正在检查额外积分...', '', accountName);
+
+    const latest = await rewardsApi.checkClaimablePoints({ logFound: false });
+    const latestNumber = latest === null || latest === undefined || latest === '' ? NaN : Number(latest);
+    const pending = Number.isFinite(latestNumber) ? Math.max(0, latestNumber) : currentPending;
+    accStats.claimablePoints = pending;
+    if (pending <= 0) {
+      logger.log('✅', '当前没有待领取的额外积分', '', accountName);
+      this.saveStats();
+      return { pending: 0, claimed: 0 };
+    }
+
+    logger.log('🎁', `发现 ${pending} 点额外积分，正在自动领取...`, '', accountName);
+    let claimed = 0;
+    try {
+      claimed = Number(await browserManager.claimDashboardPoints(acc) || 0);
+    } catch (e) {
+      logger.log('🟡', `额外积分自动领取异常: ${e.message}`, '', accountName);
+    }
+
+    if (claimed > 0) {
+      accStats.claimablePoints = Math.max(0, pending - claimed);
+      logger.log('🎉', `额外积分领取成功 +${claimed} 分`, '', accountName);
+      logger.addTimeline(accountName, `领取额外积分 +${claimed}`);
+    } else {
+      accStats.claimablePoints = pending;
+      logger.log('🟡', `额外积分自动领取未确认，保留 ${pending} 点待领取状态`, '', accountName);
+    }
+    this.saveStats();
+    return { pending, claimed };
   }
 
   async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, onProgress = null, options = {}) {

@@ -1474,14 +1474,10 @@ body.mouse-follow-enabled .glass-surface::before {
   align-items: center;
   gap: 8px;
   padding: 2px 0;
-  flex-wrap: nowrap !important;
-  overflow-x: auto;
-  scrollbar-width: none;
+  flex-wrap: wrap;
+  overflow-x: visible;
   flex: 1 1 auto;
   min-width: 0;
-}
-.account-selector-bar::-webkit-scrollbar {
-  display: none;
 }
 
 .account-chip {
@@ -1572,8 +1568,9 @@ body.mouse-follow-enabled .glass-surface::before {
 /* Accounts Overview Grid in All Mode */
 .accounts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
   gap: 14px;
+  align-items: start;
 }
 
 .account-overview-card {
@@ -1904,33 +1901,22 @@ body.mouse-follow-enabled .glass-surface::before {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  max-height: 128px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   margin-top: 5px;
   padding: 4px 5px;
   background: rgba(0, 0, 0, 0.11);
   border: 1px solid var(--glass-border-soft);
   border-radius: 10px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
 }
 
 .hero-account-breakdown[hidden] {
   display: none;
 }
 
-.hero-account-breakdown::-webkit-scrollbar {
-  width: 4px;
-}
-
-.hero-account-breakdown::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.35);
-  border-radius: 999px;
-}
-
 .hero-account-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
   min-height: 24px;
@@ -1944,9 +1930,8 @@ body.mouse-follow-enabled .glass-surface::before {
 
 .hero-account-name {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   color: var(--text-sub);
 }
 
@@ -2076,36 +2061,25 @@ body.mouse-follow-enabled .glass-surface::before {
   transform: scale(1.15);
 }
 
-/* 账号汇总模式：每个账号一行迷你印章，账号多时在卡片内滚动 */
+/* 账号汇总模式：每个账号一行迷你印章，全部展开 */
 .stamps-account-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 128px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   margin: 7px 0 3px;
   padding: 5px 6px;
   background: rgba(0, 0, 0, 0.12);
   border: 1px solid var(--glass-border-soft);
   border-radius: 13px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(245, 158, 11, 0.45) transparent;
 }
 
 .stamps-account-list[hidden],
 .stamps-grid-track[hidden],
 .stamps-mini-bar[hidden] {
   display: none;
-}
-
-.stamps-account-list::-webkit-scrollbar {
-  width: 4px;
-}
-
-.stamps-account-list::-webkit-scrollbar-thumb {
-  background: rgba(245, 158, 11, 0.45);
-  border-radius: 999px;
 }
 
 .stamp-account-row {
@@ -2127,9 +2101,8 @@ body.mouse-follow-enabled .glass-surface::before {
 
 .stamp-account-name {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   color: var(--text-sub);
   font-size: 10.5px;
   font-weight: 600;
@@ -2251,9 +2224,9 @@ body.mouse-follow-enabled .glass-surface::before {
 .hero-desc {
   font-size: 12px;
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.45;
   margin-top: auto;
 }
 
@@ -3557,6 +3530,58 @@ body.mouse-follow-enabled .glass-surface::before {
   font-size: 10.5px;
 }
 
+.proxy-card-assignments {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--glass-border-soft);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.proxy-assignments-label {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.proxy-assignment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.proxy-assignment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.08);
+  color: var(--text-main);
+  font-size: 10.5px;
+}
+
+.proxy-assignment-chip > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.proxy-assignment-chip small {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 9.5px;
+}
+
+.proxy-assignment-empty {
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
 .proxy-card-actions {
   display: flex;
   flex-wrap: wrap;
@@ -4223,8 +4248,7 @@ body.mouse-follow-enabled .glass-surface::before {
   .header-actions { gap: 5px !important; }
   .header-actions .btn { font-size: 11px !important; padding: 6px 9px !important; border-radius: 8px !important; }
 
-  /* 窄屏改回单行横滑，避免账号多时占满整屏高度 */
-  .account-selector-bar { width: 100% !important; padding-bottom: 2px !important; flex-wrap: nowrap !important; overflow-x: auto !important; }
+  .account-selector-bar { width: 100% !important; padding-bottom: 2px !important; flex-wrap: wrap !important; overflow-x: visible !important; }
   .account-chip { font-size: 11.5px !important; padding: 6px 11px !important; }
 
   .sys-metrics-pill { font-size: 10px !important; padding: 4px 8px !important; gap: 5px !important; }
@@ -4308,7 +4332,7 @@ body.mouse-follow-enabled .glass-surface::before {
   .header { padding: 14px 16px; border-radius: 16px; gap: 10px; }
   .header-top-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
   .header-right-group { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-  .account-selector-bar { flex-wrap: nowrap; overflow-x: auto; }
+  .account-selector-bar { flex-wrap: wrap; overflow-x: visible; }
   .hero-grid { grid-template-columns: repeat(2, 1fr); }
   .task-grid { grid-template-columns: 1fr; }
   .browser-metric-row { grid-template-columns: repeat(2, 1fr); }
@@ -4335,7 +4359,7 @@ body.mouse-follow-enabled .glass-surface::before {
   .header-actions { gap: 5px; }
   .header-actions .btn { font-size: 11px; padding: 6px 9px; border-radius: 8px; }
 
-  .account-selector-bar { width: 100%; padding-bottom: 2px; flex-wrap: nowrap; overflow-x: auto; }
+  .account-selector-bar { width: 100%; padding-bottom: 2px; flex-wrap: wrap; overflow-x: visible; }
   .account-chip { font-size: 11.5px; padding: 6px 11px; }
 
   .sys-metrics-pill { font-size: 10px; padding: 4px 8px; gap: 5px; }

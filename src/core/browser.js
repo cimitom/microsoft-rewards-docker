@@ -31,7 +31,7 @@ import {
   buildUserAgentMetadata
 } from './fingerprint.js';
 import { findChromiumExecutable } from './chromiumExecutable.js';
-import { toBrowserProxy } from './proxy.js';
+import { prepareBrowserProxy } from './localProxyBridge.js';
 
 export function classifyBingLoginState(signals = {}) {
   const userName = [signals.idN, signals.idA, signals.idName]
@@ -60,6 +60,7 @@ class BrowserManager extends EventEmitter {
     this.closeTimeoutMs = Math.max(10, Number(process.env.BROWSER_CLOSE_TIMEOUT_MS) || 15000);
     // 当前绑定的账号（会话持久化需要它来定位文件与校验凭据指纹）
     this.sessionAccount = null;
+    this.proxyBridge = null;
     this.state = {
       status: 'idle', // 'idle' | 'starting' | 'navigating' | 'typing' | 'dwelling' | 'waiting' | 'stopped'
       activeAccountId: null,
@@ -175,7 +176,12 @@ class BrowserManager extends EventEmitter {
       const stored = readBrowserSession(acc);
       const storageState = stored?.storageState || null;
       const accountProxy = configManager.getEffectiveProxy(acc);
-      const browserProxy = accountProxy?.url ? toBrowserProxy(accountProxy.url) : null;
+      const proxyBridge = await prepareBrowserProxy(accountProxy?.url || '');
+      this.proxyBridge = proxyBridge;
+      const browserProxy = proxyBridge?.proxy || null;
+      if (proxyBridge?.bridged) {
+        logger.log('🌐', '已启用 SOCKS5 认证兼容桥接（仅监听 127.0.0.1）', '', acc?.name);
+      }
       if (stored?.stale) {
         logger.log('🟡', `已丢弃该账号的旧浏览器会话（${stored.reason}），本次使用全新会话`, '', acc?.name);
       } else if (storageState) {
@@ -240,11 +246,14 @@ class BrowserManager extends EventEmitter {
       this.sessionAccount = acc || null;
       return { browser, context };
     } catch (e) {
+      const proxyBridge = this.proxyBridge;
+      this.proxyBridge = null;
       // 启动过程中失败也必须把锁还回去，否则后续所有浏览器任务都会被卡住
       try {
         if (browser) {
           await withTimeout(Promise.resolve().then(() => browser.close()), this.closeTimeoutMs, '浏览器启动失败后的清理超时').catch(() => {});
         }
+        await proxyBridge?.close().catch(() => {});
       } finally {
         this.releaseBrowserSlot();
       }
@@ -313,6 +322,8 @@ class BrowserManager extends EventEmitter {
   }
 
   async closeBrowser() {
+    const proxyBridge = this.proxyBridge;
+    this.proxyBridge = null;
     try {
       if (this.context) {
         await withTimeout(Promise.resolve().then(() => this.context.close()), this.closeTimeoutMs, '关闭浏览器上下文超时').catch(() => {});
@@ -328,6 +339,7 @@ class BrowserManager extends EventEmitter {
       this.cdpSessions = [];
       this.sessionAccount = null;
     } finally {
+      await proxyBridge?.close().catch(() => {});
       this.releaseBrowserSlot();
       this.updateState({
         status: 'idle',

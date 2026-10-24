@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msr-fixes-175-'));
+process.env.MSR_DATA_DIR = tmpDir;
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const APP_SOURCE = fs.readFileSync(path.join(ROOT, 'src/web/public/app.js'), 'utf-8');
@@ -9,6 +13,8 @@ const { default: rewardsApi } = await import('../src/core/api.js');
 const { default: configManager } = await import('../src/config.js');
 const { TaskManager } = await import('../src/core/taskManager.js');
 const { isQuestSubtaskCompleted } = await import('../src/core/questStatus.js');
+
+test.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 test('新建 Epic 账号时“打开可见浏览器登录”不会因按钮禁用而无响应', () => {
   assert.match(

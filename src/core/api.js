@@ -1626,7 +1626,7 @@ export class RewardsApi {
   /**
    * 检测 Dashboard 额外积分
    */
-  async checkClaimablePoints() {
+  async checkClaimablePoints({ logFound = true } = {}) {
     try {
       const html = await networkClient.request({
         url: 'https://rewards.bing.com/dashboard',
@@ -1635,11 +1635,15 @@ export class RewardsApi {
       const claimableMatch = String(html).match(/alt="可领取"[^>]*>[\s\S]*?(\d[\d,]*)/i);
       if (claimableMatch) {
         const amount = parseInt(claimableMatch[1].replace(/,/g, '')) || 0;
-        if (amount > 0) {
+        if (amount > 0 && logFound) {
           logger.log('🎁', `发现 ${amount} 点额外积分待手动确认领奖`);
         }
+        return amount;
       }
-    } catch {}
+      return 0;
+    } catch {
+      return null;
+    }
   }
 }
 

@@ -220,10 +220,14 @@ class NetworkClient {
     }
     if (options.useProxy === false) return '';
 
-    const ctx = this.activeProxyContext;
-    if (ctx) {
-      if (ctx.mode === 'direct' || ctx.missing) return '';
-      if (ctx.mode === 'proxy') return ctx.proxyUrl || '';
+    // Epic 等全局接口不属于当前微软账号，必须显式忽略账号级代理上下文，
+    // 否则上一个账号的代理会残留在后续无关请求中。
+    if (options.ignoreAccountProxy !== true) {
+      const ctx = this.activeProxyContext;
+      if (ctx) {
+        if (ctx.mode === 'direct' || ctx.missing) return '';
+        if (ctx.mode === 'proxy') return ctx.proxyUrl || '';
+      }
     }
 
     const network = configManager.get().network || {};
@@ -259,10 +263,11 @@ class NetworkClient {
       cookieOverride = null,
       responseType = 'text',
       proxyUrl,
-      useProxy
+      useProxy,
+      ignoreAccountProxy = false
     } = options;
 
-    const agent = this.getAgent({ proxyUrl, useProxy });
+    const agent = this.getAgent({ proxyUrl, useProxy, ignoreAccountProxy });
     const finalHeaders = { ...headers };
     if (finalHeaders.cookie !== undefined) {
       finalHeaders.cookie = normalizeCookieString(String(finalHeaders.cookie));
