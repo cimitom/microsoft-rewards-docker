@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.8.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.8.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -209,8 +209,14 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🌍 **向导代理检测与全局直连策略 (v1.8.5)**：
+  - **向导检测使用真实选中节点**：选择“指定已有代理”后，出口 IP 检测会使用该节点的 URL，不再误测本机出口；
+  - **全局网络策略二选一**：配置中心支持“直连（容器默认网络）”或“启用全局默认代理”；
+  - **直连保存语义明确**：选择直连后保存 `useProxy=false`，跟随全局的账号会直接使用容器默认网络；
+  - **全局出口测试同步策略**：直连模式测试本机出口，代理模式测试选中的全局默认节点；
+  - **回归测试 181 项全部通过**。
 - 🎛️ **配置交互与运行档位占用提示 (v1.8.4)**：
-  - **保存不再关闭窗口**：全局配置保存成功后在底部显示即时提示，可继续修改其他设置；
+  - **保存不再关闭窗口**：全局配置保存成功后先在底部显示即时提示，可继续修改其他设置；
   - **档位占用可视化**：已被其他账号勾选的运行档位标黄，鼠标悬停显示占用账号名称；
   - **代理默认直连**：新账号及未显式配置代理策略的旧账号默认使用直连，需要代理时再主动选择；
   - **保存状态反馈**：校验失败、保存中、保存成功均在配置窗口内直接显示；

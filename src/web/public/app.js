@@ -1001,6 +1001,9 @@ function initUIEvents() {
   document.getElementById('cfg-use-proxy')?.addEventListener('change', () => {
     updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
   });
+  document.getElementById('cfg-global-direct')?.addEventListener('change', () => {
+    updateAccountProxyControls(document.getElementById('cfg-account-proxy-id')?.value || '');
+  });
   document.getElementById('cfg-default-proxy')?.addEventListener('change', (e) => {
     const selectedId = e.target.value;
     document.querySelectorAll('#proxy-list .proxy-card').forEach(card => {
@@ -1132,21 +1135,24 @@ function initUIEvents() {
 
   // 向导测试代理与 IP
   document.getElementById('guide-btn-test-proxy').addEventListener('click', async () => {
-    const useProxy = document.getElementById('guide-use-proxy').checked;
-    const proxyUrl = document.getElementById('guide-proxy-url').value.trim();
+    const target = resolveGuideProxyTestTarget();
     const resultDiv = document.getElementById('guide-proxy-result');
-    resultDiv.innerHTML = '<span style="color:#38BDF8;">⏳ 正在检测网络连通性与出口归属...</span>';
+    if (target.error) {
+      resultDiv.innerHTML = `<span style="color:#EF4444;">${escapeHtml(target.error)}</span>`;
+      return;
+    }
+    resultDiv.innerHTML = `<span style="color:#38BDF8;">⏳ 正在检测 ${escapeHtml(target.label)} 的出口 IP 与归属地...</span>`;
     try {
       const res = await fetch('/api/proxy/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ useProxy, proxyUrl })
+        body: JSON.stringify({ useProxy: target.useProxy, proxyUrl: target.proxyUrl })
       }).then(r => r.json());
       if (res.success) {
         if (res.regionPass) {
-          resultDiv.innerHTML = `<span style="color:#34D399;">✅ 地区检测通过！当前出口位于：中国大陆 (${escapeHtml(res.region)})<br>${escapeHtml(res.ipInfo)}</span>`;
+          resultDiv.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(target.label)} 检测通过，当前出口位于中国大陆 (${escapeHtml(res.region)})<br>${escapeHtml(res.ipInfo)}</span>`;
         } else {
-          resultDiv.innerHTML = `<span style="color:#F59E0B;">⚠️ 警告：当前出口为非大陆地区 (${escapeHtml(res.region)})！若开启国区保护任务将被自动暂停。<br>${escapeHtml(res.ipInfo)}</span>`;
+          resultDiv.innerHTML = `<span style="color:#F59E0B;">⚠️ ${escapeHtml(target.label)} 当前出口为非大陆地区 (${escapeHtml(res.region)})！若开启国区保护任务将被自动暂停。<br>${escapeHtml(res.ipInfo)}</span>`;
         }
       } else {
         resultDiv.innerHTML = `<span style="color:#EF4444;">❌ 测试失败: ${escapeHtml(res.message)}</span>`;
@@ -1352,7 +1358,7 @@ function initUIEvents() {
     const drafts = collectProxyDraftsFromDom();
     const proxyId = getDefaultProxyId();
     const proxy = drafts.find(item => item.id === proxyId);
-    const useProxy = document.getElementById('cfg-use-proxy').checked;
+    const useProxy = isGlobalProxyEnabled();
     const resultDiv = document.getElementById('test-default-proxy-result');
     if (useProxy && !proxy?.url) {
       resultDiv.innerHTML = '<span style="color:#F59E0B;">请先添加并选择一个全局默认代理。</span>';
@@ -2295,7 +2301,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.4';
+  const current = updateInfo?.currentVersion || '1.8.5';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2350,8 +2356,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.4'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.4'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.5'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.5'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -3604,6 +3610,17 @@ function getDefaultProxyId() {
   return currentConfig?.network?.defaultProxyId || '';
 }
 
+function isGlobalProxyEnabled() {
+  return document.getElementById('cfg-use-proxy')?.checked === true;
+}
+
+function setGlobalProxyEnabled(enabled) {
+  const direct = document.getElementById('cfg-global-direct');
+  const proxy = document.getElementById('cfg-use-proxy');
+  if (direct) direct.checked = !enabled;
+  if (proxy) proxy.checked = enabled;
+}
+
 function renderProxyCards(defaultProxyId = '') {
   const list = document.getElementById('proxy-list');
   if (!list) return;
@@ -3705,7 +3722,7 @@ function updateAccountProxyControls(preferredProxyId = null) {
     return;
   }
 
-  const useGlobal = document.getElementById('cfg-use-proxy')?.checked;
+  const useGlobal = isGlobalProxyEnabled();
   const defaultProxy = proxyDrafts.find(proxy => proxy.id === getDefaultProxyId());
   if (useGlobal && defaultProxy) {
     hintEl.textContent = `跟随全局：使用「${defaultProxy.name}」作为该账号出口。`;
@@ -3808,6 +3825,21 @@ function readProxySelection(modeId, nodeId) {
   };
 }
 
+function resolveGuideProxyTestTarget() {
+  const selection = readProxySelection('guide-account-proxy-mode', 'guide-account-proxy-id');
+  if (selection.mode === 'proxy') {
+    const proxy = proxyDrafts.find(item => item.id === selection.proxyId);
+    if (!proxy?.url) return { error: '请选择有效的代理节点' };
+    return { useProxy: true, proxyUrl: proxy.url, label: `指定代理：${proxy.name}` };
+  }
+  if (selection.mode === 'inherit' && document.getElementById('guide-use-proxy')?.checked) {
+    const proxyUrl = document.getElementById('guide-proxy-url')?.value.trim() || '';
+    if (!proxyUrl) return { error: '已选择跟随全局代理，请填写全局默认代理地址' };
+    return { useProxy: true, proxyUrl, label: '跟随全局默认代理' };
+  }
+  return { useProxy: false, proxyUrl: '', label: '直连（容器默认网络）' };
+}
+
 function describeProxySelection(selection) {
   if (selection.mode === 'direct') return '直连（不使用代理）';
   if (selection.mode === 'proxy') {
@@ -3827,7 +3859,7 @@ async function persistProxyDrafts(drafts, defaultProxyId, statusProxyId = '') {
     body: JSON.stringify({
       proxies: drafts,
       defaultProxyId,
-      useProxy: document.getElementById('cfg-use-proxy')?.checked === true,
+      useProxy: isGlobalProxyEnabled(),
       lockRegion: document.getElementById('cfg-lock-region')?.checked !== false
     })
   }).then(r => r.json());
@@ -3844,7 +3876,7 @@ async function persistProxyDrafts(drafts, defaultProxyId, statusProxyId = '') {
       : account;
   });
   proxyDrafts = cloneProxyDrafts(response.data.network);
-  document.getElementById('cfg-use-proxy').checked = !!response.data.network.useProxy;
+  setGlobalProxyEnabled(!!response.data.network.useProxy);
   renderProxyCards(response.data.network.defaultProxyId || '');
   renderDefaultProxyOptions(response.data.network.defaultProxyId || '');
   const currentAccount = currentConfig.accounts.find(account => account.id === editingAccountIdInModal);
@@ -3963,7 +3995,7 @@ function populateSettingsForm() {
   // 网络与代理。先准备代理列表，账号区域才能渲染代理节点下拉框。
   proxyDrafts = cloneProxyDrafts(c.network);
   renderProxySettings();
-  document.getElementById('cfg-use-proxy').checked = !!c.network?.useProxy;
+  setGlobalProxyEnabled(!!c.network?.useProxy);
   document.getElementById('cfg-lock-region').checked = c.network?.lockRegion !== false;
   loadAccountIntoForm(editingAccountIdInModal);
 
@@ -4088,7 +4120,7 @@ async function saveSettingsFromModal() {
     updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'err' } });
     return;
   }
-  const useProxy = document.getElementById('cfg-use-proxy').checked;
+  const useProxy = isGlobalProxyEnabled();
   const defaultProxyId = getDefaultProxyId() || proxyDraftsForSave[0]?.id || '';
   if (useProxy && !defaultProxyId) {
     setSaveStatus('err', '缺少默认代理');

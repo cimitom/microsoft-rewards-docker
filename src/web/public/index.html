@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.8.4</span>
+            <span class="version-label" id="version-label">v1.8.5</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -720,10 +720,23 @@
 
           <div class="proxy-policy-panel">
             <div class="form-group">
-              <label class="form-label checkbox-label">
-                <input type="checkbox" id="cfg-use-proxy"> 启用全局默认代理
-              </label>
-              <small class="form-hint">仅影响选择「跟随全局默认设置」的账号；指定代理与直连账号不受此开关影响。</small>
+              <label class="form-label">全局网络策略</label>
+              <div class="network-mode-options">
+                <label class="network-mode-option">
+                  <input type="radio" name="cfg-global-proxy-mode" id="cfg-global-direct" value="direct" checked>
+                  <span>
+                    <strong>直连</strong>
+                    <small>不使用任何代理，直接使用容器默认网络出口。</small>
+                  </span>
+                </label>
+                <label class="network-mode-option">
+                  <input type="radio" name="cfg-global-proxy-mode" id="cfg-use-proxy" value="proxy">
+                  <span>
+                    <strong>启用全局默认代理</strong>
+                    <small>仅影响选择「跟随全局默认设置」的账号。</small>
+                  </span>
+                </label>
+              </div>
             </div>
             <div class="form-group">
               <label class="form-label">全局默认代理节点</label>

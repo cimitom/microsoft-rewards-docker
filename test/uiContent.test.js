@@ -156,3 +156,13 @@ test('账号代理策略默认选择直连', () => {
   assert.match(indexHtml, /id="quick-add-proxy-mode"[\s\S]*?<option value="direct" selected>/);
   assert.match(appJs, /proxyMode: 'direct'/);
 });
+
+test('全局网络支持直连与默认代理二选一，向导测试使用选中节点', () => {
+  assert.match(indexHtml, /id="cfg-global-direct"[^>]*value="direct"[^>]*checked/);
+  assert.match(indexHtml, /type="radio"[^>]*id="cfg-use-proxy"[^>]*value="proxy"/);
+  assert.match(appJs, /function isGlobalProxyEnabled/);
+  assert.match(appJs, /function setGlobalProxyEnabled/);
+  assert.match(appJs, /function resolveGuideProxyTestTarget/);
+  assert.match(appJs, /proxyUrl: proxy\.url/);
+  assert.match(appJs, /proxyUrl: target\.proxyUrl/);
+});

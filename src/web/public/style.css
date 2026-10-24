@@ -3609,6 +3609,52 @@ body.mouse-follow-enabled .glass-surface::before {
   margin-bottom: 0;
 }
 
+.network-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.network-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-inner);
+  color: var(--text-sub);
+  cursor: pointer;
+}
+
+.network-mode-option:has(input:checked) {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(2, 132, 199, 0.14);
+  color: var(--text-main);
+}
+
+.network-mode-option input {
+  margin-top: 3px;
+  accent-color: var(--primary);
+}
+
+.network-mode-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.network-mode-option strong {
+  font-size: 12.5px;
+}
+
+.network-mode-option small {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
 /* 凭据输入：默认隐藏内容，右侧眼睛按钮切换明文 */
 .secret-field {
   position: relative;
@@ -4269,6 +4315,7 @@ body.mouse-follow-enabled .glass-surface::before {
   .proxy-card-fields,
   .proxy-policy-panel,
   .form-grid-2 { grid-template-columns: 1fr; }
+  .network-mode-options { grid-template-columns: 1fr; }
   .run-hour-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
