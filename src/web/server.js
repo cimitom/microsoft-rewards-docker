@@ -934,11 +934,94 @@ export function createServer() {
       // 只做校验，不落库：以前这里会 upsertAccount，导致「测试 Cookie」按钮
       // 凭空创建出一个名为「账号 (xxx)」的账号。真正的保存由向导最后一步统一提交。
       const status = await authManager.checkCookieStatus(cookieToTest, accountId);
+      if (cookie === SECRET_PLACEHOLDER && targetAcc?.authDiagnosis) {
+        const previous = targetAcc.authDiagnosis;
+        configManager.recordAuthDiagnosis(targetAcc.id, {
+          cookieValid: status.valid,
+          tokenValid: previous.tokenValid,
+          overallValid: !!status.valid && previous.tokenValid === true,
+          warning: previous.warning || !status.valid,
+          warningMessage: !status.valid ? status.message : previous.warningMessage,
+          balance: previous.balance,
+          cookieMessage: status.message,
+          tokenMessage: previous.tokenMessage
+        });
+      }
       // 测试的是尚未保存的候选 Cookie，不能把它的余额/印章写进当前账号统计，
       // 否则 A 账号点一次“测试 B 的 Cookie”就会把 B 的数据串到 A 的面板。
       res.json({ success: true, data: status });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
+    } finally {
+      rewardsApi.restoreAccountContext(prevContext);
+      accountContextLock.release(lockOwner);
+    }
+  });
+
+  // 7.6 单独测试移动端 Token（可使用当前账号代理，也可临时换取候选授权码）
+  app.post('/api/auth/test-token', async (req, res) => {
+    const { accountId, proxy, urlOrCode, name } = req.body || {};
+    const savedAccount = accountId ? configManager.findAccount(accountId) : null;
+    if (!savedAccount && !urlOrCode) {
+      return res.status(400).json({ success: false, message: '请先提供授权码，或选择已配置 Token 的账号' });
+    }
+
+    const lockOwner = `web-token-test:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    if (!accountContextLock.tryAcquire(lockOwner)) {
+      return res.status(409).json({ success: false, message: '任务正在执行中，请稍后再测试 Token' });
+    }
+    const prevContext = rewardsApi.snapshotAccountContext();
+    try {
+      const candidateAccount = savedAccount || {
+        id: accountId || `draft_token_${Date.now()}`,
+        name: name || '候选账号',
+        cookie: '',
+        proxyMode: 'direct',
+        proxyId: ''
+      };
+      rewardsApi.setCurrentAccount(candidateAccount);
+      networkClient.setActiveProxySelection(proxy);
+
+      let exchanged = null;
+      if (urlOrCode) {
+        exchanged = await authManager.exchangeCodeForToken(urlOrCode, accountId, {
+          name: candidateAccount.name,
+          persist: false
+        });
+      }
+      const status = await authManager.checkTokenStatus(accountId, {
+        accountOverride: candidateAccount,
+        accessToken: exchanged?.accessToken
+      });
+      if (savedAccount?.authDiagnosis && !urlOrCode) {
+        const previous = savedAccount.authDiagnosis;
+        configManager.recordAuthDiagnosis(savedAccount.id, {
+          cookieValid: previous.cookieValid,
+          tokenValid: status.valid,
+          overallValid: previous.cookieValid === true && !!status.valid,
+          warning: previous.warning || !status.valid,
+          warningMessage: !status.valid ? status.message : previous.warningMessage,
+          balance: previous.balance,
+          cookieMessage: previous.cookieMessage,
+          tokenMessage: status.message
+        });
+      }
+      res.json({
+        success: true,
+        data: {
+          ...status,
+          tokens: exchanged
+            ? {
+                authCodeUrl: urlOrCode,
+                accessToken: exchanged.accessToken,
+                refreshToken: exchanged.refreshToken,
+                tokenTime: Date.now()
+              }
+            : null
+        }
+      });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
     } finally {
       rewardsApi.restoreAccountContext(prevContext);
       accountContextLock.release(lockOwner);

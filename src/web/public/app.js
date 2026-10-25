@@ -850,6 +850,77 @@ function initUIEvents() {
   document.getElementById('quick-add-proxy-id')?.addEventListener('change', (e) => {
     updateQuickAddProxyControls(e.target.value);
   });
+  document.getElementById('btn-quick-test-cookie')?.addEventListener('click', async () => {
+    const targetId = editingAccountIdInQuickModal;
+    const input = document.getElementById('quick-add-cookie')?.value.trim() || '';
+    const result = document.getElementById('quick-add-cookie-result');
+    if (quickAddCookieCleared || input.startsWith('（已标记清空')) {
+      if (result) result.innerHTML = '<span style="color:#F59E0B;">Cookie 已标记清空，请先重新粘贴后再测试。</span>';
+      return;
+    }
+    if (!input && !targetId) {
+      if (result) result.innerHTML = '<span style="color:#EF4444;">请先粘贴 Cookie 再测试。</span>';
+      return;
+    }
+    if (result) result.innerHTML = '<span style="color:#38BDF8;">⏳ 正在使用当前账号代理测试 Cookie...</span>';
+    try {
+      const testRes = await fetch('/api/auth/test-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cookie: input || SECRET_PLACEHOLDER,
+          accountId: targetId,
+          proxy: readProxySelection('quick-add-proxy-mode', 'quick-add-proxy-id')
+        })
+      }).then(r => r.json());
+      if (testRes.success && testRes.data?.valid) {
+        if (result) result.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(testRes.data.message)}</span>`;
+      } else {
+        if (result) result.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(testRes.data?.message || testRes.message || 'Cookie 检测无效')}</span>`;
+      }
+    } catch (e) {
+      if (result) result.innerHTML = `<span style="color:#EF4444;">❌ 检测异常: ${escapeHtml(e.message)}</span>`;
+    }
+  });
+  document.getElementById('btn-quick-test-token')?.addEventListener('click', async () => {
+    const targetId = editingAccountIdInQuickModal;
+    const input = document.getElementById('quick-add-authcode')?.value.trim() || '';
+    const result = document.getElementById('quick-add-auth-result');
+    if (!input && !targetId) {
+      if (result) result.innerHTML = '<span style="color:#EF4444;">请先粘贴授权码；新账号也可先保存后再测试 Token。</span>';
+      return;
+    }
+    if (result) result.innerHTML = input
+      ? '<span style="color:#38BDF8;">⏳ 正在临时换取并测试 Token...</span>'
+      : '<span style="color:#38BDF8;">⏳ 正在使用当前账号代理测试已保存 Token...</span>';
+    try {
+      const testRes = await fetch('/api/auth/test-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId: targetId,
+          name: document.getElementById('quick-add-name')?.value.trim() || '',
+          urlOrCode: input || undefined,
+          proxy: readProxySelection('quick-add-proxy-mode', 'quick-add-proxy-id')
+        })
+      }).then(r => r.json());
+      if (testRes.success && testRes.data?.valid) {
+        if (testRes.data.tokens) {
+          quickAddDraftTokens = testRes.data.tokens;
+        }
+        if (result) result.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(testRes.data.message)}${testRes.data.tokens ? '<br>新 Token 已临时验证，点击「保存修改」后写入账号。' : ''}</span>`;
+      } else {
+        if (result) result.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(testRes.data?.message || testRes.message || 'Token 检测无效')}</span>`;
+      }
+    } catch (e) {
+      if (result) result.innerHTML = `<span style="color:#EF4444;">❌ 检测异常: ${escapeHtml(e.message)}</span>`;
+    }
+  });
+  document.getElementById('quick-add-authcode')?.addEventListener('input', () => {
+    quickAddDraftTokens = null;
+    const result = document.getElementById('quick-add-auth-result');
+    if (result) result.innerHTML = '';
+  });
 
   // 通用网页确认框
   document.getElementById('btn-web-confirm-ok')?.addEventListener('click', () => resolveWebConfirm(true));
@@ -1237,6 +1308,59 @@ function initUIEvents() {
       }
     } catch (e) {
       if (resDiv) resDiv.innerHTML = `<span style="color:#EF4444;">❌ 检测异常: ${escapeHtml(e.message)}</span>`;
+    }
+  });
+
+  // 配置中心：使用当前账号代理测试 Token；若填入了新授权码则先换取再测试
+  document.getElementById('btn-test-modal-token')?.addEventListener('click', async () => {
+    const targetId = editingAccountIdInModal || 'acc_1';
+    const input = document.getElementById('cfg-authcode')?.value.trim() || '';
+    const result = document.getElementById('cfg-auth-test-result');
+    const proxy = readProxySelection('cfg-account-proxy-mode', 'cfg-account-proxy-id');
+    if (input === SECRET_CLEAR) {
+      if (result) result.innerHTML = '<span style="color:#F59E0B;">凭据已标记清空，请先重新粘贴授权码后再测试。</span>';
+      return;
+    }
+    try {
+      if (input) {
+        if (result) result.innerHTML = '<span style="color:#38BDF8;">⏳ 正在使用当前账号代理换取 Token...</span>';
+        const exchangeRes = await fetch('/api/auth/exchange-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urlOrCode: input, accountId: targetId, proxy })
+        }).then(r => r.json());
+        if (!exchangeRes.success) {
+          if (result) result.innerHTML = `<span style="color:#EF4444;">❌ Token 换取失败: ${escapeHtml(exchangeRes.message)}</span>`;
+          return;
+        }
+        const authInput = document.getElementById('cfg-authcode');
+        if (authInput) {
+          authInput.value = '';
+          authInput.placeholder = '已配置授权码（内容已隐藏）';
+        }
+        const refreshEl = document.getElementById('cfg-refresh-token');
+        if (refreshEl) {
+          refreshEl.value = '********';
+          delete refreshEl.dataset.clear;
+        }
+      }
+      if (result) result.innerHTML = '<span style="color:#38BDF8;">⏳ 正在使用当前账号代理测试 Token...</span>';
+      const testRes = await fetch('/api/auth/test-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: targetId, proxy })
+      }).then(r => r.json());
+      if (testRes.success && testRes.data?.valid) {
+        if (result) result.innerHTML = `<span style="color:#34D399;">✅ ${escapeHtml(testRes.data.message)}</span>`;
+      } else {
+        if (result) result.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(testRes.data?.message || testRes.message || 'Token 检测无效')}</span>`;
+      }
+      if (input) {
+        fetchConfig();
+        fetchStatus();
+      }
+    } catch (e) {
+      if (result) result.innerHTML = `<span style="color:#EF4444;">❌ 检测异常: ${escapeHtml(e.message)}</span>`;
     }
   });
 
@@ -2002,10 +2126,12 @@ async function stopEpicTask() {
 }
 
 let quickAddCookieCleared = false;
+let quickAddDraftTokens = null;
 
 function openQuickAddAccountModal(accountId = null) {
   editingAccountIdInQuickModal = accountId;
   quickAddCookieCleared = false;
+  quickAddDraftTokens = null;
   proxyDrafts = cloneProxyDrafts(currentConfig?.network);
   const modalTitle = document.getElementById('quick-add-modal-title');
   const saveBtn = document.getElementById('btn-save-quick-add');
@@ -2017,12 +2143,16 @@ function openQuickAddAccountModal(accountId = null) {
   const cookieHint = document.getElementById('quick-add-cookie-hint');
   const clearCookieBtn = document.getElementById('btn-quick-clear-cookie');
   const proxyModeInput = document.getElementById('quick-add-proxy-mode');
+  const cookieTestResult = document.getElementById('quick-add-cookie-result');
+  const authTestResult = document.getElementById('quick-add-auth-result');
 
   if (clearCookieBtn) {
     clearCookieBtn.style.display = 'none';
     clearCookieBtn.innerText = '清空已有 Cookie';
   }
   if (cookieInput) cookieInput.disabled = false;
+  if (cookieTestResult) cookieTestResult.innerHTML = '';
+  if (authTestResult) authTestResult.innerHTML = '';
 
   if (accountId) {
     const acc = currentConfig?.accounts?.find(a => a.id === accountId);
@@ -2164,7 +2294,13 @@ async function handleQuickAddAccount() {
     payload.cookie = '';
   }
 
-  if (authCodeUrl) {
+  if (quickAddDraftTokens) {
+    payload.authCodeUrl = quickAddDraftTokens.authCodeUrl;
+    payload.accessToken = quickAddDraftTokens.accessToken;
+    payload.refreshToken = quickAddDraftTokens.refreshToken;
+    payload.tokenTime = quickAddDraftTokens.tokenTime;
+    payload.tokenAlreadyExchanged = true;
+  } else if (authCodeUrl) {
     payload.authCodeUrl = authCodeUrl;
   } else if (!isEditing) {
     payload.authCodeUrl = '';
@@ -2193,6 +2329,7 @@ async function handleQuickAddAccount() {
       editingAccountIdInQuickModal = null;
       const clearedBeforeReset = quickAddCookieCleared;
       quickAddCookieCleared = false;
+      quickAddDraftTokens = null;
       selectedAccountId = res.data?.id || (isEditing ? payload.id : 'all');
       fetchStatus();
       fetchConfig();
@@ -2892,23 +3029,28 @@ function getAccountAuthStatus(acc) {
       tip: '尚未体检该账号\n点击右上角「账号体检」可检测 Cookie 与 Token 是否过期'
     };
   }
+  // 兼容旧体检数据：旧版 overallValid 是“任一有效”，这里必须重新按双端计算。
+  const effectiveOverallValid = d.cookieValid !== false
+    && d.tokenValid !== false
+    && d.overallValid !== false;
   const cookieLine = d.cookieValid ? '✅ Cookie 有效' : '❌ Cookie 失效';
   const tokenLine = d.tokenValid ? '✅ Token 有效' : '❌ Token 失效';
   const tip = [
     `上次检测：${formatDiagnosisTime(d.checkedAt)}`,
-    `检测结果：${d.overallValid ? (d.warning ? '已登录但存在异常' : '整体有效') : '存在失效项'}`,
+    `检测结果：${effectiveOverallValid ? (d.warning ? '已登录但存在异常' : '整体有效') : '存在失效项'}`,
     cookieLine,
     tokenLine,
     ...(d.cookieMessage ? [`Cookie：${d.cookieMessage}`] : []),
     ...(d.tokenMessage ? [`Token：${d.tokenMessage}`] : []),
     ...(d.warning ? [`⚠️ ${d.warningMessage || '凭据存在异常，请重新检查'}`] : [])
   ].join('\n');
-  if (d.overallValid && d.warning) {
+  if (!effectiveOverallValid) {
+    return { text: '失效', cls: 'badge-auth-invalid', tip };
+  }
+  if (d.warning) {
     return { text: '需修复', cls: 'badge-auth-warn', tip };
   }
-  return d.overallValid
-    ? { text: '有效', cls: 'badge-auth-valid', tip }
-    : { text: '失效', cls: 'badge-auth-invalid', tip };
+  return { text: '有效', cls: 'badge-auth-valid', tip };
 }
 
 /**

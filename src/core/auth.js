@@ -351,15 +351,18 @@ export class AuthManager {
    * 实测移动端 OAuth Token 与 DAPI 接口连通性
    */
   async checkTokenStatus(accountId = null, options = {}) {
-    const acc = configManager.resolveAccount(accountId);
-    if (!acc?.refreshToken && !acc?.accessToken) {
+    const acc = options.accountOverride || configManager.resolveAccount(accountId);
+    let token = options.accessToken || null;
+    if (!token && !acc?.refreshToken && !acc?.accessToken) {
       return { valid: false, message: '尚未完成移动端授权 (未配置 Token)' };
     }
 
-    const tokenOk = await this.refreshToken(false, accountId, options);
-    const token = this.getAccessToken(accountId);
-    if (!tokenOk || !token) {
-      return { valid: false, message: 'Refresh Token 已过期或失效，请重新授权' };
+    if (!token) {
+      const tokenOk = await this.refreshToken(false, accountId, options);
+      token = this.getAccessToken(accountId);
+      if (!tokenOk || !token) {
+        return { valid: false, message: 'Refresh Token 已过期或失效，请重新授权' };
+      }
     }
 
     try {
@@ -438,7 +441,9 @@ export class AuthManager {
     // 缺少 _U 时虽然「已登录」，但 PC 搜索不会计分，不能算完全正常
     const cookieUsable = cookieStatus.valid && !cookieStatus.warning && cookieStatus.searchReady;
     const allValid = cookieUsable && tokenStatus.valid && !tokenAccountMismatch;
-    const partialValid = cookieStatus.valid || tokenStatus.valid;
+    // 红绿状态以双端为准：任意一端失效都必须标红，避免 Token 过期仍显示绿色。
+    const overallValid = !!cookieStatus.valid && !!tokenStatus.valid;
+    const partialValid = !!cookieStatus.valid || !!tokenStatus.valid;
     const warning = !!cookieStatus.warning || !cookieStatus.searchReady || tokenAccountMismatch;
     const warningMessage = tokenAccountMismatch
       ? (nameMismatch
@@ -469,7 +474,7 @@ export class AuthManager {
       token: tokenStatus,
       balance,
       allValid,
-      overallValid: partialValid,
+      overallValid,
       warning,
       warningMessage
     };

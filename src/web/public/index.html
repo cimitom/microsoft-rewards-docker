@@ -683,9 +683,12 @@
                 <input type="password" id="cfg-authcode" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴包含 code= 的完整跳转链接">
                 <button type="button" class="secret-toggle" data-target="cfg-authcode" title="显示 / 隐藏授权码">👁</button>
               </div>
+              <a href="https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">🔑 获取 Token</a>
+              <button type="button" id="btn-test-modal-token" class="btn btn-secondary btn-sm" title="使用当前账号代理测试已保存的 Token">测试 Token</button>
               <button type="button" id="btn-exchange-token" class="btn btn-secondary btn-sm">换取 Token</button>
               <button type="button" id="btn-clear-modal-auth" class="btn btn-danger-soft btn-sm" title="清空该账号保存的授权码与 Token">清空凭据</button>
             </div>
+            <small class="form-hint">点击「获取授权码」会打开微软官方登录页。登录并同意后，复制地址栏中完整的 <code>https://login.live.com/oauth20_desktop.srf?code=...</code> 链接。Cookie 与 Token 测试都会使用上方当前账号的代理设置。</small>
             <div id="cfg-auth-test-result" style="margin-top: 6px; font-size: 12px;"></div>
           </div>
 
@@ -1189,10 +1192,20 @@
           </div>
           <textarea id="quick-add-cookie" class="form-textarea" rows="3" placeholder="粘贴该账号 rewards.bing.com/dashboard 的 Cookie（须含 _U）"></textarea>
           <small class="form-hint" id="quick-add-cookie-hint">编辑账号时留空表示保留原 Cookie。</small>
+          <div class="credential-action-row">
+            <button type="button" id="btn-quick-test-cookie" class="btn btn-secondary btn-sm">测试 Cookie</button>
+          </div>
+          <div id="quick-add-cookie-result" class="hint-msg"></div>
         </div>
         <div class="form-group">
           <label class="form-label">移动端授权码链接 / Code (可选)</label>
-          <input type="text" id="quick-add-authcode" class="form-input" placeholder="粘贴该账号登录后跳转的包含 code= 链接">
+          <div class="input-with-btn">
+            <input type="text" id="quick-add-authcode" class="form-input" placeholder="粘贴该账号登录后跳转的包含 code= 链接">
+            <a href="https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm">🔑 获取授权码</a>
+            <button type="button" id="btn-quick-test-token" class="btn btn-secondary btn-sm">测试 Token</button>
+          </div>
+          <small class="form-hint">点击「获取授权码」登录并同意后，复制地址栏中完整的 <code>https://login.live.com/oauth20_desktop.srf?code=...</code> 链接。测试会使用上方当前账号的代理；填入新授权码时会先临时换取并验证，点击保存后写入账号。</small>
+          <div id="quick-add-auth-result" class="hint-msg"></div>
         </div>
         <div class="form-group">
           <label class="form-label checkbox-label">
