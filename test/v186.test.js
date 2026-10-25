@@ -95,6 +95,8 @@ test('账号任务收尾会自动检查并领取额外积分', async (t) => {
 
   assert.deepEqual(result, { pending: 18, claimed: 18 });
   assert.equal(stats.claimablePoints, 0);
+  assert.ok(stats.lastClaimAt > 0);
+  assert.equal(stats.lastClaimedPoints, 18);
 });
 
 test('额外积分检查失败时保留已知待领取数量，不误清零', async (t) => {

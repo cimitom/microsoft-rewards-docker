@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.8.6-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.8.7-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -209,6 +209,13 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🛠️ **任务收尾与详情持久化修复 (v1.8.7)**：
+  - **修复额外积分未自动领取**：任务收尾误用了不存在的 `acc` 变量，导致每次在领取前抛出 `acc is not defined`；现改为使用当前账号 `accCfg`；
+  - **详情进度持久化**：官网局部返回 0、空配额或短暂骨架页时，同一天已确认的任务进度只增不减，不再把完整卡片覆盖为空；
+  - **修复账号详情请求竞态**：快速切换账号时，较早发出的状态请求不会再覆盖当前账号详情；
+  - **刷新倒计时改为 00:00**：按微软积分商城每日零点刷新计算；
+  - **上次运行时间**：全部账号汇总中的账号卡与顶部账号胶囊悬浮提示新增上次运行时间；
+  - **回归测试 196 项全部通过**。
 - 🌐 **SOCKS5 认证代理兼容 (v1.8.6)**：
   - **修复 Chromium 无法使用带认证 SOCKS5**：新增仅监听 `127.0.0.1` 的本地 HTTP 桥接层，浏览器侧无认证，桥接层再使用 SOCKS5 用户名密码连接上游；
   - **HTTP 与 HTTPS 全兼容**：同时支持普通 HTTP 转发和 HTTPS `CONNECT` 隧道，搜索、打孔卡与待领积分不再因代理认证中断；

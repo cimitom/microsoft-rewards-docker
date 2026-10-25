@@ -41,12 +41,15 @@ export class TaskManager {
       startBalance: 0,
       earned: 0,
       claimablePoints: 0,
+      lastClaimAt: 0,
+      lastClaimedPoints: 0,
       streakDays: 0,
       stamps: { progress: 0, max: 12 },
       webIdentityKey: '',
       identityAppliedAt: 0,
       credentialAppliedAt: 0,
       lastUpdate: Date.now(),
+      lastRunAt: 0,
       tasks: {
         sign: { name: "移动端签到", progress: 0, max: 1, points: 0, unit: "次", icon: "📱", done: false },
         read: { name: "新闻资讯自动阅读", progress: 0, max: 30, points: 0, unit: "篇", icon: "📖", done: false },
@@ -107,6 +110,7 @@ export class TaskManager {
               baseStats.accounts[accId].startBalance = previousBalance;
               baseStats.accounts[accId].startBalanceDate = today;
             }
+            baseStats.accounts[accId].lastRunAt = Number(oldAcc.lastRunAt || 0);
             for (const [k, oldTask] of Object.entries(oldAcc.tasks || {})) {
               if (oldTask && (oldTask.isPunchCard || k === 'desktopApp' || k === 'monthlyQuest' || k.startsWith('quest_'))) {
                 baseStats.accounts[accId].tasks[k] = { ...oldTask };
@@ -151,8 +155,10 @@ export class TaskManager {
       const identityChanged = identityChangedAt > Number(accStats.identityAppliedAt || 0)
         || (!!currentWebIdentity && !!storedIdentity && storedIdentity !== currentWebIdentity);
       if (identityChanged) {
+        const previousLastRunAt = Number(accStats.lastRunAt || 0);
         // Cookie 对应的网页账号已经变化，旧账号的余额、搜索进度和印章不能继续沿用。
         this.stats.accounts[id] = this.createDefaultAccountStats(id, name);
+        this.stats.accounts[id].lastRunAt = previousLastRunAt;
         this.stats.accounts[id].webIdentityKey = currentWebIdentity;
         this.stats.accounts[id].identityAppliedAt = identityChangedAt || Date.now();
         this.stats.accounts[id].credentialAppliedAt = credentialUpdatedAt;
@@ -180,6 +186,9 @@ export class TaskManager {
       }
       if (!activeStats.stamps) {
         activeStats.stamps = { progress: 0, max: 12 };
+      }
+      if (!Number.isFinite(Number(activeStats.lastRunAt))) {
+        activeStats.lastRunAt = 0;
       }
     }
     return this.stats.accounts[id];
@@ -325,6 +334,35 @@ export class TaskManager {
   }
 
   /**
+   * 同一统计日内的任务进度只增不减。
+   * 官网局部返回 0、空配额或短暂骨架页时，保留上一次已确认的状态。
+   */
+  mergeMonotonicTask(previous, incoming) {
+    if (!previous || typeof previous !== 'object') return { ...incoming };
+    const prevMax = Math.max(0, Number(previous.max) || 0);
+    const incomingMax = Math.max(0, Number(incoming?.max) || 0);
+    const max = incomingMax > 0 ? incomingMax : prevMax;
+    const sameScale = prevMax === 0 || incomingMax === 0 || prevMax === incomingMax;
+    const progress = sameScale
+      ? Math.max(Number(previous.progress) || 0, Number(incoming?.progress) || 0)
+      : Math.max(0, Number(incoming?.progress) || 0);
+    const points = Math.max(Number(previous.points) || 0, Number(incoming?.points) || 0);
+    const done = incoming?.done === true
+      || (previous.done === true && (max <= 0 || progress >= max))
+      || (max > 0 && progress >= max);
+    return {
+      ...previous,
+      ...(incoming || {}),
+      max,
+      progress,
+      points,
+      done,
+      searchTier: incoming?.searchTier || previous.searchTier || null,
+      statusMessage: incoming?.statusMessage ?? previous.statusMessage ?? ''
+    };
+  }
+
+  /**
    * 删除账号时清理它的统计与账单，避免留下孤儿数据
    */
   removeAccountStats(accountId) {
@@ -389,9 +427,11 @@ export class TaskManager {
           const pcCur = Number(info.pc.progress || 0);
           const pcMax = Number(info.pc.max);
           const tier = searchTierFromMax(pcMax);
+          const previousSearch = accStats.tasks.search;
+          let nextSearch;
           if (Number.isFinite(pcMax) && pcMax > 0 && tier && tier.code !== 'unknown') {
             const isPcDone = pcCur >= pcMax;
-            accStats.tasks.search = {
+            nextSearch = {
               name: "必应 PC 搜索任务",
               progress: pcCur,
               max: pcMax,
@@ -403,32 +443,23 @@ export class TaskManager {
               statusMessage: ''
             };
           } else {
-            accStats.tasks.search = {
+            nextSearch = {
               ...(accStats.tasks.search || {}),
               name: "必应 PC 搜索任务",
-              progress: 0,
-              max: 0,
-              points: 0,
               unit: "分",
               icon: "🔍",
-              done: false,
-              searchTier: null,
               statusMessage: `官网返回未知搜索配额 ${pcMax}，已暂停搜索`
             };
           }
+          accStats.tasks.search = this.mergeMonotonicTask(previousSearch, nextSearch);
         } else {
-          accStats.tasks.search = {
+          accStats.tasks.search = this.mergeMonotonicTask(accStats.tasks.search, {
             ...(accStats.tasks.search || {}),
             name: "必应 PC 搜索任务",
-            progress: 0,
-            max: 0,
-            points: 0,
             unit: "分",
             icon: "🔍",
-            done: false,
-            searchTier: null,
             statusMessage: '官网未返回搜索等级配额，已暂停搜索'
-          };
+          });
         }
 
         // 2. 同步新闻阅读真实配额。
@@ -474,7 +505,7 @@ export class TaskManager {
           const readCur = Number(info.readProgress || 0);
           const readMax = Number(info.readMax || 30);
           const isReadDone = readCur >= readMax;
-          accStats.tasks.read = {
+          accStats.tasks.read = this.mergeMonotonicTask(accStats.tasks.read, {
             name: "新闻资讯自动阅读",
             progress: readCur,
             max: readMax,
@@ -482,7 +513,7 @@ export class TaskManager {
             unit: "篇",
             icon: "📖",
             done: isReadDone
-          };
+          });
         }
 
         // 3. 动态同步官方「任务」区全部打孔卡（自适应 1 个、2 个或多个）
@@ -534,7 +565,7 @@ export class TaskManager {
               else icon = '🎯';
             }
 
-            accStats.tasks[questKey] = {
+            const nextQuestTask = {
               name: title || (isDesktop ? '桌面应用每周专属任务' : '活动打孔卡'),
               progress: qProgress,
               max: qMax,
@@ -552,6 +583,9 @@ export class TaskManager {
                 ? prevTask.subtaskState
                 : {}
             };
+            accStats.tasks[questKey] = prevTask.name === nextQuestTask.name
+              ? this.mergeMonotonicTask(prevTask, nextQuestTask)
+              : nextQuestTask;
           });
 
           // 仅在明确获取到了官方确切的任务列表时，才移除下线活动；若未拿到列表则完整保留已有卡片
@@ -573,7 +607,14 @@ export class TaskManager {
 
         // 同步官网待领取额外积分
         if (info.claimablePoints !== undefined) {
-          accStats.claimablePoints = Number(info.claimablePoints || 0);
+          const incomingClaimable = Number(info.claimablePoints || 0);
+          const lastClaimAt = Number(accStats.lastClaimAt || 0);
+          const claimedRecently = lastClaimAt > 0
+            && new Date(lastClaimAt).toDateString() === new Date().toDateString()
+            && Date.now() - lastClaimAt < 10 * 60 * 1000;
+          if (!claimedRecently || incomingClaimable === 0) {
+            accStats.claimablePoints = incomingClaimable;
+          }
         }
 
         // 同步连签任务（必应搜索 / 每日活动 / 必应应用）真实状态。
@@ -603,14 +644,20 @@ export class TaskManager {
         const signTask = accStats.tasks.sign;
         if (appStreak && signTask) {
           if (appStreak.isCurrentDayCompleted === true) {
-            signTask.progress = 1;
-            signTask.max = 1;
-            if (!signTask.points) signTask.points = 10;
-            signTask.done = true;
+            accStats.tasks.sign = this.mergeMonotonicTask(signTask, {
+              ...signTask,
+              progress: 1,
+              max: 1,
+              points: signTask.points || 10,
+              done: true
+            });
           } else if (appStreak.isCurrentDayCompleted === false) {
-            // 官网明确显示今日未签到（签到 0/1），不能继续显示「已完成」
-            signTask.progress = 0;
-            signTask.done = false;
+            accStats.tasks.sign = this.mergeMonotonicTask(signTask, {
+              ...signTask,
+              progress: 0,
+              max: 1,
+              done: false
+            });
           }
         }
 
@@ -620,15 +667,13 @@ export class TaskManager {
           const dsTotal = Number(dsStreak.activitiesTotal);
           const dsDone = Math.min(Number(dsStreak.activitiesCompleted || 0), dsTotal);
           const dsFinished = dsDone >= dsTotal;
-          dsTask.max = dsTotal;
-          dsTask.progress = dsFinished ? dsTotal : dsDone;
-          if (dsFinished) {
-            if (!dsTask.points) dsTask.points = 30;
-            dsTask.done = true;
-          } else {
-            dsTask.points = 0;
-            dsTask.done = false;
-          }
+          accStats.tasks.dailySet = this.mergeMonotonicTask(dsTask, {
+            ...dsTask,
+            max: dsTotal,
+            progress: dsFinished ? dsTotal : dsDone,
+            points: dsFinished ? (dsTask.points || 30) : 0,
+            done: dsFinished
+          });
         }
 
         // 今日已增积分：以官网「今日积分」为准，取不到才回退到余额差
@@ -731,6 +776,7 @@ export class TaskManager {
         totalTasks: tTotal,
         percent: tTotal > 0 ? Math.round((tDone / tTotal) * 100) : 0,
         lastUpdate: st.lastUpdate,
+        lastRunAt: Number(st.lastRunAt || 0),
         tasks: st.tasks
       };
     });
@@ -1833,7 +1879,7 @@ export class TaskManager {
       accStats.streakDays = streakInfo.streakDays;
       logger.log('🔥', `连续打卡记录: ${accStats.streakDays} 天`, accountName);
     }
-    await this.claimExtraPointsAfterTasks(acc, accStats);
+    const extraClaim = await this.claimExtraPointsAfterTasks(accCfg, accStats);
 
     // 6. 结算单账号总积分
     // 余额与「今日已增」都以官网为准：这里再取一次，把本轮新做的部分算进去
@@ -1845,7 +1891,7 @@ export class TaskManager {
       const endBalance = await rewardsApi.getBalance();
       if (endBalance !== null) accStats.balance = endBalance;
     }
-    if (finalInfo?.claimablePoints !== undefined) {
+    if (finalInfo?.claimablePoints !== undefined && !(extraClaim.claimed > 0)) {
       accStats.claimablePoints = Number(finalInfo.claimablePoints || 0);
     }
     this.applyEarned(accStats, finalInfo?.todayPoints);
@@ -1885,6 +1931,8 @@ export class TaskManager {
 
     if (claimed > 0) {
       accStats.claimablePoints = Math.max(0, pending - claimed);
+      accStats.lastClaimAt = Date.now();
+      accStats.lastClaimedPoints = claimed;
       logger.log('🎉', `额外积分领取成功 +${claimed} 分`, '', accountName);
       logger.addTimeline(accountName, `领取额外积分 +${claimed}`);
     } else {
@@ -2023,6 +2071,7 @@ export class TaskManager {
       const failures = [];
       for (let i = 0; i < targetList.length && this.running; i++) {
         const acc = targetList[i];
+        const runStartedAt = Date.now();
         if (configManager.findAccount(acc.id)?.enabled === false) {
           logger.log('⏸️', `账号 [${acc.name || acc.id}] 已暂停，跳过本批次剩余任务`, '', acc.name || acc.id);
           continue;
@@ -2039,6 +2088,10 @@ export class TaskManager {
               `账号 [${acc.name || acc.id}] 自动化打卡任务执行异常：\n❌ ${e.message}\n时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`
             );
           } catch {}
+        } finally {
+          const runStats = this.ensureAccountStats(acc.id);
+          runStats.lastRunAt = runStartedAt;
+          this.saveStats();
         }
         this.runningAccountId = null;
 

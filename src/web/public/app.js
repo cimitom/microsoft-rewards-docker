@@ -23,6 +23,7 @@ let lastSystemMetrics = null;
 let diagMode = 'single';
 let diagAccountId = null;
 let accountsOverviewRenderSignature = '';
+let statusFetchSeq = 0;
 
 // 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
@@ -617,11 +618,11 @@ function applyTheme() {
   document.documentElement.setAttribute('data-theme', 'dark');
 }
 
-// 启动每日刷新剩余时间倒计时 (距离下一次 09:00:00，中国区 Rewards 刷新点)
+// 微软积分商城每天 00:00 刷新，倒计时到下一个自然日零点。
 function startCountdownTimer() {
   function updateTimer() {
     const now = new Date();
-    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0);
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
     if (target.getTime() <= now.getTime()) {
       target.setDate(target.getDate() + 1);
     }
@@ -2381,8 +2382,12 @@ async function handleDeleteCurrentAccountInModal() {
 
 // 获取状态并渲染大屏
 async function fetchStatus() {
+  const requestedAccountId = selectedAccountId;
+  const requestSeq = ++statusFetchSeq;
   try {
-    const res = await fetch(`/api/status?accountId=${selectedAccountId}`).then(r => r.json());
+    const res = await fetch(`/api/status?accountId=${requestedAccountId}`).then(r => r.json());
+    // 慢请求不能覆盖用户刚切换后的账号详情，否则会出现空进度或串账号数据。
+    if (requestSeq !== statusFetchSeq || requestedAccountId !== selectedAccountId) return;
     if (res.success && res.data) {
       currentStatus = res.data;
       renderDashboard(res.data);
@@ -2438,7 +2443,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.6';
+  const current = updateInfo?.currentVersion || '1.8.7';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2493,8 +2498,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.6'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.6'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.7'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.7'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -2576,8 +2581,9 @@ function renderAccountSelectorBar(summary, runtime = {}) {
   accounts.forEach(acc => {
     const isActive = selectedAccountId === acc.id;
     const runtimeStatus = getAccountRuntimeStatus(acc, runtime);
+    const lastRunText = formatLastRunTime(acc.lastRunAt);
     html += `
-      <button class="account-chip ${isActive ? 'active' : ''} ${runtimeStatus.cls}" data-acc-id="${escapeHtml(acc.id)}" data-tip="${escapeHtml(runtimeStatus.tip)}">
+      <button class="account-chip ${isActive ? 'active' : ''} ${runtimeStatus.cls}" data-acc-id="${escapeHtml(acc.id)}" data-tip="${escapeHtml(`${runtimeStatus.tip}\n上次运行：${lastRunText}`)}">
         <span class="chip-icon">${runtimeStatus.icon}</span>
         <span class="chip-name">${escapeHtml(acc.name)}</span>
         <span class="chip-sub">${(acc.balance || 0).toLocaleString()} 分</span>
@@ -3019,6 +3025,16 @@ function formatDiagnosisTime(ts) {
   }
 }
 
+function formatLastRunTime(ts) {
+  const value = Number(ts);
+  if (!Number.isFinite(value) || value <= 0) return '暂无运行记录';
+  try {
+    return new Date(value).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return '暂无运行记录';
+  }
+}
+
 // 账号凭据体检状态：有效 / 失效 / 未检测（悬停展示上次检测时间与结果）
 function getAccountAuthStatus(acc) {
   const d = acc?.authDiagnosis;
@@ -3158,10 +3174,11 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
     const runtimeStatus = getAccountRuntimeStatus(acc, { running, runningAccountId });
     const paused = acc.enabled === false;
     const nextRun = formatNextRun(schedule[acc.id]);
-    return { acc, isRunning, runtimeStatus, paused, nextRun };
+    const lastRunText = formatLastRunTime(acc.lastRunAt);
+    return { acc, isRunning, runtimeStatus, paused, nextRun, lastRunText };
   });
 
-  const signature = JSON.stringify(prepared.map(({ acc, isRunning, runtimeStatus, paused, nextRun }) => ({
+  const signature = JSON.stringify(prepared.map(({ acc, isRunning, runtimeStatus, paused, nextRun, lastRunText }) => ({
     id: acc.id,
     name: acc.name,
     enabled: acc.enabled,
@@ -3177,7 +3194,9 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
     runtimeStatus: runtimeStatus.key,
     paused,
     nextRun: nextRun.text,
-    nextRunTip: nextRun.tip
+    nextRunTip: nextRun.tip,
+    lastRunAt: acc.lastRunAt,
+    lastRunText
   })));
   if (signature === accountsOverviewRenderSignature && grid.childElementCount === prepared.length) {
     return;
@@ -3185,9 +3204,15 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
   accountsOverviewRenderSignature = signature;
   grid.innerHTML = '';
 
-  prepared.forEach(({ acc, isRunning, runtimeStatus, paused, nextRun }) => {
+  prepared.forEach(({ acc, isRunning, runtimeStatus, paused, nextRun, lastRunText }) => {
     const card = document.createElement('div');
     card.className = `account-overview-card ${runtimeStatus.cls}`;
+    card.setAttribute('data-tip', [
+      `账号：${acc.name}`,
+      `状态：${runtimeStatus.label}`,
+      `上次运行：${lastRunText}`,
+      `下次计划：${nextRun.tip}`
+    ].join('\n'));
     card.innerHTML = `
       <div class="acc-card-top">
         <div class="acc-card-title">
