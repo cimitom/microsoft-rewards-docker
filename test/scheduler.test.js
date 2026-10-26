@@ -66,9 +66,9 @@ test('每个启用账号每天只排一次，且偏移落在允许区间内', ()
   assert.equal(scheduler.plannedDailyRuns['20261015'].acc_a.offset, before);
 });
 
-test('每天提供 9:00 到 22:00 共 14 个一小时档位', () => {
-  assert.deepEqual(RUN_HOURS, [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
-  assert.equal(RUN_HOURS.length, 14);
+test('每天提供 00:00 到 23:00 共 24 个一小时档位', () => {
+  assert.deepEqual(RUN_HOURS, Array.from({ length: 24 }, (_, index) => index));
+  assert.equal(RUN_HOURS.length, 24);
   assert.equal(MAX_START_DELAY_MINUTES, 10);
 });
 

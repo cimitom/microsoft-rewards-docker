@@ -295,7 +295,7 @@ class Scheduler {
       }
     });
 
-    logger.log('🟢', `后台小时窗口调度引擎已就绪 (${RUN_HOURS[0]}:00-${RUN_HOURS[RUN_HOURS.length - 1] + 1}:00，共 ${RUN_HOURS.length} 个一小时档位，每档 0-${MAX_START_DELAY_MINUTES} 分钟随机启动)`);
+    logger.log('🟢', `后台小时窗口调度引擎已就绪 (00:00-24:00，共 ${RUN_HOURS.length} 个一小时档位，每档 0-${MAX_START_DELAY_MINUTES} 分钟随机启动)`);
     this.startEpicJob();
   }
 

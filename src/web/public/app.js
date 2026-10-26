@@ -25,6 +25,10 @@ let diagAccountId = null;
 let accountsOverviewRenderSignature = '';
 let statusFetchSeq = 0;
 let scheduleConflictSignature = '';
+let accountSummaryHistory = [];
+let accountSummaryHistoryAt = 0;
+let accountSummaryHistoryPromise = null;
+let accountSummaryRenderSignature = '';
 
 // 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
@@ -1398,18 +1402,21 @@ function initUIEvents() {
     document.querySelectorAll('.acc-more-dropdown.show').forEach(m => m.classList.remove('show'));
   });
 
-  // 点击待领积分卡片一键触发领取
-  document.getElementById('hero-claimable-card')?.addEventListener('click', async () => {
-    const claimBtn = document.getElementById('hero-claim-btn-text');
+  // 汇总表一键领取全部账号的待领积分
+  document.getElementById('btn-summary-claim-all')?.addEventListener('click', async () => {
+    const claimBtn = document.getElementById('btn-summary-claim-all');
     const origText = claimBtn ? claimBtn.innerText : '';
-    if (claimBtn) claimBtn.innerText = '⏳ 领取中...';
+    if (claimBtn) {
+      claimBtn.disabled = true;
+      claimBtn.innerText = '⏳ 领取中...';
+    }
     openEpicActionModal('领取待领积分', '正在向微软官网提交领取请求...', ['锁定账号上下文', '提交领取请求', '刷新积分看板'], 0);
     startActionProgressTicker(15, 88, 9, '正在向微软官网提交领取请求...');
     try {
       const res = await fetch('/api/tasks/claim-points', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedAccountId })
+        body: JSON.stringify({ accountId: 'all' })
       }).then(r => r.json());
       stopActionProgressTicker();
       if (res.success) {
@@ -1438,9 +1445,38 @@ function initUIEvents() {
         result: `请求异常：${e.message}`
       });
     } finally {
-      if (claimBtn) claimBtn.innerText = origText;
+      if (claimBtn) {
+        claimBtn.innerText = origText;
+        claimBtn.disabled = false;
+      }
     }
   });
+
+  const summaryTbody = document.getElementById('account-summary-tbody');
+  summaryTbody?.addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-account-id]');
+    if (!row) return;
+    openAccountDetailFromSummary(row.getAttribute('data-account-id'));
+  });
+  summaryTbody?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const row = event.target.closest('tr[data-account-id]');
+    if (!row) return;
+    event.preventDefault();
+    openAccountDetailFromSummary(row.getAttribute('data-account-id'));
+  });
+  summaryTbody?.addEventListener('mouseover', (event) => {
+    const cell = event.target.closest('[data-trend-account]');
+    if (!cell || cell.contains(event.relatedTarget)) return;
+    showAccountTrendTooltip(cell);
+  });
+  summaryTbody?.addEventListener('mouseout', (event) => {
+    const cell = event.target.closest('[data-trend-account]');
+    if (!cell || cell.contains(event.relatedTarget)) return;
+    hideAccountTrendTooltip();
+  });
+  window.addEventListener('scroll', hideAccountTrendTooltip, { passive: true });
+  window.addEventListener('resize', hideAccountTrendTooltip);
 
   // 配置中心：测试当前账号 (详细展示 Cookie、Code、Token 是否可用)
   document.getElementById('btn-test-account')?.addEventListener('click', async () => {
@@ -2454,7 +2490,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.10';
+  const current = updateInfo?.currentVersion || '1.9.0';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2509,8 +2545,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.10'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.10'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.9.0'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.9.0'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -2626,6 +2662,281 @@ function renderAccountSelectorBar(summary, runtime = {}) {
   });
 }
 
+function accountHistoryPoint(day, accountId) {
+  if (accountId === 'all') {
+    return {
+      earned: Number(day?.earned || 0),
+      balance: Number(day?.balance || 0)
+    };
+  }
+  const account = (day?.accounts || []).find(item => item.id === accountId);
+  return {
+    earned: Number(account?.earned || 0),
+    balance: Number(account?.balance || 0)
+  };
+}
+
+function getAccountEarnedAverage(accountId, days) {
+  if (!Array.isArray(accountSummaryHistory) || accountSummaryHistory.length === 0) return null;
+  const period = accountSummaryHistory.slice(-days);
+  if (period.length === 0) return null;
+  const total = period.reduce((sum, day) => sum + accountHistoryPoint(day, accountId).earned, 0);
+  return total / days;
+}
+
+function getAccountTrendRows(accountId, days = 14) {
+  if (!Array.isArray(accountSummaryHistory) || accountSummaryHistory.length === 0) return [];
+  const accountIds = accountId === 'all'
+    ? (currentStatus?.summary?.accountsList || []).map(acc => acc.id)
+    : [accountId];
+  return accountSummaryHistory.slice(-days).map(day => {
+    if (accountIds.length === 0) {
+      return { date: day.date, dayLabel: day.dayLabel, earned: 0, balance: 0 };
+    }
+    return accountIds.reduce((result, id) => {
+      const point = accountHistoryPoint(day, id);
+      result.earned += point.earned;
+      result.balance += point.balance;
+      return result;
+    }, { date: day.date, dayLabel: day.dayLabel, earned: 0, balance: 0 });
+  });
+}
+
+function ensureAccountSummaryHistory() {
+  if (accountSummaryHistoryPromise) return accountSummaryHistoryPromise;
+  if (accountSummaryHistoryAt && Date.now() - accountSummaryHistoryAt < 60000) {
+    return Promise.resolve(accountSummaryHistory);
+  }
+  accountSummaryHistoryPromise = fetch('/api/history?days=30&accountId=all')
+    .then(res => res.json())
+    .then(res => {
+      if (res.success && Array.isArray(res.data)) {
+        accountSummaryHistory = res.data;
+        accountSummaryHistoryAt = Date.now();
+        accountSummaryRenderSignature = '';
+        if (currentStatus?.summary) {
+          renderAccountSummaryTable(currentStatus.summary, {
+            running: currentStatus.running,
+            runningAccountId: currentStatus.runningAccountId
+          });
+        }
+      }
+      return accountSummaryHistory;
+    })
+    .catch(() => accountSummaryHistory)
+    .finally(() => {
+      if (!accountSummaryHistoryAt) accountSummaryHistoryAt = Date.now();
+      accountSummaryHistoryPromise = null;
+    });
+  return accountSummaryHistoryPromise;
+}
+
+function formatDailyAverage(value) {
+  if (value === null || !Number.isFinite(Number(value))) return '--';
+  const numeric = Number(value);
+  return `${numeric > 0 ? '+' : ''}${numeric.toFixed(numeric >= 10 ? 1 : 2)}`;
+}
+
+function summaryTrendCell(value, accountId, className = '') {
+  return `<span class="summary-trend-trigger ${className}" tabindex="0" data-trend-account="${escapeHtml(accountId)}">${escapeHtml(value)}</span>`;
+}
+
+function renderAccountSummaryTable(summary, runtime = {}) {
+  const tbody = document.getElementById('account-summary-tbody');
+  if (!tbody || !summary) return;
+
+  const accounts = summary.accountsList || [];
+  const historyReady = accountSummaryHistory.length > 0;
+  const totalClaimable = accounts.reduce((sum, acc) => sum + Number(acc.claimablePoints || 0), 0);
+  const totalEarned = accounts.reduce((sum, acc) => sum + Number(acc.earned || 0), 0);
+  const totalBalance = accounts.reduce((sum, acc) => sum + Number(acc.balance || 0), 0);
+  const totalStreak = accounts.reduce((sum, acc) => sum + Number(acc.streakDays || 0), 0);
+  const totalStamps = accounts.reduce((sum, acc) => sum + Number(acc.stamps?.progress || 0), 0);
+  const totalStampMax = accounts.reduce((sum, acc) => sum + Number(acc.stamps?.max || 12), 0);
+  const accountAverages = new Map(accounts.map(acc => [
+    acc.id,
+    {
+      avg7: historyReady ? getAccountEarnedAverage(acc.id, 7) : null,
+      avg30: historyReady ? getAccountEarnedAverage(acc.id, 30) : null
+    }
+  ]));
+  const avg7Total = historyReady
+    ? accounts.reduce((sum, acc) => sum + Number(accountAverages.get(acc.id)?.avg7 || 0), 0)
+    : null;
+  const avg30Total = historyReady
+    ? accounts.reduce((sum, acc) => sum + Number(accountAverages.get(acc.id)?.avg30 || 0), 0)
+    : null;
+  const updatedAt = Math.max(0, ...accounts.map(acc => Number(acc.lastUpdate) || 0));
+
+  const signature = JSON.stringify({
+    historyAt: accountSummaryHistoryAt,
+    historyLength: accountSummaryHistory.length,
+    running: !!runtime.running,
+    runningAccountId: runtime.runningAccountId || null,
+    accounts: accounts.map(acc => ({
+      id: acc.id,
+      name: acc.name,
+      enabled: acc.enabled,
+      balance: acc.balance,
+      earned: acc.earned,
+      claimable: acc.claimablePoints,
+      streak: acc.streakDays,
+      stamps: acc.stamps,
+      lastUpdate: acc.lastUpdate
+    })),
+    totals: [totalBalance, totalEarned, totalClaimable, totalStreak, totalStamps, totalStampMax, avg7Total, avg30Total]
+  });
+  if (signature === accountSummaryRenderSignature && tbody.childElementCount > 0) return;
+  hideAccountTrendTooltip();
+  accountSummaryRenderSignature = signature;
+
+  const rows = accounts.map(acc => {
+    const status = getAccountRuntimeStatus(acc, runtime);
+    const stampMax = Math.max(1, Number(acc.stamps?.max || 12));
+    const stampProgress = Math.max(0, Math.min(stampMax, Number(acc.stamps?.progress || 0)));
+    const avg7 = accountAverages.get(acc.id)?.avg7 ?? null;
+    const avg30 = accountAverages.get(acc.id)?.avg30 ?? null;
+    return `
+      <tr class="account-summary-row ${status.cls}" data-account-id="${escapeHtml(acc.id)}" tabindex="0" role="button" aria-label="进入 ${escapeHtml(acc.name || '账号')} 详情">
+        <td class="summary-account-cell">
+          <span class="summary-account-name">
+            <span class="summary-account-dot" data-tip="${escapeHtml(status.tip)}"></span>
+            <span>${escapeHtml(acc.name || '账号')}</span>
+          </span>
+        </td>
+        <td>${summaryTrendCell(Number(acc.balance || 0).toLocaleString(), acc.id, 'is-balance')}</td>
+        <td>${summaryTrendCell(`+${Number(acc.earned || 0).toLocaleString()}`, acc.id, 'is-earned')}</td>
+        <td>${summaryTrendCell(`${Number(acc.claimablePoints || 0).toLocaleString()} 分`, acc.id, Number(acc.claimablePoints || 0) > 0 ? 'is-claimable' : '')}</td>
+        <td>${summaryTrendCell(`${Number(acc.streakDays || 0)} 天`, acc.id, 'is-streak')}</td>
+        <td>${summaryTrendCell(`${stampProgress} / ${stampMax}`, acc.id, 'is-stamps')}</td>
+        <td>${summaryTrendCell(`${formatDailyAverage(avg7)}${avg7 === null ? '' : '/日'}`, acc.id, 'is-history')}</td>
+        <td>${summaryTrendCell(`${formatDailyAverage(avg30)}${avg30 === null ? '' : '/日'}`, acc.id, 'is-history')}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const totalRow = `
+    <tr class="account-summary-total-row">
+      <td class="summary-account-cell"><span class="summary-account-name"><span class="summary-account-dot total"></span><span>总计</span></span></td>
+      <td>${summaryTrendCell(totalBalance.toLocaleString(), 'all', 'is-balance')}</td>
+      <td>${summaryTrendCell(`+${totalEarned.toLocaleString()}`, 'all', 'is-earned')}</td>
+      <td>${summaryTrendCell(`${totalClaimable.toLocaleString()} 分`, 'all', totalClaimable > 0 ? 'is-claimable' : '')}</td>
+      <td>${summaryTrendCell(`${totalStreak} 天`, 'all', 'is-streak')}</td>
+      <td>${summaryTrendCell(`${totalStamps} / ${totalStampMax}`, 'all', 'is-stamps')}</td>
+      <td>${summaryTrendCell(`${formatDailyAverage(avg7Total)}${avg7Total === null ? '' : '/日'}`, 'all', 'is-history')}</td>
+      <td>${summaryTrendCell(`${formatDailyAverage(avg30Total)}${avg30Total === null ? '' : '/日'}`, 'all', 'is-history')}</td>
+    </tr>
+  `;
+
+  tbody.innerHTML = rows + totalRow;
+  const updatedEl = document.getElementById('account-summary-updated');
+  if (updatedEl) {
+    updatedEl.innerText = updatedAt > 0
+      ? `更新于 ${new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+      : '等待官网同步';
+  }
+  const claimBtn = document.getElementById('btn-summary-claim-all');
+  if (claimBtn) {
+    claimBtn.disabled = !!runtime.running || totalClaimable <= 0;
+    claimBtn.title = totalClaimable > 0
+      ? `全部账号共有 ${totalClaimable} 点待领取积分`
+      : '当前没有待领取积分';
+  }
+
+  // 保持今日数据和 7/30 日趋势在长时间打开页面时同步更新。
+  ensureAccountSummaryHistory();
+}
+
+function renderAccountTrendChart(rows) {
+  if (!rows.length) return '<div class="account-trend-empty">暂无历史数据</div>';
+  const width = 252;
+  const height = 88;
+  const padding = 8;
+  const values = rows.map(row => Number(row.earned || 0));
+  const max = Math.max(1, ...values);
+  const stepX = (width - padding * 2) / Math.max(1, rows.length - 1);
+  const points = values.map((value, index) => {
+    const x = padding + index * stepX;
+    const y = height - padding - (value / max) * (height - padding * 2);
+    return [x, y];
+  });
+  const line = points.map(point => point.join(',')).join(' ');
+  const area = `${padding},${height - padding} ${line} ${width - padding},${height - padding}`;
+  const last = points[points.length - 1];
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="近 14 日每日新增积分折线">
+      <defs>
+        <linearGradient id="account-trend-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.34"></stop>
+          <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"></stop>
+        </linearGradient>
+      </defs>
+      <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" class="account-trend-axis"></line>
+      <polygon points="${area}" fill="url(#account-trend-fill)"></polygon>
+      <polyline points="${line}" class="account-trend-line"></polyline>
+      <circle cx="${last[0]}" cy="${last[1]}" r="3.5" class="account-trend-dot"></circle>
+    </svg>
+  `;
+}
+
+function showAccountTrendTooltip(cell) {
+  const tooltip = document.getElementById('account-trend-tooltip');
+  const nameEl = document.getElementById('account-trend-name');
+  const chartEl = document.getElementById('account-trend-chart');
+  const rangeEl = document.getElementById('account-trend-range');
+  const summaryEl = document.getElementById('account-trend-summary');
+  if (!tooltip || !nameEl || !chartEl || !rangeEl || !summaryEl) return;
+
+  const accountId = cell.getAttribute('data-trend-account');
+  if (!accountId) return;
+  if (accountSummaryHistory.length === 0) {
+    ensureAccountSummaryHistory();
+    return;
+  }
+  const account = accountId === 'all'
+    ? { name: '全部账号' }
+    : (currentStatus?.summary?.accountsList || []).find(acc => acc.id === accountId);
+  const rows = getAccountTrendRows(accountId, 14);
+  const total = rows.reduce((sum, row) => sum + row.earned, 0);
+  const avg = rows.length > 0 ? total / rows.length : 0;
+  nameEl.textContent = `${account?.name || accountId} · 每日新增积分`;
+  chartEl.innerHTML = renderAccountTrendChart(rows);
+  rangeEl.textContent = rows.length > 0 ? `${rows[0].date.slice(5)} → ${rows[rows.length - 1].date.slice(5)}` : '--';
+  summaryEl.textContent = rows.length > 0 ? `累计 +${total.toLocaleString()} · 日均 +${avg.toFixed(1)}` : '--';
+
+  tooltip.style.display = 'block';
+  const rect = cell.getBoundingClientRect();
+  const tipRect = tooltip.getBoundingClientRect();
+  let left = rect.left + rect.width / 2 - tipRect.width / 2;
+  left = Math.max(8, Math.min(window.innerWidth - tipRect.width - 8, left));
+  let top = rect.top - tipRect.height - 10;
+  if (top < 8) top = rect.bottom + 10;
+  if (top + tipRect.height > window.innerHeight - 8) {
+    top = Math.max(8, window.innerHeight - tipRect.height - 8);
+  }
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function hideAccountTrendTooltip() {
+  const tooltip = document.getElementById('account-trend-tooltip');
+  if (tooltip) tooltip.style.display = 'none';
+}
+
+async function openAccountDetailFromSummary(accountId) {
+  if (!accountId) return;
+  hideAccountTrendTooltip();
+  selectedAccountId = accountId;
+  await Promise.all([
+    fetchStatus(),
+    fetchHistory(currentHistoryDays, accountId)
+  ]);
+  renderLogs();
+  requestAnimationFrame(() => {
+    document.getElementById('task-list-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
 // 渲染大屏
 function renderDashboard(data) {
   const { running, runningAccountId, summary, stats, timeline } = data;
@@ -2700,89 +3011,8 @@ function renderDashboard(data) {
     btnRunSingle.innerHTML = `<span>▶️</span> 运行当前账号 [${escapeHtml(stats.name || '')}]`;
   }
 
-  // 3. Hero 5 大卡片数据渲染
-  const displayEarned = isAllMode ? (summary?.totalEarned || 0) : (stats.earned || 0);
-  const displayBalance = isAllMode ? (summary?.totalBalance || 0) : (stats.balance || 0);
-  const displayClaimable = isAllMode ? Number(summary?.totalClaimable || 0) : Number(stats.claimablePoints || 0);
-  const displayStreak = isAllMode ? (summary?.maxStreak || 0) : (stats.streakDays || 0);
-  const stamps = isAllMode ? (summary?.stamps || { progress: 0, max: 12 }) : (stats.stamps || { progress: 0, max: 12 });
-  const earnedBreakdown = document.getElementById('earned-account-breakdown');
-  const balanceBreakdown = document.getElementById('balance-account-breakdown');
-  const claimableBreakdown = document.getElementById('claimable-account-breakdown');
-
-  document.getElementById('stat-earned').innerText = `+${displayEarned}`;
-  document.getElementById('stat-balance').innerText = displayBalance.toLocaleString();
-
-  // 卡片 3：待领取额外积分
-  const statClaimable = document.getElementById('stat-claimable');
-  const statClaimableDesc = document.getElementById('stat-claimable-desc');
-  const heroClaimBtn = document.getElementById('hero-claim-btn-text');
-  if (statClaimable) {
-    statClaimable.innerText = `${displayClaimable} 分`;
-    statClaimable.style.color = displayClaimable > 0 ? '#38BDF8' : 'var(--text-muted)';
-  }
-  if (statClaimableDesc) {
-    statClaimableDesc.innerText = displayClaimable > 0
-      ? (isAllMode ? `共 ${displayClaimable} 点待领，点击一键领取` : `当前账号有 ${displayClaimable} 点待领，点击领取`)
-      : '平台额外赠分均已领取完毕';
-  }
-  if (heroClaimBtn) {
-    heroClaimBtn.innerText = displayClaimable > 0 ? '立即领取 ➜' : '已领完';
-    heroClaimBtn.style.opacity = displayClaimable > 0 ? '1' : '0.5';
-  }
-
-  const accountCount = summary?.accountsList?.length || 0;
-  const allBreakdowns = [earnedBreakdown, balanceBreakdown, claimableBreakdown];
-  allBreakdowns.forEach(el => { if (el) el.hidden = !isAllMode; });
-  if (isAllMode) {
-    renderHeroAccountBreakdown('earned-account-breakdown', summary?.accountsList || [], 'earned', value => `+${value.toLocaleString()}`);
-    renderHeroAccountBreakdown('balance-account-breakdown', summary?.accountsList || [], 'balance', value => value.toLocaleString());
-    renderHeroAccountBreakdown('claimable-account-breakdown', summary?.accountsList || [], 'claimablePoints', value => `${value.toLocaleString()} 分`);
-  }
-  const earnedDesc = document.querySelector('#stat-earned + .hero-account-breakdown')?.nextElementSibling;
-  const balanceDesc = document.querySelector('#stat-balance + .hero-account-breakdown')?.nextElementSibling;
-  if (earnedDesc) {
-    earnedDesc.innerText = isAllMode ? `${accountCount} 个账号今日积分明细` : '各项任务自动累计到账';
-  }
-  if (balanceDesc) {
-    balanceDesc.innerText = isAllMode ? `${accountCount} 个账号当前余额明细` : '同步微软平台账户积分';
-  }
-
-  document.getElementById('stat-streak').innerText = `${displayStreak} 天`;
-
-  const statStamps = document.getElementById('stat-stamps');
-  const statStampsDesc = document.getElementById('stat-stamps-desc');
-  const statStampsFill = document.getElementById('stat-stamps-fill');
-  const stampsGrid = document.getElementById('stamps-grid-track');
-  const stampsAccountList = document.getElementById('stamps-account-list');
-  const stampsMiniBar = document.querySelector('.stamps-mini-bar');
-  if (statStamps) {
-    statStamps.innerText = isAllMode
-      ? `${summary?.accountsList?.length || 0} 个账号`
-      : `${stamps.progress || 0} / ${stamps.max || 12}`;
-  }
-  if (statStampsFill) {
-    const sMax = Number(stamps.max || 12) || 12;
-    const sProg = Number(stamps.progress || 0) || 0;
-    const sPct = Math.min(100, Math.max(0, Math.round((sProg / sMax) * 100)));
-    statStampsFill.style.width = `${sPct}%`;
-  }
-  if (statStampsDesc) {
-    if (isAllMode) {
-      statStampsDesc.innerText = `全部 ${accountCount} 个账号印章进度`;
-    } else {
-      const diff = Math.max(0, (stamps.max || 12) - (stamps.progress || 0));
-      statStampsDesc.innerText = diff > 0 ? `差 ${diff} 个集满 1,000 分大奖` : '1,000 奖励印章已集满！';
-    }
-  }
-  if (stampsGrid) stampsGrid.hidden = isAllMode;
-  if (stampsAccountList) stampsAccountList.hidden = !isAllMode;
-  if (stampsMiniBar) stampsMiniBar.hidden = isAllMode;
-  if (isAllMode) {
-    renderAccountStampsList(summary?.accountsList || []);
-  } else {
-    renderStampsGrid(stamps);
-  }
+  // 3. 账号积分与签到汇总表
+  renderAccountSummaryTable(summary, { running, runningAccountId });
 
   // 顶部工具条面包屑/范围更新
   const scopeBadge = document.getElementById('ms-toolbar-scope');
@@ -3753,7 +3983,7 @@ function updateSearchRhythmHint() {
   return !err;
 }
 
-const RUN_HOURS = Array.from({ length: 14 }, (_, index) => index + 9);
+const RUN_HOURS = Array.from({ length: 24 }, (_, index) => index);
 
 function normalizeRunHoursInput(value) {
   const values = Array.isArray(value) ? value : (value === undefined || value === null ? [] : [value]);

@@ -1,4 +1,4 @@
-export const RUN_HOURS = Array.from({ length: 14 }, (_, index) => index + 9);
+export const RUN_HOURS = Array.from({ length: 24 }, (_, index) => index);
 export const RUN_WINDOW_MINUTES = 60;
 export const MAX_START_DELAY_MINUTES = 10;
 

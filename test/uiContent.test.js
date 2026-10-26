@@ -66,31 +66,35 @@ test('鼠标只驱动边框高光角度，不再生成跟随光斑', () => {
   assert.match(styleCss, /conic-gradient\([\s\S]*--pointer-angle/);
 });
 
-test('账号汇总完整展开迷你印章并优化任务卡与统计块排版', () => {
-  assert.match(indexHtml, /id="stamps-account-list"/);
-  assert.match(appJs, /renderAccountStampsList/);
-  const stampsBlock = styleCss.match(/\.stamps-account-list\s*\{([\s\S]*?)\}/)?.[1] || '';
-  assert.match(stampsBlock, /max-height:\s*none/);
-  assert.match(stampsBlock, /overflow:\s*visible/);
-  assert.doesNotMatch(stampsBlock, /overflow-y:\s*auto/);
+test('账号汇总使用可交互表格并包含总计与趋势入口', () => {
+  assert.match(indexHtml, /id="account-summary-tbody"/);
+  assert.match(indexHtml, /id="btn-summary-claim-all"/);
+  assert.match(indexHtml, /id="account-trend-tooltip"/);
+  assert.match(appJs, /function renderAccountSummaryTable/);
+  assert.match(appJs, /account-summary-total-row/);
+  assert.match(appJs, /data-trend-account/);
+  assert.match(appJs, /function showAccountTrendTooltip/);
+  assert.match(appJs, /openAccountDetailFromSummary/);
   assert.match(styleCss, /\.task-card-featured[\s\S]*min-height: 0/);
   assert.match(styleCss, /\.acc-stat-box[\s\S]*border-radius: 10px/);
 });
 
-test('首页汇总展示逐账号积分明细，历史图只在汇总视图且位于监控卡片之前', () => {
-  assert.match(indexHtml, /id="earned-account-breakdown"/);
-  assert.match(indexHtml, /id="balance-account-breakdown"/);
-  assert.match(indexHtml, /id="claimable-account-breakdown"/);
-  assert.match(appJs, /renderHeroAccountBreakdown/);
+test('首页汇总表格覆盖积分、签到、印章与 7/30 日趋势', () => {
+  assert.match(indexHtml, /当前积分[\s\S]*今日获取[\s\S]*待领取[\s\S]*连续签到[\s\S]*印章[\s\S]*近 7 日日均[\s\S]*近 30 日日均/);
+  assert.match(appJs, /getAccountEarnedAverage\(acc\.id, 7\)/);
+  assert.match(appJs, /getAccountEarnedAverage\(acc\.id, 30\)/);
+  assert.match(appJs, /getAccountTrendRows\(accountId, 14\)/);
   const historyIndex = indexHtml.indexOf('id="history-card-section"');
   const monitorIndex = indexHtml.indexOf('id="browser-monitor-card"');
   assert.ok(historyIndex > 0 && historyIndex < monitorIndex);
   assert.match(appJs, /historyCard\.style\.display = isAllMode \? 'flex' : 'none'/);
 });
 
-test('四张 Hero 卡共用标签与明细结构，账号概览避免轮询时重复重建', () => {
-  assert.match(indexHtml, /id="stat-streak"/);
-  assert.match(styleCss, /\.hero-label-row[\s\S]*min-height: 24px/);
+test('账号汇总表与账号概览避免轮询时重复重建', () => {
+  assert.match(appJs, /accountSummaryRenderSignature/);
+  assert.match(appJs, /signature === accountSummaryRenderSignature/);
+  assert.match(styleCss, /\.account-summary-table[\s\S]*border-collapse/);
+  assert.match(styleCss, /\.account-trend-tooltip[\s\S]*position:\s*fixed/);
   assert.match(appJs, /accountsOverviewRenderSignature/);
   assert.match(appJs, /signature === accountsOverviewRenderSignature/);
 });
@@ -129,11 +133,11 @@ test('配置向导与新增账号会先确认代理再发起凭据会话', () =>
   assert.match(appJs, /proxyMode: proxySelection\.mode/);
 });
 
-test('账号运行时间使用 9:00-22:00 的 14 个勾选档位', () => {
+test('账号运行时间使用 00:00-23:00 的 24 个勾选档位', () => {
   assert.match(indexHtml, /id="cfg-run-hours"/);
   assert.match(indexHtml, /id="guide-run-hours"/);
   assert.match(indexHtml, /id="quick-add-run-hours"/);
-  assert.match(appJs, /const RUN_HOURS = Array\.from\(\{ length: 14 \}/);
+  assert.match(appJs, /const RUN_HOURS = Array\.from\(\{ length: 24 \}/);
   assert.match(appJs, /function renderRunHourGrid/);
   assert.match(appJs, /randomDelayMin: 10/);
   assert.match(styleCss, /\.run-hour-grid[\s\S]*grid-template-columns/);

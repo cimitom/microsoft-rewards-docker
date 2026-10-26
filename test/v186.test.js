@@ -207,11 +207,11 @@ test('Token 测试接口使用当前账号代理，并支持候选授权码临�
   assert.equal(proxyDuringTest?.proxyId, 'proxy_token_test');
 });
 
-test('多账号栏自动换行，四张汇总卡完整展示且代理卡显示分配账号', () => {
+test('多账号栏自动换行，汇总表支持完整账号明细且代理卡显示分配账号', () => {
   assert.match(STYLE_SOURCE, /\.account-selector-bar\s*\{[\s\S]*?flex-wrap:\s*wrap/);
   assert.doesNotMatch(STYLE_SOURCE, /\.account-selector-bar\s*\{[^}]*overflow-x:\s*auto/);
-  assert.match(STYLE_SOURCE, /\.hero-account-breakdown\s*\{[\s\S]*?max-height:\s*none/);
-  assert.match(STYLE_SOURCE, /\.stamps-account-list\s*\{[\s\S]*?max-height:\s*none/);
+  assert.match(STYLE_SOURCE, /\.account-summary-table-wrap\s*\{[\s\S]*?overflow-x:\s*auto/);
+  assert.match(STYLE_SOURCE, /\.account-summary-table\s*\{[\s\S]*?min-width:\s*920px/);
   assert.match(APP_SOURCE, /function getProxyAssignedAccounts\(proxyId\)/);
   assert.match(APP_SOURCE, /当前分配账号/);
 });
