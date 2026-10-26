@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.8.9-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.8.10-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,13 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🖥️ **桌面打孔卡进度与明细一致性修复 (v1.8.10)**：
+  - **修复 3/8 与 7/8 不一致**：悬浮明细现在只展示当前官网进度以内的确认记录，不再把跨周旧日志显示为已完成；
+  - **按周期重置**：每周任务使用官方 Quest ID 作为周期标识，新周期自动清空旧进度、旧日志和旧冷却状态；
+  - **官网进度为准**：桌面任务提交后必须回读官网进度，只有实际增长才计入本地统计，不再把普通 `true` 响应误判为成功；
+  - **完整 RSC 提交协议**：补齐 `Next-Action`、`Next-Router-State-Tree`、部署 ID 与正确响应确认，修复历史上“提交成功但官网不计分”；
+  - **锁定状态可见**：明确显示当前已完成数量、可执行数量、锁定数量和下一解锁星期，不再反复启动浏览器空跑；
+  - **回归测试 210 项全部通过**。
 - 🕒 **运行档位互斥与未排期暂停 (v1.8.9)**：
   - **单账号单档位**：每个账号最多只能选择一个一小时运行窗口，不再支持多选备用；
   - **档位全局互斥**：一个档位被某个账号选中后，其他账号看到该档位为禁用状态，无法重复勾选；

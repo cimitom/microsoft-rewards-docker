@@ -264,7 +264,8 @@ class NetworkClient {
       responseType = 'text',
       proxyUrl,
       useProxy,
-      ignoreAccountProxy = false
+      ignoreAccountProxy = false,
+      returnResponse = false
     } = options;
 
     const agent = this.getAgent({ proxyUrl, useProxy, ignoreAccountProxy });
@@ -334,7 +335,9 @@ class NetworkClient {
         return response.headers.location || true;
       }
 
-      return response.data;
+      return returnResponse
+        ? { data: response.data, status: response.status, headers: response.headers }
+        : response.data;
     } catch (error) {
       if (error.response && [301, 302, 307, 308].includes(error.response.status)) {
         return error.response.headers.location || true;

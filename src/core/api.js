@@ -40,6 +40,119 @@ export const APP_CONFIG = {
   }
 };
 
+/**
+ * 从 Next.js Flight 文本中提取包含指定键的完整 JSON 对象。
+ * 简单的非嵌套正则会把 pcchild 子任务截断，导致锁定/完成数量长期不准。
+ */
+export function extractJsonObjectsWithKey(text, anchor = '"offerId"') {
+  const source = String(text || '');
+  const objects = [];
+  let position = 0;
+
+  while ((position = source.indexOf(anchor, position)) !== -1) {
+    const start = source.lastIndexOf('{', position);
+    if (start === -1) {
+      position += anchor.length;
+      continue;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let i = start; i < source.length; i++) {
+      const char = source[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+      } else if (char === '{') {
+        depth++;
+      } else if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+    }
+
+    if (end === -1) {
+      position += anchor.length;
+      continue;
+    }
+
+    const raw = source.slice(start, end)
+      .replace(/:\$undefined/g, ':null')
+      .replace(/:\$D[^\",}\]]+/g, ':null');
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        objects.push(parsed);
+      }
+    } catch {}
+    position = end;
+  }
+
+  return objects;
+}
+
+export function isServerActionAcknowledged(payload) {
+  return /^\d+:true\s*$/m.test(String(payload || ''));
+}
+
+export function buildQuestRouterStateTree(questId) {
+  const tree = [
+    '',
+    {
+      children: [
+        '(nav)',
+        {
+          children: [
+            'earn',
+            {
+              children: [
+                'quest',
+                {
+                  children: [
+                    ['questId', questId, 'd', null],
+                    { children: ['__PAGE__', {}, null, null, 0] },
+                    null,
+                    null,
+                    0
+                  ]
+                },
+                null,
+                null,
+                0
+              ]
+            },
+            null,
+            null,
+            0
+          ]
+        },
+        null,
+        null,
+        0
+      ]
+    },
+    null,
+    null,
+    16
+  ];
+  return encodeURIComponent(JSON.stringify(tree));
+}
+
+export function weekdayFromOfferId(offerId = '') {
+  const match = String(offerId).match(/_(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)_/i);
+  return match ? match[1].toLowerCase() : '';
+}
+
 export { isBalanceMismatch } from './accountIdentity.js';
 
 export const SEARCH_POOL = [
@@ -739,7 +852,7 @@ export class RewardsApi {
       return `title:${text.replace(/\s+/g, '')}`;
     };
 
-    const addQuest = (title, curP, maxP, chunk) => {
+    const addQuest = (title, curP, maxP, chunk, questId = '') => {
       if (!title || title.includes('开始使用 Rewards')) return;
       let expText = '';
       const expM = chunk.match(/expiresAt[^0-9]{0,40}(\d{4}-\d{2}-\d{2}T[^\"]+)/);
@@ -768,6 +881,7 @@ export class RewardsApi {
       const key = canonicalQuestKey(title);
       const existingIndex = questIndexByKey.get(key);
       const next = {
+        questId,
         title,
         progress: curP,
         max: maxP,
@@ -792,6 +906,7 @@ export class RewardsApi {
       existing.done = existing.progress >= existing.max;
       existing.points = Math.max(Number(existing.points || 0), Number(next.points || 0));
       if (!existing.expiresText && next.expiresText) existing.expiresText = next.expiresText;
+      if (!existing.questId && next.questId) existing.questId = next.questId;
       const chineseScore = (value) => /[\u4e00-\u9fff]/.test(String(value || '')) ? 2 : 1;
       if (chineseScore(next.title) > chineseScore(existing.title)) existing.title = next.title;
       if (next.icon && !existing.icon) existing.icon = next.icon;
@@ -799,7 +914,7 @@ export class RewardsApi {
 
     // 0. 当前 Next.js Flight 数据：按 href 精确关联标题与进度
     for (const card of cards) {
-      addQuest(card.title, card.progress, card.max, '');
+      addQuest(card.title, card.progress, card.max, '', card.questId);
     }
 
     // 1. Flight stream 模式：标题 + 任务进度
@@ -1258,37 +1373,54 @@ export class RewardsApi {
               try { qChunks.push(JSON.parse(`"${qm[1]}"`)); } catch {}
             }
             const qText = qChunks.length > 0 ? qChunks.join('') : String(questHtml).replace(/\\"/g, '"');
-            const qOfferRegex = /\{[^{}]*?"offerId"\s*:\s*"(WW_pcchild\d+[^"]+)"[^{}]*?\}/g;
-            let qo;
-            let desktopTotal = 0;
-            let desktopReady = 0;
-            let desktopLocked = 0;
-            let desktopCompleted = 0;
-            while ((qo = qOfferRegex.exec(qText)) !== null) {
-              try {
-                const qItem = JSON.parse(qo[0].replace(/:\$undefined/g, ':null').replace(/:\$D[^\",}]+/g, ':null'));
-                desktopTotal++;
-                if (qItem.isCompleted === true) { desktopCompleted++; continue; }
-                if (qItem.isLocked === true) { desktopLocked++; continue; }
-                if (qItem.offerId && qItem.hash && qItem.isLocked === false && qItem.isCompleted === false) {
-                  desktopReady++;
-                  logger.log('🖥️', `发现桌面端专享打卡任务: ${qItem.title || qItem.offerId}`);
-                  pushCard({
-                    title: `[桌面专享] ${qItem.title || qItem.name || qItem.offerId}`,
-                    points: 10,
-                    offerId: qItem.offerId,
-                    hash: qItem.hash,
-                    kind: 'desktop_app',
-                    category: 'desktop',
-                    destination: qItem.destination || qItem.href || '',
-                    url: 'https://rewards.bing.com/earn'
-                  });
-                }
-              } catch {}
+            const children = extractJsonObjectsWithKey(qText)
+              .filter(item => /^WW_pcchild\d+_/.test(String(item.offerId || '')));
+            const uniqueChildren = [...new Map(children.map(item => [item.offerId, item])).values()];
+            const parentQuest = this.extractQuests(String(html).replace(/\\"/g, '"').replace(/\\u0026/g, '&'))
+              .find(q => /桌面|RewardsApp/i.test(`${q.title || ''} ${q.questId || ''}`));
+            const completedCount = Number(parentQuest?.progress || 0);
+            const totalCount = Math.max(
+              Number(parentQuest?.max || 0),
+              uniqueChildren.length + completedCount
+            );
+            const lockedChildren = uniqueChildren.filter(item => (
+              item.isLocked === true || item.isDisabled === true
+            ));
+            const readyChildren = uniqueChildren.filter(item => (
+              item.isCompleted !== true
+              && item.isLocked !== true
+              && item.isDisabled !== true
+              && !!item.hash
+            ));
+
+            for (const qItem of readyChildren) {
+              logger.log('🖥️', `发现桌面端专享打卡任务: ${qItem.title || qItem.offerId}`);
+              pushCard({
+                title: `[桌面专享] ${qItem.title || qItem.name || qItem.offerId}`,
+                points: Number(qItem.points || 10),
+                offerId: qItem.offerId,
+                hash: qItem.hash,
+                kind: 'desktop_app',
+                category: 'desktop',
+                destination: qItem.destination || qItem.href || '',
+                url: questUrl,
+                parentQuestId: questMatch[1].match(/WW_pcparent_[^/?#]+/)?.[0] || '',
+                unlockDay: weekdayFromOfferId(qItem.offerId),
+                deploymentId: this.getDeploymentId(questHtml)
+              });
             }
-            if (desktopTotal > 0) {
-              // 帮助用户理解「昨天 3 个今天 1 个」：周打孔卡是按天逐步解锁的
-              logger.log('🖥️', `桌面每周专属任务：共 ${desktopTotal} 项，本次可打卡 ${desktopReady} 项（已完成 ${desktopCompleted} / 未解锁 ${desktopLocked}）`);
+
+            if (uniqueChildren.length > 0 || totalCount > 0) {
+              const nextDay = weekdayFromOfferId(lockedChildren[0]?.offerId);
+              const nextDayLabel = {
+                monday: '周一', tuesday: '周二', wednesday: '周三', thursday: '周四',
+                friday: '周五', saturday: '周六', sunday: '周日'
+              }[nextDay] || nextDay;
+              const nextHint = nextDayLabel ? `，下一项 ${nextDayLabel} 解锁` : '';
+              logger.log(
+                '🖥️',
+                `桌面每周专属任务：已完成 ${completedCount}/${totalCount}，本次可打卡 ${readyChildren.length} 项，锁定 ${lockedChildren.length} 项${nextHint}`
+              );
             }
           }
         }
@@ -1302,19 +1434,41 @@ export class RewardsApi {
     return cards;
   }
 
-  async getNextActionHash(html) {
-    if (html && html.includes('_next/static/chunks/')) {
-      const scriptSrcs = [...new Set(html.match(/\/_next\/static\/chunks\/[a-z0-9_\-]+\.js\?dpl=[^"]+/g) || [])];
-      for (const src of scriptSrcs) {
-        try {
-          const chunkText = await networkClient.request({ url: 'https://rewards.bing.com' + src });
-          const match = String(chunkText).match(/createServerReference\)\("([a-f0-9]{40,44})"[^)]*"reportActivity"\)/);
-          if (match && match[1]) {
-            this.cachedNextAction = match[1];
-            break;
-          }
-        } catch {}
+  getDeploymentId(html = '') {
+    const text = String(html || '');
+    const deploymentId = text.match(/[?&](?:amp;)?dpl=([A-Za-z0-9._-]+)/i)?.[1]
+      || text.match(/"buildId"\s*:\s*"([A-Za-z0-9._-]+)"/i)?.[1]
+      || text.match(/\/_next\/static\/([A-Za-z0-9._-]+)\//)?.[1]
+      || '';
+    if (deploymentId) {
+      if (this.cachedDeploymentId && this.cachedDeploymentId !== deploymentId) {
+        this.cachedNextAction = null;
       }
+      this.cachedDeploymentId = deploymentId;
+    }
+    return this.cachedDeploymentId || '';
+  }
+
+  async getNextActionHash(html, baseUrl = 'https://rewards.bing.com') {
+    if (!html || !String(html).includes('_next/static/')) return this.cachedNextAction;
+    const source = String(html);
+    const scriptSrcs = [...new Set(
+      [...source.matchAll(/(?:src|href)="([^"]*\/_next\/static\/[^"]+?\.js(?:\?[^"]*)?)"/g)]
+        .map(match => match[1])
+    )];
+
+    for (const src of scriptSrcs.slice(0, 80)) {
+      try {
+        const url = src.startsWith('http') ? src : new URL(src, baseUrl).toString();
+        const chunkText = await networkClient.request({ url });
+        const createReferenceRegex = /createServerReference\s*\)?\s*\(\s*"([a-f0-9]{40,64})"([\s\S]{0,800}?)\)/g;
+        for (const match of String(chunkText).matchAll(createReferenceRegex)) {
+          if (match[2].includes('reportActivity')) {
+            this.cachedNextAction = match[1];
+            return this.cachedNextAction;
+          }
+        }
+      } catch {}
     }
     return this.cachedNextAction;
   }
@@ -1329,39 +1483,76 @@ export class RewardsApi {
 
     // 策略 1: Next.js Server Action
     try {
+      let pageHtml = '';
+      if (!nextAction
+        || !this.cachedDeploymentId
+        || (card.deploymentId && card.deploymentId !== this.cachedDeploymentId)) {
+        pageHtml = await networkClient.request({
+          url,
+          headers: card.kind === 'desktop_app' ? DESKTOP_APP_HEADERS : pcPageHeaders()
+        }).catch(() => '');
+        this.getDeploymentId(pageHtml);
+        nextAction = await this.getNextActionHash(pageHtml, url);
+      }
       const headers = {
+        'accept': 'text/x-component',
         'content-type': 'text/plain;charset=UTF-8',
         'next-action': nextAction,
-        'referer': referer
+        'referer': referer,
+        'origin': 'https://rewards.bing.com'
       };
-      if (card.kind === 'desktop_app') {
-        Object.assign(headers, DESKTOP_APP_HEADERS);
+      if (card.parentQuestId) {
+        headers['next-router-state-tree'] = buildQuestRouterStateTree(card.parentQuestId);
       }
-      const res = await networkClient.request({
+      if (this.cachedDeploymentId) {
+        headers['x-deployment-id'] = this.cachedDeploymentId;
+      }
+      const response = await networkClient.request({
         method: 'POST',
         url,
         headers,
-        data: JSON.stringify([card.hash, 11, { offerid: card.offerId, isPromotional: '$undefined', timezoneOffset: '-480' }])
+        data: JSON.stringify([card.hash, 11, { offerid: card.offerId, isPromotional: '$undefined', timezoneOffset: '-480' }]),
+        returnResponse: true
       });
-      const str = String(res);
-      if (str.includes('true') || str.includes('"i":false') || str.includes('"a":')) {
+      this.lastCardReport = {
+        status: response?.status || null,
+        acknowledged: isServerActionAcknowledged(response?.data)
+      };
+      if (this.lastCardReport.acknowledged) {
         return true;
       }
     } catch (e) {
       if (e.message && e.message.includes('404')) {
         try {
           const earnHtml = await networkClient.request({ url: 'https://rewards.bing.com/earn' });
-          nextAction = await this.getNextActionHash(earnHtml);
-          const retryRes = await networkClient.request({
+          this.getDeploymentId(earnHtml);
+          nextAction = await this.getNextActionHash(earnHtml, 'https://rewards.bing.com/earn');
+          const retryResponse = await networkClient.request({
             method: 'POST',
             url,
-            headers: { 'content-type': 'text/plain;charset=UTF-8', 'next-action': nextAction, referer },
-            data: JSON.stringify([card.hash, 11, { offerid: card.offerId, isPromotional: '$undefined', timezoneOffset: '-480' }])
+            headers: {
+              accept: 'text/x-component',
+              'content-type': 'text/plain;charset=UTF-8',
+              'next-action': nextAction,
+              referer,
+              origin: 'https://rewards.bing.com',
+              ...(card.parentQuestId ? { 'next-router-state-tree': buildQuestRouterStateTree(card.parentQuestId) } : {}),
+              ...(this.cachedDeploymentId ? { 'x-deployment-id': this.cachedDeploymentId } : {})
+            },
+            data: JSON.stringify([card.hash, 11, { offerid: card.offerId, isPromotional: '$undefined', timezoneOffset: '-480' }]),
+            returnResponse: true
           });
-          if (retryRes) return true;
+          this.lastCardReport = {
+            status: retryResponse?.status || null,
+            acknowledged: isServerActionAcknowledged(retryResponse?.data)
+          };
+          if (this.lastCardReport.acknowledged) return true;
         } catch {}
       }
     }
+
+    // 桌面 App 专属任务必须由 Server Action 明确确认，不能走普通网页上报兜底。
+    if (card.kind === 'desktop_app') return false;
 
     // 策略 2: 每日活动目标链接搜索上报
     if (card.destination && card.destination.startsWith('http')) {

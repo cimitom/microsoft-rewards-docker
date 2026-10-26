@@ -2454,7 +2454,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.9';
+  const current = updateInfo?.currentVersion || '1.8.10';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2509,8 +2509,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.9'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.9'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.10'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.10'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -2846,8 +2846,8 @@ function renderDashboard(data) {
   }
 
 function formatPunchCardTooltip(t) {
-  const p = Number(t.progress || 0);
   const m = Number(t.max || 1);
+  const p = Math.max(0, Math.min(m, Number(t.progress || 0)));
   const logs = Array.isArray(t.stepLogs) ? t.stepLogs : [];
   const lines = [
     `📋 ${t.name || '打孔卡'} 推进历史明细 (${p}/${m}):`
@@ -2858,7 +2858,7 @@ function formatPunchCardTooltip(t) {
   lines.push('───────────────────────');
 
   for (let s = 1; s <= m; s++) {
-    const log = logs.find(l => l.step === s);
+    const log = s <= p ? logs.find(l => Number(l.step) === s) : null;
     if (log && log.at) {
       const d = new Date(log.at);
       const dateStr = !isNaN(d.getTime())

@@ -102,6 +102,7 @@ export class TaskManager {
               tasks: merged.tasks || this.createDefaultAccountStats().tasks
             };
           }
+          this.normalizeAllPunchCardTasks(merged);
           return merged;
         } else if (parsed && parsed.accounts && typeof parsed.accounts === 'object') {
           // 跨日换天：日常任务清空，但继承跨天多日打孔卡状态与打孔记录，避免第二天被清零
@@ -124,6 +125,7 @@ export class TaskManager {
               }
             }
           }
+          this.normalizeAllPunchCardTasks(baseStats);
           return baseStats;
         }
       }
@@ -185,10 +187,11 @@ export class TaskManager {
       const activeStats = this.stats.accounts[id];
       // 保证所有打孔卡任务的 stepLogs 与基础属性健全
       for (const [k, t] of Object.entries(activeStats.tasks || {})) {
-        if (t && (t.isPunchCard || k === 'desktopApp' || k === 'monthlyQuest' || k.startsWith('quest_'))) {
+        if (this.isPunchCardTask(k, t)) {
           t.isPunchCard = true;
           if (!Array.isArray(t.stepLogs)) t.stepLogs = [];
           if (!t.unit) t.unit = '个任务';
+          this.normalizePunchCardTask(t);
         }
       }
       if (!activeStats.stamps) {
@@ -367,6 +370,97 @@ export class TaskManager {
       searchTier: incoming?.searchTier || previous.searchTier || null,
       statusMessage: incoming?.statusMessage ?? previous.statusMessage ?? ''
     };
+  }
+
+  isPunchCardTask(key, task) {
+    return !!task && (
+      task.isPunchCard
+      || key === 'desktopApp'
+      || key === 'monthlyQuest'
+      || String(key).startsWith('quest_')
+    );
+  }
+
+  /**
+   * 打孔卡只允许保存当前周期、当前进度以内的确认记录。
+   * 历史上跨周遗留的 stepLogs 会让悬浮明细显示成 7/8，而官网真实进度仍是 3/8。
+   */
+  normalizePunchCardTask(task) {
+    if (!task || typeof task !== 'object') return { task, changed: false };
+    const max = Math.max(1, Math.floor(Number(task.max) || 1));
+    const progress = Math.max(0, Math.min(max, Math.floor(Number(task.progress) || 0)));
+    const byStep = new Map();
+    for (const log of Array.isArray(task.stepLogs) ? task.stepLogs : []) {
+      const step = Math.floor(Number(log?.step));
+      if (!Number.isInteger(step) || step <= 0 || step > progress || step > max) continue;
+      const previous = byStep.get(step);
+      if (!previous || Number(log?.at || 0) >= Number(previous?.at || 0)) {
+        byStep.set(step, log);
+      }
+    }
+    const stepLogs = [...byStep.values()].sort((a, b) => Number(a.step) - Number(b.step));
+    const done = max > 0 && progress >= max;
+    const changed = Number(task.max) !== max
+      || Number(task.progress) !== progress
+      || task.done !== done
+      || JSON.stringify(task.stepLogs || []) !== JSON.stringify(stepLogs);
+    task.max = max;
+    task.progress = progress;
+    task.done = done;
+    task.stepLogs = stepLogs;
+    return { task, changed };
+  }
+
+  normalizeAllPunchCardTasks(stats = this.stats) {
+    let changed = false;
+    for (const account of Object.values(stats?.accounts || {})) {
+      for (const [key, task] of Object.entries(account?.tasks || {})) {
+        if (!this.isPunchCardTask(key, task)) continue;
+        if (!task.isPunchCard) {
+          task.isPunchCard = true;
+          changed = true;
+        }
+        if (!task.unit) {
+          task.unit = '个任务';
+          changed = true;
+        }
+        if (this.normalizePunchCardTask(task).changed) changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * 打孔卡跨周期时必须清空旧日志和进度；同一周期内继续使用只增不减的防回退策略。
+   */
+  mergePunchCardTask(previous, incoming) {
+    const previousTask = previous && typeof previous === 'object' ? { ...previous } : null;
+    if (previousTask) this.normalizePunchCardTask(previousTask);
+    const incomingTask = { ...(incoming || {}) };
+    const previousCycle = String(previousTask?.cycleKey || '');
+    const incomingCycle = String(incomingTask.cycleKey || '');
+    const cycleChanged = !!incomingCycle && previousCycle !== incomingCycle;
+
+    if (!previousTask || cycleChanged) {
+      this.normalizePunchCardTask(incomingTask);
+      return incomingTask;
+    }
+
+    const merged = this.mergeMonotonicTask(previousTask, incomingTask);
+    const logByStep = new Map();
+    for (const log of [
+      ...(Array.isArray(previousTask.stepLogs) ? previousTask.stepLogs : []),
+      ...(Array.isArray(incomingTask.stepLogs) ? incomingTask.stepLogs : [])
+    ]) {
+      const step = Number(log?.step);
+      if (!Number.isInteger(step) || step <= 0) continue;
+      const current = logByStep.get(step);
+      if (!current || Number(log?.at || 0) >= Number(current?.at || 0)) logByStep.set(step, log);
+    }
+    merged.stepLogs = [...logByStep.values()].sort((a, b) => Number(a.step) - Number(b.step));
+    merged.cycleKey = incomingCycle || previousCycle || undefined;
+    this.normalizePunchCardTask(merged);
+    return merged;
   }
 
   /**
@@ -559,8 +653,11 @@ export class TaskManager {
             let questKey = isDesktop ? 'desktopApp' : (isHalloween ? 'quest_halloween' : (isMonthly ? 'monthlyQuest' : `quest_${idx}`));
             currentQuestKeys.add(questKey);
 
-            const prevTask = accStats.tasks[questKey] || {};
-            const prevLogs = Array.isArray(prevTask.stepLogs) ? prevTask.stepLogs : [];
+            const prevTaskRaw = accStats.tasks[questKey] || {};
+            const prevTask = { ...prevTaskRaw };
+            this.normalizePunchCardTask(prevTask);
+            const cycleChanged = !!q.questId && String(prevTask.cycleKey || '') !== String(q.questId);
+            const prevLogs = !cycleChanged && Array.isArray(prevTask.stepLogs) ? prevTask.stepLogs : [];
             const updatedLogs = [];
             const seenSteps = new Set();
             for (const log of prevLogs) {
@@ -593,6 +690,7 @@ export class TaskManager {
 
             const nextQuestTask = {
               name: title || (isDesktop ? '桌面应用每周专属任务' : '活动打孔卡'),
+              cycleKey: q.questId || prevTask.cycleKey || '',
               progress: qProgress,
               max: qMax,
               points: qProgress >= qMax ? (q.points || (isDesktop ? 20 : 50)) : 0,
@@ -610,8 +708,9 @@ export class TaskManager {
                 : {}
             };
             accStats.tasks[questKey] = prevTask.name === nextQuestTask.name
-              ? this.mergeMonotonicTask(prevTask, nextQuestTask)
+              ? this.mergePunchCardTask(prevTask, nextQuestTask)
               : nextQuestTask;
+            this.normalizePunchCardTask(accStats.tasks[questKey]);
           });
 
           // 仅在明确获取到了官方确切的任务列表时，才移除下线活动；若未拿到列表则完整保留已有卡片
@@ -1503,6 +1602,41 @@ export class TaskManager {
             ? `已推进 ${okCount} 个可完成活动`
             : '已刷新状态，当前没有可点击完成的活动';
         }
+      } else if (taskKey === 'desktopApp') {
+        const beforeInfo = await rewardsApi.getRewardsInfo(1).catch(() => null);
+        const beforeProgress = Number(beforeInfo?.desktopApp?.progress || before?.tasks?.desktopApp?.progress || 0);
+        const desktopCards = (await rewardsApi.discoverCards())
+          .filter(card => card.category === 'desktop');
+
+        if (desktopCards.length === 0) {
+          const current = await rewardsApi.getRewardsInfo(1).catch(() => null);
+          const progress = Number(current?.desktopApp?.progress || beforeProgress);
+          const max = Number(current?.desktopApp?.max || before?.tasks?.desktopApp?.max || 8) || 8;
+          result.message = progress >= max
+            ? `桌面奖励应用每周专属任务已完成（${progress}/${max}）`
+            : `桌面奖励应用每周专属任务当前 ${progress}/${max}，其余任务尚未解锁或今天已经完成`;
+          result.details.push('任务按天解锁，解锁后自动巡检会继续提交并回读官网进度');
+        } else {
+          let advanced = 0;
+          for (const card of desktopCards) {
+            const claimed = await rewardsApi.claimCard(card);
+            if (!claimed) continue;
+            await rewardsApi.randomDelay(1200, 2200);
+            const current = await rewardsApi.getRewardsInfo(1).catch(() => null);
+            const progress = Number(current?.desktopApp?.progress);
+            if (!Number.isFinite(progress) || progress <= beforeProgress + advanced) {
+              result.details.push(`提交已确认但官网进度未增加：${card.title || card.offerId}`);
+              continue;
+            }
+            advanced++;
+            result.details.push(`官网进度 ${progress}/${Number(current?.desktopApp?.max || 8) || 8}`);
+          }
+          result.message = advanced > 0
+            ? `桌面奖励应用每周专属任务已推进 ${advanced} 项`
+            : '桌面任务已提交，但官网尚未确认进度';
+          result.hadFailure = advanced === 0;
+        }
+        await this.syncAccountOfficialStatus(acc, { owned: true });
       } else {
         const quests = await rewardsApi.getQuestPunchCards();
         const isDesktop = taskKey === 'desktopApp';
@@ -1607,6 +1741,7 @@ export class TaskManager {
       }
       const task = targetTask;
       if (task) {
+        this.normalizePunchCardTask(task);
         if (!Array.isArray(task.stepLogs)) task.stepLogs = [];
         if (d.verified !== true) continue;
         const max = Number(task.max || 1) || 1;
@@ -1623,6 +1758,7 @@ export class TaskManager {
         // 不再按“点击一次 +1”伪造完成。
         task.progress = Math.max(Number(task.progress || 0), Math.min(max, step));
         task.done = task.progress >= max;
+        this.normalizePunchCardTask(task);
       }
     }
     this.saveStats();
@@ -1815,26 +1951,43 @@ export class TaskManager {
           if (!this.running || this.isAccountPaused(accountId)) break;
           logger.log('🧩', `执行卡片打卡: [${card.kind}] ${card.title} (+${card.points}分)`, accountName);
           await rewardsApi.randomDelay(2500, 5000);
+          const desktopBefore = card.category === 'desktop'
+            ? Number(this.ensureAccountStats(accountId).tasks?.desktopApp?.progress || 0)
+            : 0;
           const claimed = await rewardsApi.claimCard(card);
           if (!claimed) continue;
 
-          cardOk++;
-          claimedPoints += Number(card.points || 0);
-
           if (card.category === 'desktop') {
+            await rewardsApi.randomDelay(1200, 2200);
+            const official = await rewardsApi.getRewardsInfo(1).catch(() => null);
+            const desktopAfter = Number(official?.desktopApp?.progress);
+            if (!Number.isFinite(desktopAfter) || desktopAfter <= desktopBefore) {
+              logger.log(
+                '🟡',
+                `桌面任务已提交但官网进度未变化（${desktopBefore}/${Number(official?.desktopApp?.max || 8) || 8}），本次不计入`,
+                '',
+                accountName
+              );
+              continue;
+            }
+            cardOk++;
+            claimedPoints += Number(card.points || 0);
             desktopOk++;
-            // 桌面专属任务按真实进度累加，不再写死 3
-            const dCur = this.ensureAccountStats(accountId).tasks?.desktopApp || {};
-            const dProgress = Number(dCur.progress || 0) + 1;
-            const dMax = Number(dCur.max || 8) || 8;
-            this.updateTask('desktopApp', {
-              progress: dProgress,
-              max: dMax,
-              points: claimedPoints,
-              available: true,
-              done: dProgress >= dMax
-            }, accountId);
+            const currentTask = this.ensureAccountStats(accountId).tasks?.desktopApp || {};
+            this.ensureAccountStats(accountId).tasks.desktopApp = this.mergePunchCardTask(currentTask, {
+              ...currentTask,
+              ...official.desktopApp,
+              progress: desktopAfter,
+              max: Number(official.desktopApp.max || 8) || 8,
+              cycleKey: official.desktopApp.questId || currentTask.cycleKey || card.parentQuestId || '',
+              points: desktopAfter >= Number(official.desktopApp.max || 8) ? 20 : 0,
+              isPunchCard: true,
+              unit: '个任务'
+            });
+            this.saveStats();
           } else if (card.category === 'promo') {
+            cardOk++;
+            claimedPoints += Number(card.points || 0);
             promoOk++;
             // 实时更新卡片进度，避免整个扫描过程界面停在 0/x
             this.updateTask('promos', {
@@ -1843,6 +1996,9 @@ export class TaskManager {
               points: claimedPoints,
               done: promoTotal > 0 && promoOk >= promoTotal
             }, accountId);
+          } else {
+            cardOk++;
+            claimedPoints += Number(card.points || 0);
           }
         }
 
@@ -1899,14 +2055,21 @@ export class TaskManager {
       if (info.desktopApp) {
         const dProgress = Number(info.desktopApp.progress ?? 0);
         const dMax = Number(info.desktopApp.max ?? 8) || 8;
-        this.updateTask('desktopApp', {
+        const previousDesktop = this.ensureAccountStats(accountId).tasks?.desktopApp || {};
+        this.ensureAccountStats(accountId).tasks.desktopApp = this.mergePunchCardTask(previousDesktop, {
+          ...previousDesktop,
+          name: info.desktopApp.title || previousDesktop.name || '桌面应用每周专属任务',
+          cycleKey: info.desktopApp.questId || previousDesktop.cycleKey || '',
           progress: dProgress,
           max: dMax,
           expiresText: info.desktopApp.expiresText || '',
           points: dProgress >= dMax ? 20 : 0,
           available: info.desktopApp.available !== false,
-          done: dProgress >= dMax
-        }, accountId);
+          done: dProgress >= dMax,
+          isPunchCard: true,
+          unit: '个任务'
+        });
+        this.saveStats();
       }
       if (info.stamps) {
         accStats.stamps = info.stamps;
@@ -2047,7 +2210,9 @@ export class TaskManager {
                 return name === title || name.includes(title) || title.includes(name);
               }) || null;
             };
-            const pendingQuests = quests.filter(q => !q.done).map(q => {
+            const pendingQuests = quests.filter(q => (
+              !q.done && !/RewardsApp/i.test(String(q.questId || ''))
+            )).map(q => {
               const task = findTaskForQuest(q);
               return {
                 ...q,
