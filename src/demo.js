@@ -270,6 +270,15 @@ taskManager.loadStats = () => {
     accounts: structuredClone(baseAccountsStats)
   };
 };
+// 演示账号的 Cookie 是固定占位符，不应触发真实账号的身份变化清理。
+taskManager.ensureAccountStats = (accountId) => {
+  const accCfg = configManager.resolveAccount(accountId);
+  const id = accCfg?.id || accountId || 'demo_acc_1';
+  if (!taskManager.stats.accounts[id]) {
+    taskManager.stats.accounts[id] = taskManager.createDefaultAccountStats(id, accCfg?.name || id);
+  }
+  return taskManager.stats.accounts[id];
+};
 taskManager.saveStats();
 
 // 3. 注入 7 天真实历史积分趋势
@@ -284,6 +293,9 @@ for (let i = 6; i >= 0; i--) {
   historyManager.recordAccountDay('demo_acc_1', dateKey, {
     earned: earned1,
     balance: 51355 - i * 135,
+    claimablePoints: i === 0 ? 3 : (i % 3 === 0 ? 5 : 0),
+    streakDays: Math.max(0, 42 - i),
+    stamps: { progress: Math.max(0, 8 - Math.floor(i / 4)), max: 12 },
     breakdown: [
       { name: '必应 PC 搜索任务', icon: '🔍', points: 60 },
       { name: '每日活动集 (Daily Set)', icon: '📅', points: 30 },
@@ -296,6 +308,9 @@ for (let i = 6; i >= 0; i--) {
   historyManager.recordAccountDay('demo_acc_2', dateKey, {
     earned: earned2,
     balance: 32480 - i * 110,
+    claimablePoints: i === 0 ? 0 : (i % 4 === 0 ? 5 : 0),
+    streakDays: Math.max(0, 18 - i),
+    stamps: { progress: Math.max(0, 5 - Math.floor(i / 5)), max: 12 },
     breakdown: [
       { name: '必应 PC 搜索任务', icon: '🔍', points: 42 },
       { name: '新闻资讯自动阅读', icon: '📖', points: 30 },
@@ -306,6 +321,9 @@ for (let i = 6; i >= 0; i--) {
   historyManager.recordAccountDay('demo_acc_3', dateKey, {
     earned: earned3,
     balance: 18920 - i * 155,
+    claimablePoints: i === 0 ? 5 : (i % 2 === 0 ? 3 : 0),
+    streakDays: Math.max(0, 7 - i),
+    stamps: { progress: Math.max(0, 11 - Math.floor(i / 3)), max: 12 },
     breakdown: [
       { name: '必应 PC 搜索任务', icon: '🔍', points: 60 },
       { name: '每日活动集 (Daily Set)', icon: '📅', points: 30 },

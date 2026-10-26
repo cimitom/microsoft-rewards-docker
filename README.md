@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.9.0-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.9.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,14 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🧭 **指标级趋势与可调列宽总览 (v1.9.1)**：
+  - **按指标展示趋势**：当前积分、今日获取、待领取、连签、印章与 7/30 日均分别展示对应指标的近 14 日历史；
+  - **交互十字线**：趋势浮窗支持鼠标滑动查看每日日期、数值和峰值，不再固定显示新增积分；
+  - **列宽持久化**：拖动表头可自由调整列宽，配置保存在浏览器本地，刷新与重启页面后保持不变；双击分隔线恢复默认；
+  - **单账号快捷领取**：点击账号行中的待领取积分会先确认，再立即领取该账号的额外积分；
+  - **精简总计行**：总计只展示当前积分、今日获取与待领取，并支持各自的历史趋势；
+  - **历史快照补齐**：每日历史新增待领取、连签与印章快照，旧数据缺失时如实显示为空；
+  - **回归测试覆盖**：新增列宽、指标趋势、单账号领取与历史快照测试。
 - 📊 **首页账号总览表与全天候运行档位 (v1.9.0)**：
   - **账号汇总表格**：首页四大汇总卡改为账号明细表，包含当前积分、今日获取、待领取、连续签到、印章与近 7/30 日日均增长；
   - **总计行**：表格底部汇总全部账号积分、今日收益、待领取、连签与印章；

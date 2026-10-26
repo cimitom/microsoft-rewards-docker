@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.9.0</span>
+            <span class="version-label" id="version-label">v1.9.1</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -107,17 +107,27 @@
           </div>
         </div>
         <div class="account-summary-table-wrap">
-          <table class="account-summary-table">
+          <table class="account-summary-table" id="account-summary-table">
+            <colgroup id="account-summary-colgroup">
+              <col data-col-key="account" style="width: 190px;">
+              <col data-col-key="balance" style="width: 130px;">
+              <col data-col-key="earned" style="width: 120px;">
+              <col data-col-key="claimable" style="width: 120px;">
+              <col data-col-key="streak" style="width: 110px;">
+              <col data-col-key="stamps" style="width: 100px;">
+              <col data-col-key="avg7" style="width: 130px;">
+              <col data-col-key="avg30" style="width: 130px;">
+            </colgroup>
             <thead>
               <tr>
-                <th scope="col">账号</th>
-                <th scope="col">当前积分</th>
-                <th scope="col">今日获取</th>
-                <th scope="col">待领取</th>
-                <th scope="col">连续签到</th>
-                <th scope="col">印章</th>
-                <th scope="col" title="近 7 日累计新增积分除以 7">近 7 日日均</th>
-                <th scope="col" title="近 30 日累计新增积分除以 30">近 30 日日均</th>
+                <th scope="col" data-col-key="account">账号<span class="column-resize-handle" data-resize-column="account" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th scope="col" data-col-key="balance">当前积分<span class="column-resize-handle" data-resize-column="balance" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th scope="col" data-col-key="earned">今日获取<span class="column-resize-handle" data-resize-column="earned" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th scope="col" data-col-key="claimable">待领取<span class="column-resize-handle" data-resize-column="claimable" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th scope="col" data-col-key="streak">连续签到<span class="column-resize-handle" data-resize-column="streak" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th scope="col" data-col-key="stamps">印章<span class="column-resize-handle" data-resize-column="stamps" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th scope="col" data-col-key="avg7" title="近 7 日累计新增积分除以 7">近 7 日日均<span class="column-resize-handle" data-resize-column="avg7" title="拖动调整列宽，双击恢复默认"></span></th>
+                <th scope="col" data-col-key="avg30" title="近 30 日累计新增积分除以 30">近 30 日日均<span class="column-resize-handle" data-resize-column="avg30" title="拖动调整列宽，双击恢复默认"></span></th>
               </tr>
             </thead>
             <tbody id="account-summary-tbody">
@@ -1393,9 +1403,10 @@
   <div class="account-trend-tooltip" id="account-trend-tooltip" style="display: none;">
     <div class="account-trend-head">
       <strong id="account-trend-name">账号趋势</strong>
-      <span>近 14 日</span>
+      <span id="account-trend-metric">近 14 日</span>
     </div>
     <div class="account-trend-chart" id="account-trend-chart"></div>
+    <div class="account-trend-focus" id="account-trend-focus">左右滑动图表查看每日数据</div>
     <div class="account-trend-foot">
       <span id="account-trend-range">--</span>
       <span id="account-trend-summary">--</span>

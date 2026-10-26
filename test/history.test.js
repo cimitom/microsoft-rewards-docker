@@ -68,3 +68,48 @@ test('getHistory 返回的天数与请求一致，缺失日期返回 0 而不是
   assert.equal(missing.earned, 0);
   assert.deepEqual(missing.breakdown, []);
 });
+
+test('历史快照记录待领取、连签与印章，并允许领取后归零', () => {
+  historyManager.recordAccountDay('acc_snapshot', '2026-10-12', {
+    earned: 20,
+    balance: 520,
+    claimablePoints: 35,
+    streakDays: 4,
+    stamps: { progress: 5, max: 12 }
+  });
+  let rec = historyManager.load().accounts.acc_snapshot['2026-10-12'];
+  assert.equal(rec.claimablePoints, 35);
+  assert.equal(rec.streakDays, 4);
+  assert.deepEqual(rec.stamps, { progress: 5, max: 12 });
+
+  historyManager.recordAccountDay('acc_snapshot', '2026-10-12', {
+    earned: 20,
+    balance: 520,
+    claimablePoints: 0,
+    streakDays: 0,
+    stamps: { progress: 6, max: 12 }
+  });
+  rec = historyManager.load().accounts.acc_snapshot['2026-10-12'];
+  assert.equal(rec.claimablePoints, 0, '领取后待领取必须归零，不能沿用旧快照');
+  assert.equal(rec.streakDays, 0, '断签后连续天数必须归零');
+  assert.equal(rec.stamps.progress, 6);
+});
+
+test('汇总历史按天返回账号级待领取、连签与印章快照', () => {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dateKey = historyManager.formatDate(yesterday);
+  historyManager.recordAccountDay('acc_history_fields', dateKey, {
+    earned: 12,
+    balance: 800,
+    claimablePoints: 9,
+    streakDays: 3,
+    stamps: { progress: 2, max: 12 }
+  });
+  const list = historyManager.getHistory(2, 'all', { accounts: {} });
+  const accountRow = list[0].accounts.find(item => item.id === 'acc_history_fields');
+  assert.ok(accountRow);
+  assert.equal(accountRow.claimablePoints, 9);
+  assert.equal(accountRow.streakDays, 3);
+  assert.deepEqual(accountRow.stamps, { progress: 2, max: 12 });
+});

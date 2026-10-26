@@ -169,7 +169,7 @@ class HistoryManager {
     const incomingEarned = Math.max(0, Number(data.earned || 0));
     const incomingBalance = Number(data.balance || 0);
     const incomingBreakdown = Array.isArray(data.breakdown) ? data.breakdown : [];
-    history.accounts[accountId][dateStr] = {
+    const nextRecord = {
       date: dateStr,
       timestamp: Date.now(),
       // 今日积分只增不减，避免晚间的补偿同步用错误 0 覆盖白天已确认的积分。
@@ -179,6 +179,36 @@ class HistoryManager {
         ? incomingBreakdown
         : (Array.isArray(previous.breakdown) ? previous.breakdown : [])
     };
+
+    // 待领取、连签和印章是每日快照而不是累计值：领取后待领取会归零，
+    // 断签后连续天数也会下降，因此有传入值时必须覆盖旧快照。
+    if (data.claimablePoints !== undefined) {
+      nextRecord.claimablePoints = Math.max(0, Number(data.claimablePoints || 0));
+    } else if (previous.claimablePoints !== undefined) {
+      nextRecord.claimablePoints = Math.max(0, Number(previous.claimablePoints || 0));
+    }
+
+    if (data.streakDays !== undefined) {
+      nextRecord.streakDays = Math.max(0, Number(data.streakDays || 0));
+    } else if (previous.streakDays !== undefined) {
+      nextRecord.streakDays = Math.max(0, Number(previous.streakDays || 0));
+    }
+
+    const incomingStamps = data.stamps;
+    if (incomingStamps && typeof incomingStamps === 'object') {
+      const max = Math.max(1, Math.floor(Number(incomingStamps.max) || 12));
+      nextRecord.stamps = {
+        progress: Math.max(0, Math.min(max, Math.floor(Number(incomingStamps.progress) || 0))),
+        max
+      };
+    } else if (previous.stamps && typeof previous.stamps === 'object') {
+      nextRecord.stamps = {
+        progress: Math.max(0, Number(previous.stamps.progress || 0)),
+        max: Math.max(1, Number(previous.stamps.max || 12))
+      };
+    }
+
+    history.accounts[accountId][dateStr] = nextRecord;
     this.scheduleFlush();
   }
 
@@ -253,7 +283,26 @@ class HistoryManager {
           const balance = Number(rec.balance || 0);
           dayEarned += earned;
           dayBalance += balance;
-          accountsBreakdown.push({ id: accId, name: accountNameOf(accId), earned, balance });
+          accountsBreakdown.push({
+            id: accId,
+            name: accountNameOf(accId),
+            earned,
+            balance,
+            ...(rec.claimablePoints !== undefined
+              ? { claimablePoints: Number(rec.claimablePoints || 0) }
+              : {}),
+            ...(rec.streakDays !== undefined
+              ? { streakDays: Number(rec.streakDays || 0) }
+              : {}),
+            ...(rec.stamps && typeof rec.stamps === 'object'
+              ? {
+                  stamps: {
+                    progress: Number(rec.stamps.progress || 0),
+                    max: Math.max(1, Number(rec.stamps.max || 12))
+                  }
+                }
+              : {})
+          });
           foundAny = true;
         }
 
@@ -270,7 +319,13 @@ class HistoryManager {
             id,
             name: s?.name || accountNameOf(id),
             earned: Number(s?.earned || 0),
-            balance: Number(s?.balance || 0)
+            balance: Number(s?.balance || 0),
+            claimablePoints: Number(s?.claimablePoints || 0),
+            streakDays: Number(s?.streakDays || 0),
+            stamps: {
+              progress: Number(s?.stamps?.progress || 0),
+              max: Math.max(1, Number(s?.stamps?.max || 12))
+            }
           }));
           result.push({
             date: dateKey,

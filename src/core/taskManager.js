@@ -230,6 +230,9 @@ export class TaskManager {
           historyManager.recordAccountDay(accId, todayStr, {
             earned: aStat.earned || 0,
             balance: aStat.balance || 0,
+            claimablePoints: aStat.claimablePoints || 0,
+            streakDays: aStat.streakDays || 0,
+            stamps: aStat.stamps || { progress: 0, max: 12 },
             // 真实任务分解：只取确实拿到分的项，不再用硬编码模板编造明细
             breakdown: this.buildTaskBreakdown(aStat)
           });

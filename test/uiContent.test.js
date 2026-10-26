@@ -24,6 +24,8 @@ test('Cookie 配置向导统一使用 rewards.bing.com/dashboard', () => {
 test('发布版本号在 package 与 Web 服务端保持一致', () => {
   const escaped = packageJson.version.replace(/\./g, '\\.');
   assert.match(serverJs, new RegExp(`const CURRENT_VERSION = '${escaped}';`));
+  assert.match(indexHtml, new RegExp(`id="version-label">v${escaped}<`));
+  assert.match(appJs, new RegExp(`currentVersion \\|\\| '${escaped}'`));
 });
 
 test('任务区使用移动端签到与三组 7 日连续进度', () => {
@@ -68,11 +70,14 @@ test('鼠标只驱动边框高光角度，不再生成跟随光斑', () => {
 
 test('账号汇总使用可交互表格并包含总计与趋势入口', () => {
   assert.match(indexHtml, /id="account-summary-tbody"/);
+  assert.match(indexHtml, /id="account-summary-colgroup"/);
   assert.match(indexHtml, /id="btn-summary-claim-all"/);
   assert.match(indexHtml, /id="account-trend-tooltip"/);
+  assert.match(indexHtml, /class="column-resize-handle"/);
   assert.match(appJs, /function renderAccountSummaryTable/);
   assert.match(appJs, /account-summary-total-row/);
   assert.match(appJs, /data-trend-account/);
+  assert.match(appJs, /data-trend-metric/);
   assert.match(appJs, /function showAccountTrendTooltip/);
   assert.match(appJs, /openAccountDetailFromSummary/);
   assert.match(styleCss, /\.task-card-featured[\s\S]*min-height: 0/);
@@ -83,11 +88,28 @@ test('首页汇总表格覆盖积分、签到、印章与 7/30 日趋势', () =>
   assert.match(indexHtml, /当前积分[\s\S]*今日获取[\s\S]*待领取[\s\S]*连续签到[\s\S]*印章[\s\S]*近 7 日日均[\s\S]*近 30 日日均/);
   assert.match(appJs, /getAccountEarnedAverage\(acc\.id, 7\)/);
   assert.match(appJs, /getAccountEarnedAverage\(acc\.id, 30\)/);
-  assert.match(appJs, /getAccountTrendRows\(accountId, 14\)/);
+  assert.match(appJs, /getAccountTrendRows\(accountId, metric, 14\)/);
   const historyIndex = indexHtml.indexOf('id="history-card-section"');
   const monitorIndex = indexHtml.indexOf('id="browser-monitor-card"');
   assert.ok(historyIndex > 0 && historyIndex < monitorIndex);
   assert.match(appJs, /historyCard\.style\.display = isAllMode \? 'flex' : 'none'/);
+});
+
+test('汇总表支持列宽持久化、指标级趋势与单账号领取', () => {
+  assert.match(appJs, /msr\.accountSummaryColumnWidths\.v1/);
+  assert.match(appJs, /function initAccountSummaryColumnResize/);
+  assert.match(appJs, /function handleAccountTrendPointerMove/);
+  assert.match(appJs, /account-trend-crosshair-v/);
+  assert.match(appJs, /ACCOUNT_TREND_METRICS/);
+  assert.match(appJs, /metric === 'claimable'[\s\S]*claimablePoints[\s\S]*metric === 'streak'[\s\S]*streakDays/);
+  assert.match(appJs, /row\.value !== null[\s\S]*Number\.isFinite/);
+  assert.match(appJs, /claimSummaryPendingPoints/);
+  assert.match(appJs, /showWebConfirm/);
+  assert.match(appJs, /data-claim-points/);
+  assert.match(appJs, /colspan="4" class="account-summary-total-empty"/);
+  assert.match(styleCss, /\.column-resize-handle[\s\S]*cursor:\s*col-resize/);
+  assert.match(styleCss, /\.account-trend-crosshair/);
+  assert.match(styleCss, /\.account-summary-total-empty/);
 });
 
 test('账号汇总表与账号概览避免轮询时重复重建', () => {
