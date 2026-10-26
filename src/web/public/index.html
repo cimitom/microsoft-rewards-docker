@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.8.7</span>
+            <span class="version-label" id="version-label">v1.8.9</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -568,7 +568,7 @@
           <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color); margin-top: 14px;">
             <label class="form-label">🕒 每天运行时间档位</label>
             <div class="run-hour-grid" id="guide-run-hours"></div>
-            <small class="form-hint" style="margin-top: 8px;">可勾选多个档位作为备用。每档为 1 小时，启动延迟固定为 0-10 分钟；系统每天只在最早可用的已勾选档位执行一次。</small>
+            <small class="form-hint" style="margin-top: 8px;">每个账号只能选择一个 1 小时档位，其他账号已占用的档位不可选。未选择时间时账号不会自动执行，可稍后重新选择。</small>
           </div>
 
           <div class="step-footer">
@@ -700,7 +700,7 @@
           <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color); margin-top: 10px;">
             <label class="form-label">🕒 每天运行时间档位</label>
             <div class="run-hour-grid" id="cfg-run-hours"></div>
-            <small class="form-hint" id="cfg-account-slot-hint" style="margin-top: 8px;">每档为 1 小时，启动延迟 0-10 分钟；可多选作为备用，每天只在最早可用的已勾选档位执行一次。</small>
+            <small class="form-hint" id="cfg-account-slot-hint" style="margin-top: 8px;">每个账号只能选择一个 1 小时档位，占用后其他账号不可再选。未选择时间等于暂停自动任务；如检测到历史重叠，冲突账号的勾选会自动清空。</small>
           </div>
 
           <div style="display: flex; gap: 10px; margin-top: 14px;">
@@ -1183,7 +1183,7 @@
         <div class="form-group">
           <label class="form-label">每天运行时间档位</label>
           <div class="run-hour-grid" id="quick-add-run-hours"></div>
-          <small class="form-hint">每档 1 小时，启动延迟 0-10 分钟；可多选作为备用，每天只执行一次。</small>
+          <small class="form-hint">每个账号只能选择一个 1 小时档位，其他账号已占用的档位不可选。未选择时间时不会自动执行。</small>
         </div>
         <div class="form-group">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">

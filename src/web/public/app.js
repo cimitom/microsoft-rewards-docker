@@ -24,6 +24,7 @@ let diagMode = 'single';
 let diagAccountId = null;
 let accountsOverviewRenderSignature = '';
 let statusFetchSeq = 0;
+let scheduleConflictSignature = '';
 
 // 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
@@ -2168,7 +2169,7 @@ function openQuickAddAccountModal(accountId = null) {
         : 'direct';
     }
     updateQuickAddProxyControls(acc?.proxyId || '');
-    renderRunHourGrid('quick-add-run-hours', acc?.runHours || [acc?.timeSlot?.startHour || 9], {
+    renderRunHourGrid('quick-add-run-hours', getAccountRunHours(acc), {
       excludeAccountId: acc?.id || null
     });
     if (cookieInput) {
@@ -2196,7 +2197,7 @@ function openQuickAddAccountModal(accountId = null) {
     if (enabledInput) enabledInput.checked = true;
     if (proxyModeInput) proxyModeInput.value = 'direct';
     updateQuickAddProxyControls('');
-    renderRunHourGrid('quick-add-run-hours', [RUN_HOURS[(nextOrder - 1) % RUN_HOURS.length]]);
+    renderRunHourGrid('quick-add-run-hours', [pickFirstAvailableRunHour()].filter(Boolean));
     if (cookieInput) {
       cookieInput.value = '';
       cookieInput.placeholder = '粘贴该账号 rewards.bing.com 的 Cookie';
@@ -2240,7 +2241,7 @@ function openGuideModal() {
   document.getElementById('guide-lock-region').checked = currentConfig?.network?.lockRegion !== false;
   document.getElementById('guide-account-proxy-mode').value = 'direct';
   document.getElementById('guide-account-proxy-node-group').style.display = 'none';
-  renderRunHourGrid('guide-run-hours', [9]);
+  renderRunHourGrid('guide-run-hours', [pickFirstAvailableRunHour()].filter(Boolean));
   document.querySelectorAll('.guide-network-summary').forEach(el => { el.textContent = ''; });
   updateGuideProxyControls('');
   switchStep(1);
@@ -2258,6 +2259,7 @@ async function handleQuickAddAccount() {
   const enabled = document.getElementById('quick-add-enabled')?.checked !== false;
   const proxySelection = readProxySelection('quick-add-proxy-mode', 'quick-add-proxy-id');
   const runHours = readRunHours('quick-add-run-hours');
+  const runHourConflict = findRunHourConflict(runHours[0], isEditing ? editingAccountIdInQuickModal : null);
 
   if (!isEditing && !name && !cookieVal) {
     openEpicActionModal('无法保存微软账号', '请至少填写账号备注名称或粘贴 Cookie。', ['填写账号资料', '重新保存'], 0);
@@ -2269,12 +2271,19 @@ async function handleQuickAddAccount() {
     updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
     return;
   }
-  if (runHours.length === 0) {
-    openEpicActionModal('请选择运行时间', '请至少勾选一个每日运行时间档位。', ['勾选时间档位', '重新保存'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+  if (runHourConflict) {
+    renderRunHourGrid('quick-add-run-hours', [], {
+      excludeAccountId: isEditing ? editingAccountIdInQuickModal : null
+    });
+    openEpicActionModal(
+      '运行时间已被占用',
+      `该时间档位已分配给账号 [${runHourConflict.name || runHourConflict.id}]，当前账号的勾选已清空，请重新选择。`,
+      ['重新选择时间档位', '保存账号'],
+      0
+    );
+    updateEpicActionModal({ progress: 100, badge: { text: '时间冲突', cls: 'warn' } });
     return;
   }
-
   const payload = {
     name: name || (isEditing ? '账号' : '新账号'),
     order,
@@ -2315,9 +2324,11 @@ async function handleQuickAddAccount() {
     }).then(r => r.json());
 
     if (res.success) {
-      const msg = isEditing
-        ? '账号配置已成功更新！'
-        : (res.tokenExchanged ? '账号添加成功，且移动端 Token 已自动换取就绪！' : '账号添加成功！');
+      const msg = res.scheduleCleared
+        ? `所选时间档位已被账号 [${res.data?.scheduleConflict?.occupiedByName || '其他账号'}] 占用，已清空该账号的时间选择；未选择时间的账号不会自动执行。`
+        : (isEditing
+          ? '账号配置已成功更新！'
+          : (res.tokenExchanged ? '账号添加成功，且移动端 Token 已自动换取就绪！' : '账号添加成功！'));
       closeModal('account-quick-add-modal');
       // 清空表单
       document.getElementById('quick-add-name').value = '';
@@ -2342,7 +2353,7 @@ async function handleQuickAddAccount() {
       );
       updateEpicActionModal({
         progress: 100,
-        badge: { text: '已保存', cls: 'ok' },
+        badge: { text: res.scheduleCleared ? '已暂停排期' : '已保存', cls: res.scheduleCleared ? 'warn' : 'ok' },
         result: `账号 [${payload.name}] 已就绪。\n${clearedBeforeReset ? '已清空原 Cookie，请重新配置后再执行任务。' : '如 Cookie 已更新，建议点击「账号状态体检」确认登录态。'}`
       });
     } else {
@@ -2443,7 +2454,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.8.7';
+  const current = updateInfo?.currentVersion || '1.8.9';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2498,8 +2509,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.7'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.7'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.8.9'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.8.9'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -2661,13 +2672,16 @@ function renderDashboard(data) {
     btnToggleAccount.style.display = (!isAllMode && selectedAcc) ? 'inline-flex' : 'none';
     if (selectedAcc) {
       const paused = selectedAcc.enabled === false;
-      btnToggleAccount.className = `btn btn-sm ${paused ? 'btn-success' : 'btn-warning'}`;
+      const schedulePaused = getAccountRunHours(selectedAcc).length === 0;
+      btnToggleAccount.className = `btn btn-sm ${paused ? 'btn-success' : (schedulePaused ? 'btn-secondary' : 'btn-warning')}`;
       btnToggleAccount.innerHTML = paused
         ? '<span>▶️</span> 启用账号'
-        : '<span>⏸️</span> 暂停账号';
+        : (schedulePaused ? '<span>🕒</span> 选择运行时间' : '<span>⏸️</span> 暂停账号');
       btnToggleAccount.setAttribute('data-tip', paused
         ? '启用该账号；下一次任务或手动刷新时会按需更新 Token'
-        : '暂停后停止自动任务与自动 Token 刷新，数据、凭据和历史全部保留');
+        : (schedulePaused
+          ? '该账号未选择每日运行时间，自动任务已暂停；点击选择一个空闲档位'
+          : '暂停后停止自动任务与自动 Token 刷新，数据、凭据和历史全部保留'));
     }
   }
 
@@ -2872,6 +2886,7 @@ function formatPunchCardTooltip(t) {
     sign: 30,
     read: 40,
     promos: 50,
+    browserExtension: 55,
     desktopApp: 60
   };
 
@@ -2942,7 +2957,14 @@ function formatPunchCardTooltip(t) {
       extraStreakHtml = render7DayStreakTrack(dsStreak, stats.streakDays, isDone, '每日连续打卡活动');
     }
 
-    // 3. 移动端签到：与另外两张重点卡保持一致，只展示移动端完成状态
+    // 3. 特殊活动：官网 points 为 0，但完成后有固定奖励。
+    if (key === 'browserExtension') {
+      pointsBadge = `+${Number(t.awardPoints || 30)} 积分`;
+      progressLabel = `进度: ${isDone ? 1 : 0} / 1 项`;
+      if (t.statusMessage) subtext = t.statusMessage;
+    }
+
+    // 4. 移动端签到：与另外两张重点卡保持一致，只展示移动端完成状态
     if (key === 'sign') {
       displayName = '移动端签到';
       const appStreak = stats.streaks?.bingapp;
@@ -3103,6 +3125,20 @@ function getAccountRuntimeStatus(acc, runtime = {}) {
       tip: pausedTip
     };
   }
+  if (getAccountRunHours(acc).length === 0) {
+    return {
+      key: 'schedule-paused',
+      icon: '🟡',
+      label: '未排期',
+      cls: 'status-paused',
+      tip: [
+        '账号未选择每日运行时间档位',
+        '自动打卡任务已暂停，不会在后台自动启动',
+        '在账号编辑中选择一个空闲时间档位后即可恢复自动排期',
+        'Cookie、Token、历史与浏览器会话全部保留'
+      ].join('\n')
+    };
+  }
   if (auth.cls === 'badge-auth-invalid' || auth.cls === 'badge-auth-warn') {
     return {
       key: 'invalid',
@@ -3155,6 +3191,8 @@ function formatNextRun(sched) {
       return { text: '⏰ 00:00', tip: `已进入 ${windowText} 窗口，调度器下一分钟启动` };
     case 'disabled':
       return { text: '⏰ 已暂停', tip: '该账号已暂停，不会自动启动；手动刷新和手动体检仍可使用' };
+    case 'no-schedule':
+      return { text: '⏰ 未排期', tip: '未勾选每日运行时间档位，自动任务已暂停；选择一个空闲档位后恢复自动排期' };
     case 'no-credential':
       return { text: '⏰ 未配凭据', tip: '未配置 Cookie / Token，不会自动启动' };
     case 'schedule-off':
@@ -3173,12 +3211,13 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
     const isRunning = running && runningAccountId === acc.id;
     const runtimeStatus = getAccountRuntimeStatus(acc, { running, runningAccountId });
     const paused = acc.enabled === false;
+    const schedulePaused = getAccountRunHours(acc).length === 0;
     const nextRun = formatNextRun(schedule[acc.id]);
     const lastRunText = formatLastRunTime(acc.lastRunAt);
-    return { acc, isRunning, runtimeStatus, paused, nextRun, lastRunText };
+    return { acc, isRunning, runtimeStatus, paused, schedulePaused, nextRun, lastRunText };
   });
 
-  const signature = JSON.stringify(prepared.map(({ acc, isRunning, runtimeStatus, paused, nextRun, lastRunText }) => ({
+  const signature = JSON.stringify(prepared.map(({ acc, isRunning, runtimeStatus, paused, schedulePaused, nextRun, lastRunText }) => ({
     id: acc.id,
     name: acc.name,
     enabled: acc.enabled,
@@ -3193,6 +3232,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
     isRunning,
     runtimeStatus: runtimeStatus.key,
     paused,
+    schedulePaused,
     nextRun: nextRun.text,
     nextRunTip: nextRun.tip,
     lastRunAt: acc.lastRunAt,
@@ -3204,7 +3244,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
   accountsOverviewRenderSignature = signature;
   grid.innerHTML = '';
 
-  prepared.forEach(({ acc, isRunning, runtimeStatus, paused, nextRun, lastRunText }) => {
+  prepared.forEach(({ acc, isRunning, runtimeStatus, paused, schedulePaused, nextRun, lastRunText }) => {
     const card = document.createElement('div');
     card.className = `account-overview-card ${runtimeStatus.cls}`;
     card.setAttribute('data-tip', [
@@ -3254,7 +3294,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
 
       <div class="acc-card-actions">
         <button class="btn btn-primary btn-sm btn-run-single" title="${paused ? '账号已暂停，请先启用' : '立即运行此账号打卡'}" ${paused ? 'disabled' : ''}>▶️ 运行</button>
-        <button class="btn ${paused ? 'btn-success' : 'btn-warning'} btn-sm btn-pause-single" title="${paused ? '启用此账号' : '暂停此账号'}">${paused ? '▶️ 启用' : '⏸️ 暂停'}</button>
+        <button class="btn ${paused ? 'btn-success' : (schedulePaused ? 'btn-secondary' : 'btn-warning')} btn-sm btn-pause-single" title="${paused ? '启用此账号' : (schedulePaused ? '选择一个空闲时间档位以恢复自动任务' : '暂停此账号')}">${paused ? '▶️ 启用' : (schedulePaused ? '🕒 选择时间' : '⏸️ 暂停')}</button>
         <button class="btn btn-secondary btn-sm btn-sync-single" title="从微软官网同步该账号今日真实进度">🔄 刷新</button>
         <button class="btn btn-secondary btn-sm btn-view-acc" title="进入该账号明细大屏">明细 ➜</button>
         <div class="acc-more-wrap">
@@ -3264,7 +3304,7 @@ function renderAccountsOverviewGrid(accounts, runtime = {}) {
             <button class="dropdown-item btn-test-single-search" title="${paused ? '账号已暂停，请先启用' : '单独搜索一次 (拟人键盘输入，安全验证)'}" ${paused ? 'disabled' : ''}>🔍 单次安全测搜</button>
             <button class="dropdown-item btn-test-single" title="测试该账号登录状态">📋 账号状态体检</button>
             <div class="dropdown-sep"></div>
-            <button class="dropdown-item btn-toggle-single">${paused ? '▶️ 启用账号' : '⏸️ 暂停账号'}</button>
+            <button class="dropdown-item btn-toggle-single">${paused ? '▶️ 启用账号' : (schedulePaused ? '🕒 选择运行时间' : '⏸️ 暂停账号')}</button>
           </div>
         </div>
       </div>
@@ -3552,6 +3592,12 @@ async function toggleSelectedAccount() {
 }
 
 async function toggleAccountById(accountId) {
+  const account = currentConfig?.accounts?.find(item => item.id === accountId)
+    || currentStatus?.summary?.accountsList?.find(item => item.id === accountId);
+  if (account?.enabled !== false && getAccountRunHours(account).length === 0) {
+    openQuickAddAccountModal(accountId);
+    return;
+  }
   try {
     const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/toggle`, {
       method: 'POST'
@@ -3600,6 +3646,24 @@ async function fetchConfig() {
     const res = await fetch('/api/config').then(r => r.json());
     if (res.success) {
       currentConfig = res.data;
+      const conflicts = Array.isArray(res.data.scheduleConflicts) ? res.data.scheduleConflicts : [];
+      const conflictSignature = JSON.stringify(conflicts);
+      if (conflicts.length === 0) scheduleConflictSignature = '';
+      if (conflicts.length > 0 && conflictSignature !== scheduleConflictSignature) {
+        scheduleConflictSignature = conflictSignature;
+        const detail = conflicts.map(item => (
+          `• ${item.name || item.id}：${String(item.hour).padStart(2, '0')}:00（已分配给 ${item.occupiedByName || item.occupiedBy || '其他账号'}）`
+        )).join('\n');
+        setTimeout(() => {
+          openEpicActionModal(
+            '已清理重叠的运行时间',
+            `检测到多个账号占用了同一时间档位。冲突账号的勾选已自动清空，未选择时间的账号不会自动执行。\n\n${detail}`,
+            ['重新选择时间档位', '账号编辑'],
+            0
+          );
+          updateEpicActionModal({ progress: 100, badge: { text: '待重新排期', cls: 'warn' } });
+        }, 0);
+      }
       if (res.data.ui?.theme && !localStorage.getItem('ms_rewards_theme')) {
         setTheme(res.data.ui.theme, false);
       }
@@ -3691,45 +3755,80 @@ function updateSearchRhythmHint() {
 
 const RUN_HOURS = Array.from({ length: 14 }, (_, index) => index + 9);
 
-function normalizeRunHoursInput(value, fallback = [9]) {
-  const values = Array.isArray(value) ? value : [];
-  const valid = [...new Set(values
+function normalizeRunHoursInput(value) {
+  const values = Array.isArray(value) ? value : (value === undefined || value === null ? [] : [value]);
+  return [...new Set(values
     .map(item => Number(item))
     .filter(item => Number.isInteger(item) && RUN_HOURS.includes(item)))]
     .sort((a, b) => a - b);
-  return valid.length > 0 ? valid : fallback;
+}
+
+function getAccountRunHours(account) {
+  if (!account) return [];
+  const value = account.runHours !== undefined
+    ? account.runHours
+    : [account.timeSlot?.startHour];
+  return normalizeRunHoursInput(value).slice(0, 1);
 }
 
 function buildRunHourOccupancy(excludeAccountId = null) {
   const occupancy = new Map();
   for (const account of currentConfig?.accounts || []) {
     if (excludeAccountId && account.id === excludeAccountId) continue;
-    for (const hour of normalizeRunHoursInput(account.runHours || [account.timeSlot?.startHour])) {
-      if (!occupancy.has(hour)) occupancy.set(hour, []);
-      occupancy.get(hour).push(account.name || account.id);
-    }
+    const [hour] = getAccountRunHours(account);
+    if (hour === undefined) continue;
+    if (!occupancy.has(hour)) occupancy.set(hour, []);
+    occupancy.get(hour).push(account.name || account.id);
   }
   return occupancy;
 }
 
-function renderRunHourGrid(containerId, selectedHours = [9], options = {}) {
+function pickFirstAvailableRunHour(excludeAccountId = null) {
+  const occupancy = buildRunHourOccupancy(excludeAccountId);
+  return RUN_HOURS.find(hour => !occupancy.has(hour)) ?? null;
+}
+
+function findRunHourConflict(hour, excludeAccountId = null) {
+  if (!Number.isInteger(Number(hour))) return null;
+  return (currentConfig?.accounts || []).find(account => (
+    account.id !== excludeAccountId
+    && getAccountRunHours(account)[0] === Number(hour)
+  )) || null;
+}
+
+function renderRunHourGrid(containerId, selectedHours = [], options = {}) {
   const container = document.getElementById(containerId);
   if (!container) return;
-  const selected = new Set(normalizeRunHoursInput(selectedHours));
   const occupancy = options.occupancy || buildRunHourOccupancy(options.excludeAccountId || null);
+  const requestedHour = normalizeRunHoursInput(selectedHours)[0];
+  const selected = requestedHour !== undefined && !occupancy.has(requestedHour)
+    ? new Set([requestedHour])
+    : new Set();
   container.innerHTML = RUN_HOURS.map(hour => {
     const accountNames = occupancy.get(hour) || [];
     const occupied = accountNames.length > 0;
-    const tip = occupied ? `已被以下账号占用：${accountNames.join('、')}` : '';
+    const tip = occupied ? `已被以下账号占用：${accountNames.join('、')}。每个时间段只能分配给一个账号。` : '';
     return `
-      <label class="run-hour-option${occupied ? ' is-occupied' : ''}"
+      <label class="run-hour-option${occupied ? ' is-occupied is-disabled' : ''}"
         ${occupied ? `data-tip="${escapeHtml(tip)}" title="${escapeHtml(tip)}"` : ''}>
-        <input type="checkbox" value="${hour}" ${selected.has(hour) ? 'checked' : ''}>
+        <input type="checkbox" value="${hour}" ${selected.has(hour) ? 'checked' : ''} ${occupied ? 'disabled' : ''}>
         <span>${String(hour).padStart(2, '0')}:00</span>
         ${occupied ? '<i class="run-hour-occupied-dot" aria-hidden="true"></i>' : ''}
       </label>
     `;
   }).join('');
+
+  const inputs = [...container.querySelectorAll('input[type="checkbox"]')];
+  inputs.forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.checked) {
+        inputs.forEach(other => {
+          if (other !== input) other.checked = false;
+        });
+      }
+      container.dispatchEvent(new CustomEvent('runhourchange', { bubbles: true }));
+    });
+  });
 }
 
 function readRunHours(containerId) {
@@ -3738,11 +3837,13 @@ function readRunHours(containerId) {
   return [...container.querySelectorAll('input[type="checkbox"]:checked')]
     .map(input => Number(input.value))
     .filter(hour => RUN_HOURS.includes(hour))
-    .sort((a, b) => a - b);
+    .sort((a, b) => a - b)
+    .slice(0, 1);
 }
 
 function buildLegacyTimeSlot(runHours) {
   const [startHour] = normalizeRunHoursInput(runHours);
+  if (startHour === undefined) return null;
   return {
     startHour,
     endHour: (startHour + 1) % 24,
@@ -4286,7 +4387,7 @@ function loadAccountIntoForm(accId) {
   const authRes = document.getElementById('cfg-auth-test-result');
   if (authRes) authRes.innerHTML = '';
 
-  renderRunHourGrid('cfg-run-hours', acc.runHours || [acc.timeSlot?.startHour || 9], {
+  renderRunHourGrid('cfg-run-hours', getAccountRunHours(acc), {
     excludeAccountId: acc.id
   });
 }
@@ -4343,15 +4444,22 @@ async function saveSettingsFromModal() {
     return;
   }
   const runHours = readRunHours('cfg-run-hours');
-  if (runHours.length === 0) {
-    setSaveStatus('err', '请至少勾选一个运行时间档位');
-    openEpicActionModal('缺少运行时间', '请至少勾选一个每日运行时间档位。', ['勾选时间档位', '重新保存'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '参数无效', cls: 'warn' } });
-    return;
-  }
   const currentAccId = editingAccountIdInModal || 'acc_1';
   const currentAccounts = currentConfig?.accounts || [];
   const idx = currentAccounts.findIndex(a => a.id === currentAccId);
+  const runHourConflict = findRunHourConflict(runHours[0], currentAccId);
+  if (runHourConflict) {
+    renderRunHourGrid('cfg-run-hours', [], { excludeAccountId: currentAccId });
+    setSaveStatus('err', '该运行时间档位已被其他账号占用，勾选已清空');
+    openEpicActionModal(
+      '运行时间已被占用',
+      `该时间档位已分配给账号 [${runHourConflict.name || runHourConflict.id}]，当前账号的勾选已清空，请重新选择。`,
+      ['重新选择时间档位', '重新保存'],
+      0
+    );
+    updateEpicActionModal({ progress: 100, badge: { text: '时间冲突', cls: 'warn' } });
+    return;
+  }
 
   const updatedAccountData = {
     id: currentAccId,
@@ -4440,8 +4548,17 @@ async function saveSettingsFromModal() {
 
   if (res.success) {
     currentConfig = res.data;
-    renderRunHourGrid('cfg-run-hours', runHours, { excludeAccountId: currentAccId });
-    setSaveStatus('ok', '✅ 配置已保存并即时生效');
+    const savedAccount = currentConfig.accounts?.find(account => account.id === currentAccId);
+    renderRunHourGrid('cfg-run-hours', getAccountRunHours(savedAccount), { excludeAccountId: currentAccId });
+    const cleared = currentConfig.scheduleConflicts?.find(item => item.id === currentAccId);
+    setSaveStatus(
+      cleared ? 'warn' : 'ok',
+      cleared
+        ? `⚠️ 时间档位与账号 [${cleared.occupiedByName || cleared.occupiedBy}] 冲突，已清空该账号勾选`
+        : (runHours.length === 0
+          ? '✅ 配置已保存；未选择运行时间，该账号自动任务已暂停'
+          : '✅ 配置已保存并即时生效')
+    );
     fetchStatus();
   } else {
     setSaveStatus('err', `保存失败：${res.message || '未知错误'}`);
@@ -4509,9 +4626,16 @@ async function saveGuideSettings() {
   }
 
   const runHours = readRunHours('guide-run-hours');
-  if (runHours.length === 0) {
-    openEpicActionModal('缺少运行时间', '请至少勾选一个每日运行时间档位。', ['勾选时间档位', '重新保存'], 0);
-    updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+  const runHourConflict = findRunHourConflict(runHours[0]);
+  if (runHourConflict) {
+    renderRunHourGrid('guide-run-hours', []);
+    openEpicActionModal(
+      '运行时间已被占用',
+      `该时间档位已分配给账号 [${runHourConflict.name || runHourConflict.id}]，请重新选择一个空闲档位。`,
+      ['重新选择时间档位', '保存账号'],
+      0
+    );
+    updateEpicActionModal({ progress: 100, badge: { text: '时间冲突', cls: 'warn' } });
     return;
   }
 
@@ -4547,6 +4671,15 @@ async function saveGuideSettings() {
       throw new Error(accRes.message || '账号保存失败');
     }
     selectedAccountId = accRes.data.id;
+    if (accRes.scheduleCleared) {
+      openEpicActionModal(
+        '运行时间已被占用',
+        `所选时间档位已分配给账号 [${accRes.data.scheduleConflict?.occupiedByName || '其他账号'}]，该账号的时间勾选已清空。未选择时间时自动任务不会启动。`,
+        ['进入配置中心', '重新选择时间'],
+        0
+      );
+      updateEpicActionModal({ progress: 100, badge: { text: '已暂停排期', cls: 'warn' } });
+    }
   } catch (e) {
     openEpicActionModal('向导保存失败', e.message, ['保存账号资料', '校验网络出口'], 0);
     updateEpicActionModal({ progress: 100, badge: { text: '保存失败', cls: 'err' }, result: `保存失败：${e.message}` });

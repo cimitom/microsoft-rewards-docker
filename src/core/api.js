@@ -5,6 +5,11 @@ import logger from '../logger.js';
 import authManager from './auth.js';
 import { extractAccountDisplayName, searchTierFromMax } from './accountIdentity.js';
 import {
+  classifySpecialActivity,
+  extractActivityCardsFromHtml,
+  extractSpecialActivitiesFromHtml
+} from './specialActivities.js';
+import {
   PC_USER_AGENT,
   MOBILE_USER_AGENT,
   APP_USER_AGENT,
@@ -603,6 +608,7 @@ export class RewardsApi {
         // 连续打卡任务（必应搜索 / 每日活动 / 必应应用）的真实状态。
         // 精准提取独立 streak 对象，彻底杜绝向前切片窗口抓到 edge 导致 bingapp 被误判为 0/7 的 Bug。
         const streaks = this.extractStreakModels(clean, cleanDash);
+        const specialActivities = extractSpecialActivitiesFromHtml(clean);
 
         return {
           balance,
@@ -619,6 +625,7 @@ export class RewardsApi {
           desktopApp,
           monthlyQuest,
           quests,
+          specialActivities,
           searchTier: searchQuotaFound ? searchTierFromMax(pcMax) : null,
           stamps: {
             progress: stampsProgress,
@@ -1137,28 +1144,27 @@ export class RewardsApi {
       });
       if (!html) return null;
       const clean = String(html).replace(/\\"/g, '"');
-      const keyIdx = clean.indexOf('"activityCards":[');
-      if (keyIdx === -1) return null;
-      const start = clean.indexOf('[', keyIdx);
-      let depth = 0;
-      let end = -1;
-      for (let i = start; i < clean.length; i++) {
-        if (clean[i] === '[') depth++;
-        else if (clean[i] === ']') {
-          depth--;
-          if (depth === 0) { end = i + 1; break; }
-        }
-      }
-      if (end === -1) return null;
-      const raw = clean.slice(start, end)
-        .replace(/:\$undefined/g, ':null')
-        .replace(/:\$D[^,}\]]+/g, ':null');
-      let cards;
-      try { cards = JSON.parse(raw); } catch { return null; }
-      if (!Array.isArray(cards) || cards.length === 0) return null;
-      const completed = cards.filter(c => c && c.isCompleted === true).length;
+      if (!clean.includes('"activityCards":[')) return null;
+      // 特殊活动由独立任务处理，不能混入普通活动卡片的完成分母。
+      const cards = extractActivityCardsFromHtml(clean)
+        .filter(card => !classifySpecialActivity(card));
+      if (cards.length === 0) return null;
+      const completed = cards.filter(c => c.isCompleted === true).length;
       return { total: cards.length, completed };
     } catch {
+      return null;
+    }
+  }
+
+  async getSpecialActivities() {
+    try {
+      const html = await networkClient.request({
+        url: 'https://rewards.bing.com/earn',
+        headers: pcPageHeaders()
+      });
+      return extractSpecialActivitiesFromHtml(html);
+    } catch (e) {
+      logger.log('🟡', `特殊活动状态读取失败: ${e.message}`);
       return null;
     }
   }

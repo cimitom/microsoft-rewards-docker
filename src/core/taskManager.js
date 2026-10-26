@@ -15,6 +15,13 @@ import {
   searchTierFromMax,
   webIdentityKey
 } from './accountIdentity.js';
+import {
+  SPECIAL_ACTIVITIES,
+  buildSpecialActivityTask,
+  findSpecialActivity,
+  isSpecialActivityAttemptedToday
+} from './specialActivities.js';
+import { normalizeAccountRunHours } from './scheduleWindow.js';
 import { DATA_DIR, writeFileAtomic } from '../fsUtil.js';
 
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
@@ -376,6 +383,24 @@ export class TaskManager {
   }
 
   /**
+   * 特殊活动只对官网实际返回该卡片的账号建档。
+   * 没有 offerId 的账号不会创建任务，也不会启动浏览器。
+   */
+  syncSpecialActivities(accStats, activities) {
+    if (!accStats?.tasks || !Array.isArray(activities)) return false;
+    const activity = findSpecialActivity(activities, SPECIAL_ACTIVITIES.browserExtension.key);
+    if (!activity) {
+      delete accStats.tasks.browserExtension;
+      return false;
+    }
+    accStats.tasks.browserExtension = buildSpecialActivityTask(
+      activity,
+      accStats.tasks.browserExtension || {}
+    );
+    return true;
+  }
+
+  /**
    * 核心自愈机制：直接从微软官方同步账号的真实完成状态 (搜索/阅读/桌面任务/连签/印章)
    */
   async syncAccountOfficialStatus(accCfg, options = {}) {
@@ -411,6 +436,7 @@ export class TaskManager {
       ]);
 
       if (info) {
+        this.syncSpecialActivities(accStats, info.specialActivities);
         // 余额只在解析到有效正值时才覆盖：
         // 官网页面偶发取不到余额时 info.balance 会是 0，旧写法会把已有余额直接冲成 0，
         // 界面上就会短暂出现「总积分 0」。
@@ -591,7 +617,8 @@ export class TaskManager {
           // 仅在明确获取到了官方确切的任务列表时，才移除下线活动；若未拿到列表则完整保留已有卡片
           if (hasOfficialQuests) {
             for (const key of Object.keys(accStats.tasks)) {
-              if (key !== 'sign' && key !== 'read' && key !== 'search' && key !== 'dailySet' && key !== 'promos') {
+              if (key !== 'sign' && key !== 'read' && key !== 'search' && key !== 'dailySet'
+                && key !== 'promos' && key !== 'browserExtension') {
                 if (!currentQuestKeys.has(key)) {
                   delete accStats.tasks[key];
                 }
@@ -744,7 +771,9 @@ export class TaskManager {
 
     const accountsList = accountsCfg.map(cfgAcc => {
       const st = this.ensureAccountStats(cfgAcc.id);
-      if (cfgAcc.enabled === false) pausedAccounts++;
+      const runHours = normalizeAccountRunHours(cfgAcc.runHours);
+      const schedulePaused = runHours.length === 0;
+      if (cfgAcc.enabled === false || schedulePaused) pausedAccounts++;
       totalEarned += Number(st.earned || 0);
       totalBalance += Number(st.balance || 0);
       totalClaimable += Number(st.claimablePoints || 0);
@@ -764,6 +793,8 @@ export class TaskManager {
         id: cfgAcc.id,
         name: cfgAcc.name,
         enabled: cfgAcc.enabled !== false,
+        runHours,
+        schedulePaused,
         hasCookie: !!cfgAcc.cookie,
         hasToken: !!cfgAcc.refreshToken,
         authDiagnosis: cfgAcc.authDiagnosis || null,
@@ -1098,6 +1129,162 @@ export class TaskManager {
   }
 
   /**
+   * 只对官网确实返回“浏览器中的奖励”卡片的账号执行。
+   * 每个账号每天最多尝试一次，完成状态必须由官网回读确认。
+   */
+  async runBrowserExtensionActivity(accCfg, options = {}) {
+    const accStats = this.ensureAccountStats(accCfg.id);
+    const definition = SPECIAL_ACTIVITIES.browserExtension;
+    const task = accStats.tasks?.[definition.key];
+    if (!task) {
+      return {
+        attempted: false,
+        completed: false,
+        alreadyDone: false,
+        reason: 'not-present',
+        message: '当前账号没有“浏览器中的奖励”任务'
+      };
+    }
+    if (task.done) {
+      return {
+        attempted: false,
+        completed: true,
+        alreadyDone: true,
+        reason: 'already-completed',
+        message: '“浏览器中的奖励”任务已完成'
+      };
+    }
+    if (options.ignoreCooldown !== true && isSpecialActivityAttemptedToday(task)) {
+      return {
+        attempted: false,
+        completed: false,
+        alreadyDone: false,
+        reason: 'cooldown',
+        message: '今天已经尝试过“浏览器中的奖励”，为避免重复上报已跳过'
+      };
+    }
+
+    const activities = await rewardsApi.getSpecialActivities();
+    if (!Array.isArray(activities)) {
+      throw new Error('无法读取“浏览器中的奖励”任务状态');
+    }
+    const activity = findSpecialActivity(activities, definition.key);
+    if (!activity) {
+      delete accStats.tasks[definition.key];
+      this.saveStats();
+      return {
+        attempted: false,
+        completed: false,
+        alreadyDone: false,
+        reason: 'not-present',
+        message: '官网当前没有“浏览器中的奖励”任务'
+      };
+    }
+    if (activity.isCompleted === true) {
+      this.syncSpecialActivities(accStats, activities);
+      this.saveStats();
+      return {
+        attempted: false,
+        completed: true,
+        alreadyDone: true,
+        reason: 'already-completed',
+        message: '“浏览器中的奖励”任务已在官网完成'
+      };
+    }
+    if (!browserManager.getExecutablePath()) {
+      throw new Error('未检测到 Chromium 或 Edge 浏览器内核');
+    }
+
+    // 先落一次尝试标记。即使点击后浏览器异常退出，也不会在同一天再次重复上报。
+    const attemptStartedAt = Date.now();
+    this.updateTask(definition.key, {
+      lastAttemptAt: attemptStartedAt,
+      lastResult: 'attempting',
+      statusMessage: '正在执行扩展任务上报'
+    }, accCfg.id);
+
+    const result = await browserManager.claimBrowserExtensionActivity(accCfg, activity);
+    const now = Date.now();
+    const attempted = result.attempted === true;
+    let completed = result.completed === true || result.alreadyDone === true;
+    if (!completed && attempted) {
+      // 有些完成态只在重新请求官网时出现，卡片 DOM 可能已经被移除。
+      const verifiedActivities = await rewardsApi.getSpecialActivities().catch(() => null);
+      const verifiedActivity = findSpecialActivity(verifiedActivities, definition.key);
+      if (verifiedActivity?.isCompleted === true) {
+        completed = true;
+        result.completed = true;
+        result.afterCompleted = true;
+      }
+    }
+    const patch = {
+      lastAttemptAt: attempted ? attemptStartedAt : 0,
+      lastReportStatus: result.reportStatus ?? null,
+      lastVerifiedAt: completed ? now : Number(task.lastVerifiedAt || 0)
+    };
+
+    if (completed) {
+      Object.assign(patch, {
+        progress: 1,
+        max: 1,
+        points: definition.awardPoints,
+        awardPoints: definition.awardPoints,
+        done: true,
+        lastResult: 'completed',
+        cooldownUntil: 0,
+        statusMessage: '官网已完成，30 分可能延迟入账'
+      });
+    } else if (result.notFound) {
+      Object.assign(patch, {
+        lastResult: 'not-found',
+        statusMessage: '官网未找到可点击的扩展任务入口'
+      });
+    } else if (result.locked) {
+      Object.assign(patch, {
+        lastResult: 'locked',
+        statusMessage: '扩展任务当前未解锁'
+      });
+    } else if (attempted) {
+      Object.assign(patch, {
+        lastResult: 'no-change',
+        cooldownUntil: now + 24 * 60 * 60 * 1000,
+        statusMessage: result.reportStatus === 200
+          ? '官网已接收上报，等待完成状态同步'
+          : '任务点击未确认完成，今天不再重复尝试'
+      });
+    } else {
+      Object.assign(patch, {
+        lastResult: 'not-attempted',
+        statusMessage: '本次未执行扩展任务'
+      });
+    }
+
+    this.updateTask(definition.key, patch, accCfg.id);
+    await this.syncAccountOfficialStatus(accCfg, { owned: true });
+
+    if (completed) {
+      logger.log('✅', '“浏览器中的奖励”官网已确认完成，30 分可能延迟入账', '', accCfg.name);
+      logger.addTimeline(accCfg.name, '浏览器扩展奖励任务已完成');
+    } else if (attempted) {
+      logger.log('🟡', '已点击“浏览器中的奖励”，官网尚未确认完成，今天不再重复尝试', '', accCfg.name);
+    }
+
+    return {
+      attempted,
+      completed,
+      alreadyDone: result.alreadyDone === true,
+      reportStatus: result.reportStatus ?? null,
+      notFound: result.notFound === true,
+      locked: result.locked === true,
+      message: completed
+        ? '“浏览器中的奖励”已在官网标记完成，30 分可能延迟入账'
+        : (attempted
+            ? '已执行一次扩展任务上报，官网暂未确认完成'
+            : (result.notFound ? '官网未找到扩展任务入口' : '本次未执行扩展任务'))
+    };
+  }
+
+  /**
    * WebUI 任务卡片点击执行：每次只执行该卡片对应的一次动作。
    * 支持 sign / read / search / 打孔卡类任务。
    */
@@ -1116,7 +1303,18 @@ export class TaskManager {
       if (storedBlockReason) {
         throw new Error(`账号凭据异常，已拒绝执行：${storedBlockReason}`);
       }
-      if (taskKey === 'search') {
+      if (taskKey === SPECIAL_ACTIVITIES.browserExtension.key) {
+        if (!acc.cookie) throw new Error('当前账号未配置网页 Cookie，无法执行扩展奖励任务');
+        const info = await rewardsApi.getRewardsInfo(1).catch(() => null);
+        if (!info) throw new Error('无法读取微软官网状态，Cookie 可能失效或网络异常');
+        const activity = findSpecialActivity(
+          info.specialActivities,
+          SPECIAL_ACTIVITIES.browserExtension.key
+        );
+        if (!activity) throw new Error('当前账号没有“浏览器中的奖励”任务');
+        this.syncSpecialActivities(this.ensureAccountStats(acc.id), info.specialActivities);
+        this.saveStats();
+      } else if (taskKey === 'search') {
         const readiness = await this.getSearchReadiness(acc);
         if (!readiness.ok) {
           throw new Error(`账号搜索条件未就绪，已拒绝执行：${readiness.reason}`);
@@ -1231,6 +1429,14 @@ export class TaskManager {
         await this.syncAccountOfficialStatus(acc, { owned: true });
         result.message = searchResult?.message || '单次搜索完成';
         result.details.push('已完成一次拟人键盘搜索与官网进度同步');
+      } else if (taskKey === SPECIAL_ACTIVITIES.browserExtension.key) {
+        const extensionResult = await this.runBrowserExtensionActivity(acc);
+        result.alreadyDone = extensionResult.alreadyDone === true;
+        result.hadFailure = extensionResult.attempted === true && extensionResult.completed !== true;
+        result.message = extensionResult.message;
+        if (extensionResult.reportStatus) {
+          result.details.push(`官网活动上报状态: HTTP ${extensionResult.reportStatus}`);
+        }
       } else if (taskKey === 'dailySet' || taskKey === 'promos') {
         const category = taskKey === 'dailySet' ? 'dailyset' : 'promo';
         const allCards = await rewardsApi.discoverCards();
@@ -1669,6 +1875,19 @@ export class TaskManager {
           logger.log('ℹ️', `今日未发现可执行的活动卡片${detail}，保持未完成状态，不记分`, accountName);
           this.updateTask('promos', { progress: 0, max: 0, points: 0, done: false }, accountId);
         }
+      }
+    }
+
+    if (!this.running || this.isAccountPaused(accountId)) return;
+
+    // 3.5 特殊活动：只处理官网实际返回该卡片的账号。
+    //     当前支持“浏览器中的奖励”，没有该 offerId 的账号不会启动浏览器。
+    const extensionTask = this.ensureAccountStats(accountId).tasks?.browserExtension;
+    if (wantPromos && extensionTask && !extensionTask.done && this.running) {
+      try {
+        await this.runBrowserExtensionActivity(accCfg);
+      } catch (e) {
+        logger.log('🟡', `“浏览器中的奖励”处理异常: ${e.message}`, '', accountName);
       }
     }
 

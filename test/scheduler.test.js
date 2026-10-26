@@ -57,7 +57,7 @@ test('每个启用账号每天只排一次，且偏移落在允许区间内', ()
   assert.equal(plans.acc_b, undefined, '停用账号不排计划');
   assert.ok(plans.acc_a.offset >= 0 && plans.acc_a.offset <= MAX_START_DELAY_MINUTES, '启动偏移必须在 0-10 分钟内');
   assert.equal(plans.acc_a.windowLength, 60, '每个时间档必须固定为一小时');
-  assert.equal(plans.acc_a.version, 2);
+  assert.equal(plans.acc_a.version, 3);
   assert.equal(plans.acc_a.executed, false);
 
   // 再次调用不应覆盖已生成的计划

@@ -4,7 +4,12 @@ import { DATA_DIR, writeFileAtomic } from './fsUtil.js';
 import { removeBrowserSession } from './core/browserSession.js';
 import { webIdentityKey } from './core/accountIdentity.js';
 import { normalizeProxyUrl, safeProxyId } from './core/proxy.js';
-import { RUN_HOURS, buildTimeSlot, normalizeRunHours } from './core/scheduleWindow.js';
+import {
+  RUN_HOURS,
+  buildTimeSlot,
+  normalizeAccountRunHours,
+  reconcileAccountRunHours
+} from './core/scheduleWindow.js';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
@@ -121,6 +126,7 @@ const DEFAULT_CONFIG = {
 class ConfigManager {
   constructor() {
     this.config = null;
+    this.scheduleConflicts = [];
     this.ensureDataDir();
     this.load();
   }
@@ -144,6 +150,7 @@ class ConfigManager {
   }
 
   load() {
+    this.scheduleConflicts = [];
     try {
       if (fs.existsSync(CONFIG_FILE)) {
         const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
@@ -246,7 +253,8 @@ class ConfigManager {
 
   /**
    * v1.8.3 起每个账号使用 9:00-22:00 的 14 个一小时档位。
-   * 旧版四小时窗口取其开始小时作为默认档位。
+   * 旧版四小时窗口取其开始小时作为默认档位；空数组明确表示暂停自动任务。
+   * v1.8.9 起每个账号最多保留一个档位，历史重叠由后出现者让出。
    */
   migrateRunHours() {
     let changed = false;
@@ -255,7 +263,9 @@ class ConfigManager {
       const fallbackHour = RUN_HOURS.includes(legacyHour)
         ? legacyHour
         : this.getDefaultRunHours(index)[0];
-      const runHours = normalizeRunHours(acc.runHours, [fallbackHour]);
+      const runHours = normalizeAccountRunHours(
+        acc.runHours !== undefined ? acc.runHours : [fallbackHour]
+      );
       const timeSlot = buildTimeSlot(runHours);
       if (JSON.stringify(acc.runHours) !== JSON.stringify(runHours)) {
         acc.runHours = runHours;
@@ -266,6 +276,17 @@ class ConfigManager {
         changed = true;
       }
     });
+
+    const orderedAccounts = (this.config.accounts || []).slice().sort((a, b) => {
+      const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 999;
+      const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 999;
+      return orderA - orderB;
+    });
+    const reconciled = reconcileAccountRunHours(orderedAccounts);
+    if (reconciled.cleared.length > 0) {
+      this.scheduleConflicts = reconciled.cleared;
+    }
+    changed = changed || reconciled.changed;
     if (changed) this.save();
   }
 
@@ -542,9 +563,19 @@ class ConfigManager {
     return acc;
   }
 
+  findRunHourOwner(hour, excludeAccountId = '') {
+    const targetHour = normalizeAccountRunHours([hour])[0];
+    if (targetHour === undefined) return null;
+    return this.getAccounts().find(acc => (
+      acc.id !== excludeAccountId
+      && normalizeAccountRunHours(acc.runHours).includes(targetHour)
+    )) || null;
+  }
+
   upsertAccount(accountData) {
     const cfg = this.get();
     if (!Array.isArray(cfg.accounts)) cfg.accounts = [];
+    this.scheduleConflicts = [];
 
     const id = accountData.id || `acc_${Date.now()}`;
     const idx = cfg.accounts.findIndex(a => a.id === id);
@@ -557,13 +588,34 @@ class ConfigManager {
       name = extracted ? `账号 (${extracted})` : `账号 ${cfg.accounts.length + 1}`;
     }
 
+    let scheduleConflict = null;
     if (idx !== -1) {
       const existing = cfg.accounts[idx];
       const legacyHour = Number(accountData.timeSlot?.startHour);
       const requestedHours = accountData.runHours !== undefined
         ? accountData.runHours
         : (RUN_HOURS.includes(legacyHour) ? [legacyHour] : existing.runHours);
-      const runHours = normalizeRunHours(requestedHours, this.getDefaultRunHours(idx));
+      let runHours = normalizeAccountRunHours(
+        requestedHours !== undefined ? requestedHours : this.getDefaultRunHours(idx)
+      );
+      const conflictOwner = runHours.length > 0
+        ? this.findRunHourOwner(runHours[0], id)
+        : null;
+      if (conflictOwner) {
+        scheduleConflict = {
+          hour: runHours[0],
+          occupiedBy: conflictOwner.id,
+          occupiedByName: conflictOwner.name || conflictOwner.id
+        };
+        this.scheduleConflicts = [{
+          id,
+          name: name || existing.name || id,
+          hour: runHours[0],
+          occupiedBy: conflictOwner.id,
+          occupiedByName: conflictOwner.name || conflictOwner.id
+        }];
+        runHours = [];
+      }
       const timeSlot = buildTimeSlot(runHours);
       const order = accountData.order !== undefined ? Number(accountData.order) : (existing.order || idx + 1);
       const mergedSecrets = { ...accountData };
@@ -591,13 +643,32 @@ class ConfigManager {
       } else {
         delete cfg.accounts[idx].pausedAt;
       }
+      delete cfg.accounts[idx].scheduleConflict;
     } else {
       const newIdx = cfg.accounts.length;
       const legacyHour = Number(accountData.timeSlot?.startHour);
       const requestedHours = accountData.runHours !== undefined
         ? accountData.runHours
         : (RUN_HOURS.includes(legacyHour) ? [legacyHour] : this.getDefaultRunHours(newIdx));
-      const runHours = normalizeRunHours(requestedHours, this.getDefaultRunHours(newIdx));
+      let runHours = normalizeAccountRunHours(requestedHours);
+      const conflictOwner = runHours.length > 0
+        ? this.findRunHourOwner(runHours[0], id)
+        : null;
+      if (conflictOwner) {
+        scheduleConflict = {
+          hour: runHours[0],
+          occupiedBy: conflictOwner.id,
+          occupiedByName: conflictOwner.name || conflictOwner.id
+        };
+        this.scheduleConflicts = [{
+          id,
+          name: name || `账号 ${newIdx + 1}`,
+          hour: runHours[0],
+          occupiedBy: conflictOwner.id,
+          occupiedByName: conflictOwner.name || conflictOwner.id
+        }];
+        runHours = [];
+      }
       const timeSlot = buildTimeSlot(runHours);
       const order = accountData.order !== undefined ? Number(accountData.order) : (newIdx + 1);
       const newAccount = {
@@ -622,7 +693,8 @@ class ConfigManager {
     }
 
     this.save();
-    return this.getAccount(id);
+    const saved = this.getAccount(id);
+    return scheduleConflict ? { ...saved, scheduleConflict } : saved;
   }
 
   /**
@@ -750,6 +822,8 @@ class ConfigManager {
 
     // 先深拷贝：mergeDeep 会改写传入对象，直接操作会把 express 的 req.body 也改掉
     const patch = structuredClone(partial || {});
+    delete patch.scheduleConflicts;
+    this.scheduleConflicts = [];
 
     // 如果更新的是单账号字段 account，同步更新到第一个账号或指定账号
     if (patch.account && Array.isArray(this.config.accounts) && this.config.accounts.length > 0) {
@@ -784,8 +858,11 @@ class ConfigManager {
           const fallbackHours = RUN_HOURS.includes(legacyHour)
             ? [legacyHour]
             : this.getDefaultRunHours(idx);
-          merged.runHours = normalizeRunHours(merged.runHours, fallbackHours);
+          merged.runHours = normalizeAccountRunHours(
+            merged.runHours !== undefined ? merged.runHours : fallbackHours
+          );
           merged.timeSlot = buildTimeSlot(merged.runHours);
+          delete merged.scheduleConflict;
           this.applyCredentialMetadata(merged, existing);
           if (merged.enabled === false) {
             if (!merged.pausedAt) merged.pausedAt = Date.now();
@@ -794,6 +871,15 @@ class ConfigManager {
           }
           return merged;
         });
+        const orderedAccounts = this.config.accounts.slice().sort((a, b) => {
+          const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 999;
+          const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 999;
+          return orderA - orderB;
+        });
+        const reconciled = reconcileAccountRunHours(orderedAccounts);
+        if (reconciled.cleared.length > 0) {
+          this.scheduleConflicts = reconciled.cleared;
+        }
       }
       delete patch.accounts;
     }
@@ -845,8 +931,10 @@ class ConfigManager {
    */
   getPublicConfig() {
     const cfg = structuredClone(this.get());
+    cfg.scheduleConflicts = this.scheduleConflicts.map(item => ({ ...item }));
     if (Array.isArray(cfg.accounts)) {
       cfg.accounts = cfg.accounts.map(acc => {
+        delete acc.scheduleConflict;
         for (const field of SECRET_ACCOUNT_FIELDS) {
           acc[`has${field.charAt(0).toUpperCase()}${field.slice(1)}`] = !!acc[field];
           acc[field] = acc[field] ? SECRET_PLACEHOLDER : '';

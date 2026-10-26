@@ -22,7 +22,7 @@ import { normalizeProxyUrl } from '../core/proxy.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.8.7';
+const CURRENT_VERSION = '1.8.9';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -602,6 +602,7 @@ export function createServer() {
         throw new Error('该账号选择了指定代理，但代理节点不存在');
       }
       let saved = configManager.upsertAccount(accountPayload);
+      const scheduleConflict = saved.scheduleConflict || null;
       taskManager.ensureAccountStats(saved.id);
       let tokenExchanged = false;
       if (needsTokenExchange) {
@@ -621,7 +622,17 @@ export function createServer() {
           rewardsApi.restoreAccountContext(prevContext);
         }
       }
-      res.json({ success: true, data: { id: saved.id, name: saved.name }, tokenExchanged });
+      res.json({
+        success: true,
+        data: {
+          id: saved.id,
+          name: saved.name,
+          runHours: saved.runHours || [],
+          scheduleConflict
+        },
+        scheduleCleared: !!scheduleConflict,
+        tokenExchanged
+      });
     } catch (e) {
       res.status(400).json({ success: false, message: e.message });
     } finally {

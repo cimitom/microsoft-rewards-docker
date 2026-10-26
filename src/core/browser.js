@@ -22,6 +22,11 @@ import {
   isQuestSubtaskCoolingDown,
   buildQuestSubtaskUpdate
 } from './questStatus.js';
+import {
+  SPECIAL_ACTIVITIES,
+  extractSpecialActivitiesFromHtml,
+  findSpecialActivity
+} from './specialActivities.js';
 import { withTimeout } from '../fsUtil.js';
 import {
   PC_USER_AGENT,
@@ -515,6 +520,124 @@ class BrowserManager extends EventEmitter {
       logger.log('🔴', `单次测试搜索失败: ${e.message}`, '', accName);
       await this.closeBrowser();
       throw e;
+    }
+  }
+
+  /**
+   * 点击官网“浏览器中的奖励”活动。
+   *
+   * 该活动是 points:0 的 urlreward，直接调用 Server Action 容易返回 503；
+   * 真实浏览器点击卡片时官网会自行携带 Next-Action 和会话状态。
+   * 这里只点击一次，并在回读 isCompleted 后才判定完成。
+   */
+  async claimBrowserExtensionActivity(acc, activity = null) {
+    const accName = acc?.name || '当前账号';
+    const definition = SPECIAL_ACTIVITIES.browserExtension;
+    const taskTitle = activity?.name || activity?.title || definition.name;
+    if (!acc?.cookie) throw new Error('当前账号未配置网页 Cookie，无法执行扩展奖励任务');
+
+    try {
+      this.shouldStop = false;
+      const { context } = await this.launchBrowser(acc);
+      const page = await this.createPage(context);
+      this.page = page;
+      this.updateState({
+        status: 'navigating',
+        lastAction: '正在打开官网并检查“浏览器中的奖励”任务...'
+      });
+      await page.goto('https://rewards.bing.com/earn', {
+        waitUntil: 'domcontentloaded',
+        timeout: 45000
+      });
+      await this.delay(3500);
+
+      const beforeActivity = findSpecialActivity(
+        extractSpecialActivitiesFromHtml(await page.content()),
+        definition.key
+      );
+      if (beforeActivity?.isCompleted === true) {
+        await this.commitBrowserSession();
+        return {
+          attempted: false,
+          alreadyDone: true,
+          completed: true,
+          reportStatus: null
+        };
+      }
+      if (beforeActivity?.isLocked === true) {
+        return {
+          attempted: false,
+          alreadyDone: false,
+          completed: false,
+          locked: true,
+          reportStatus: null
+        };
+      }
+
+      let link = page.locator('a[href*="browserextension/rewards"]').filter({ hasText: taskTitle }).first();
+      let linkCount = await link.count().catch(() => 0);
+      if (linkCount === 0) {
+        link = page.locator('a[href*="browserextension/rewards"]').first();
+        linkCount = await link.count().catch(() => 0);
+      }
+      if (linkCount !== 1) {
+        return {
+          attempted: false,
+          alreadyDone: false,
+          completed: false,
+          notFound: true,
+          reportStatus: null
+        };
+      }
+
+      const reportPromise = page.waitForResponse(response => (
+        response.request().method() === 'POST'
+        && /rewards\.bing\.com\/earn/i.test(response.url())
+      ), { timeout: 25000 }).then(response => response.status()).catch(() => null);
+      const popupPromise = context.waitForEvent('page', { timeout: 12000 }).catch(() => null);
+
+      this.updateState({
+        status: 'dwelling',
+        lastAction: '正在点击“浏览器中的奖励”活动卡片...'
+      });
+      await link.click({ timeout: 15000 });
+
+      const reportStatus = await reportPromise;
+      const popup = await popupPromise;
+      if (popup) {
+        await popup.waitForLoadState('domcontentloaded', { timeout: 25000 }).catch(() => {});
+        await popup.close().catch(() => {});
+      }
+
+      // 官网完成状态和积分入账都可能异步写入，给页面留出刷新时间。
+      await this.delay(10000);
+      if (!page.isClosed()) {
+        await page.goto('https://rewards.bing.com/earn', {
+          waitUntil: 'domcontentloaded',
+          timeout: 45000
+        }).catch(() => {});
+        await this.delay(3000);
+      }
+
+      const afterHtml = page.isClosed() ? '' : await page.content().catch(() => '');
+      const afterActivity = findSpecialActivity(
+        extractSpecialActivitiesFromHtml(afterHtml),
+        definition.key
+      );
+      await this.commitBrowserSession();
+      return {
+        attempted: true,
+        alreadyDone: false,
+        completed: afterActivity?.isCompleted === true,
+        reportStatus,
+        beforeCompleted: beforeActivity?.isCompleted === true,
+        afterCompleted: afterActivity?.isCompleted === true
+      };
+    } catch (e) {
+      logger.log('🔴', `“浏览器中的奖励”执行失败: ${e.message}`, '', accName);
+      throw e;
+    } finally {
+      await this.closeBrowser();
     }
   }
 

@@ -10,12 +10,12 @@ import {
   MAX_START_DELAY_MINUTES,
   RUN_HOURS,
   RUN_WINDOW_MINUTES,
-  normalizeRunHours,
+  normalizeAccountRunHours,
   selectRunHour
 } from './core/scheduleWindow.js';
 
 const PLAN_FILE = path.join(DATA_DIR, 'schedule_plan.json');
-const PLAN_VERSION = 2;
+const PLAN_VERSION = 3;
 
 class Scheduler {
   constructor() {
@@ -86,19 +86,41 @@ class Scheduler {
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
 
-    const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
-    for (let i = 0; i < accounts.length; i++) {
-      const acc = accounts[i];
+    const accounts = configManager.getAccounts();
+    const eligible = [];
+    const claimedHours = new Set();
+    for (const acc of accounts) {
+      const [runHour] = normalizeAccountRunHours(acc.runHours);
+      if (acc.enabled === false || runHour === undefined || claimedHours.has(runHour)) {
+        delete plans[acc.id];
+        continue;
+      }
+      claimedHours.add(runHour);
+      eligible.push({ acc, runHour });
+    }
+
+    // 账号被删除、暂停或改成未排期后，其旧计划不能再残留到今天。
+    const eligibleIds = new Set(eligible.map(({ acc }) => acc.id));
+    for (const accountId of Object.keys(plans)) {
+      if (!eligibleIds.has(accountId)) delete plans[accountId];
+    }
+
+    for (const { acc, runHour } of eligible) {
       const existingPlan = plans[acc.id];
-      if (existingPlan?.version === PLAN_VERSION) continue;
+      if (existingPlan?.version === PLAN_VERSION && existingPlan.runHour === runHour) continue;
       if (existingPlan?.executed === true) {
-        existingPlan.version = PLAN_VERSION;
+        plans[acc.id] = {
+          ...existingPlan,
+          version: PLAN_VERSION,
+          runHour,
+          startMin: runHour * 60,
+          endMin: runHour * 60 + RUN_WINDOW_MINUTES
+        };
         continue;
       }
       if (existingPlan) delete plans[acc.id];
 
-      const runHours = normalizeRunHours(acc.runHours, configManager.getDefaultRunHours(i));
-      const selected = selectRunHour(runHours, { isToday, nowMin });
+      const selected = selectRunHour([runHour], { isToday, nowMin });
       const startMin = selected.hour * 60;
       const endMin = startMin + RUN_WINDOW_MINUTES;
       const offset = selected.expired
@@ -168,19 +190,21 @@ class Scheduler {
     const fmt = (m) => `${String(Math.floor((((m % 1440) + 1440) % 1440) / 60)).padStart(2, '0')}:${String(((m % 60) + 60) % 60).padStart(2, '0')}`;
     const result = {};
 
-    configManager.getAccounts().forEach((acc, index) => {
-      const runHours = normalizeRunHours(acc.runHours, configManager.getDefaultRunHours(index));
+    configManager.getAccounts().forEach(acc => {
+      const runHours = normalizeAccountRunHours(acc.runHours);
       const firstRunHour = runHours[0];
       const info = {
         status: 'unknown',
         minutesUntil: null,
         nextRunAt: null,
-        windowStart: fmt(firstRunHour * 60),
-        windowEnd: fmt((firstRunHour + 1) * 60)
+        windowStart: firstRunHour === undefined ? '--:--' : fmt(firstRunHour * 60),
+        windowEnd: firstRunHour === undefined ? '--:--' : fmt((firstRunHour + 1) * 60)
       };
 
       if (acc.enabled === false) {
         info.status = 'disabled';
+      } else if (firstRunHour === undefined) {
+        info.status = 'no-schedule';
       } else if (!acc.cookie && !acc.refreshToken) {
         info.status = 'no-credential';
       } else if (!scheduleEnabled) {
@@ -243,7 +267,9 @@ class Scheduler {
       const nowMin = now.getHours() * 60 + now.getMinutes();
       const todayPlans = this.plannedDailyRuns[today] || {};
 
-      const accounts = configManager.getAccounts().filter(a => a.enabled !== false);
+      const accounts = configManager.getAccounts().filter(a => (
+        a.enabled !== false && normalizeAccountRunHours(a.runHours).length > 0
+      ));
       for (const acc of accounts) {
         if (!acc.cookie && !acc.refreshToken) continue;
 

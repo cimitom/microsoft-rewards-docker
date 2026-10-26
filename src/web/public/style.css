@@ -2856,6 +2856,16 @@ body.mouse-follow-enabled .glass-surface::before {
   color: #FBBF24;
 }
 
+.run-hour-option.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.run-hour-option.is-disabled:hover {
+  border-color: rgba(245, 158, 11, 0.58);
+  color: #FBBF24;
+}
+
 .run-hour-occupied-dot {
   position: absolute;
   top: 4px;
@@ -3065,6 +3075,10 @@ body.mouse-follow-enabled .glass-surface::before {
 
 .settings-save-status.err {
   color: #F87171;
+}
+
+.settings-save-status.warn {
+  color: #FBBF24;
 }
 
 /* Epic 领取成功庆祝层 */
