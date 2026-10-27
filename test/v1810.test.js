@@ -105,9 +105,48 @@ test('桌面任务 Server Action 使用完整 RSC 请求头并只认真实确认
     assert.equal(captured.returnResponse, true);
     assert.equal(captured.headers.accept, 'text/x-component');
     assert.equal(captured.headers.origin, 'https://rewards.bing.com');
+    assert.match(captured.headers['user-agent'], /MSRewards\/Desktop\/1\.4\.56/);
+    assert.equal(captured.headers['X-MSRewards-App'], '1');
+    assert.equal(captured.headers['X-Rewards-Source'], 'msrewards-desktop');
     assert.ok(captured.headers['next-router-state-tree']);
     assert.equal(captured.headers['x-deployment-id'], '20261022-5');
     assert.equal(isServerActionAcknowledged(captured.data), false);
+  } finally {
+    networkClient.request = originalRequest;
+  }
+});
+
+test('桌面任务 404 重试仍保留 Rewards Desktop 客户端请求头', async () => {
+  const originalRequest = networkClient.request;
+  rewardsApi.cachedNextAction = 'c'.repeat(40);
+  rewardsApi.cachedDeploymentId = '20261022-6';
+  let postCount = 0;
+  let retryHeaders = null;
+  networkClient.request = async (options) => {
+    if (options.method === 'POST') {
+      postCount++;
+      if (postCount === 1) throw new Error('HTTP 404');
+      retryHeaders = options.headers;
+      return {
+        data: '1:true\n',
+        status: 200,
+        headers: {}
+      };
+    }
+    return '<html></html>';
+  };
+  try {
+    const ok = await rewardsApi.claimCard({
+      kind: 'desktop_app',
+      offerId: 'WW_pcchild4_urlreward_Tuesday_RewardsApp_weekly_Exclusive_Octw4_2026_punchcard',
+      parentQuestId: 'WW_pcparent_RewardsApp_weekly_Exclusive_Octw4_2026_punchcard',
+      hash: 'd'.repeat(64),
+      url: 'https://rewards.bing.com/earn/quest/WW_pcparent_RewardsApp_weekly_Exclusive_Octw4_2026_punchcard'
+    });
+    assert.equal(ok, true);
+    assert.match(retryHeaders['user-agent'], /MSRewards\/Desktop\/1\.4\.56/);
+    assert.equal(retryHeaders['X-MSRewards-App'], '1');
+    assert.equal(retryHeaders['X-Rewards-Source'], 'msrewards-desktop');
   } finally {
     networkClient.request = originalRequest;
   }

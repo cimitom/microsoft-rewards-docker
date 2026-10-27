@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.9.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.9.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,15 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🖥️ **桌面奖励请求身份与任务同步修复 (v1.9.4)**：
+  - **恢复桌面客户端请求头**：主 Server Action 和 404 重试请求重新携带 `MSRewards/Desktop` UA、`X-MSRewards-App` 与 `X-Rewards-Source`，修复只读页面像客户端、实际提交却像普通网页的回归；
+  - **活动卡片自动重试**：首次扫描为空时按渐进间隔重试 3 次，避免官网瞬时返回骨架页后整轮跳过活动卡片；
+  - **不再清零活动进度**：活动页暂时不可读时保留上次已确认进度，不再把 `promos` 的 `max/progress` 重置为 0；
+  - **活动后主动同步**：卡片流程结束自动刷新官网，及时校正 Daily Set、桌面奖励和搜索状态，减少需要手动同步才显示正确进度的情况；
+  - **修正搜索完成状态**：搜索已打满时不再残留“官网未返回配额，已暂停搜索”的误导文案；
+  - **区分本轮与今日累计**：日志和汇总同时展示“本轮新增”与“今日累计”，避免第二次手动执行时把官网累计值误认为本轮增量；
+  - **修复日志账号串台**：系统启动和总结日志会清空上一账号上下文，不再错误显示成上一个账号触发；
+  - **回归测试覆盖**：新增桌面请求头、404 重试、空活动页重试、搜索完成状态和报告格式测试，测试总数 230。
 - 🎁 **额外积分领取遮罩与结果核验修复 (v1.9.3)**：
   - **等待全屏遮罩消失**：领取前不再固定等待数秒后盲点，改为等待 Dashboard React 水合与半透明遮罩隐藏；
   - **自动关闭弹层**：遮罩未消失时尝试 `Escape` 或关闭、知道了、稍后等按钮，减少残留弹窗阻断；

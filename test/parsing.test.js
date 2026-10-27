@@ -195,3 +195,30 @@ test('discoverCards 给卡片打上分类，供独立开关过滤', async () => 
     assert.equal(byId['ZHstar_Rewards_DailyGlobalOffer_Evergreen_Monday'], 'promo');
   });
 });
+
+test('discoverCards 遇到瞬时空页会自动重试并恢复活动卡片', async () => {
+  const origRequest = networkClient.request;
+  let requests = 0;
+  const retries = [];
+  networkClient.request = async () => {
+    requests++;
+    if (requests === 1) return '<html><body>loading</body></html>';
+    return `
+  <script>self.__next_f.push([1,"a:{\\"offerId\\":\\"Gamification_DailySet_ZHCN_20261015_Child1\\",\\"hash\\":\\"h1\\",\\"points\\":10,\\"title\\":\\"每日活动\\"}"])</script>
+  <script>self.__next_f.push([1,"b:{\\"offerId\\":\\"ZHstar_Rewards_DailyGlobalOffer_Evergreen_Monday\\",\\"hash\\":\\"h2\\",\\"points\\":5,\\"title\\":\\"拼图\\"}"])</script>
+    `;
+  };
+  try {
+    const cards = await rewardsApi.discoverCards({
+      retryEmpty: true,
+      attempts: 2,
+      retryDelaysMs: [0],
+      onRetry: event => retries.push(event)
+    });
+    assert.equal(requests, 2);
+    assert.equal(cards.length, 2);
+    assert.equal(retries.length, 1);
+  } finally {
+    networkClient.request = origRequest;
+  }
+});

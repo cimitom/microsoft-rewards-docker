@@ -1435,7 +1435,30 @@ export class RewardsApi {
     }
   }
 
-  async discoverCards() {
+  async discoverCards(options = {}) {
+    const attempts = Math.min(4, Math.max(1, parseInt(options.attempts, 10) || 1));
+    const retryEmpty = options.retryEmpty === true;
+    const retryDelaysMs = Array.isArray(options.retryDelaysMs)
+      ? options.retryDelaysMs
+      : [3000, 8000, 15000];
+    let cards = [];
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      cards = await this.discoverCardsOnce();
+      if (cards.length > 0 || !retryEmpty || attempt >= attempts) return cards;
+      const delayMs = Math.max(
+        0,
+        Number(retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)]) || 0
+      );
+      if (typeof options.onRetry === 'function') {
+        await options.onRetry({ attempt, attempts, delayMs });
+      }
+      if (delayMs > 0) await this.delay(delayMs);
+    }
+    return cards;
+  }
+
+  async discoverCardsOnce() {
     const cards = [];
     const seenCardKeys = new Set();
 
@@ -1646,6 +1669,7 @@ export class RewardsApi {
         nextAction = await this.getNextActionHash(pageHtml, url);
       }
       const headers = {
+        ...(card.kind === 'desktop_app' ? DESKTOP_APP_HEADERS : {}),
         'accept': 'text/x-component',
         'content-type': 'text/plain;charset=UTF-8',
         'next-action': nextAction,
@@ -1682,6 +1706,7 @@ export class RewardsApi {
             method: 'POST',
             url,
             headers: {
+              ...(card.kind === 'desktop_app' ? DESKTOP_APP_HEADERS : {}),
               accept: 'text/x-component',
               'content-type': 'text/plain;charset=UTF-8',
               'next-action': nextAction,

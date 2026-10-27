@@ -692,22 +692,32 @@ export class TaskManager {
               statusMessage: ''
             };
           } else {
+            const currentSearch = accStats.tasks.search || {};
+            const searchAlreadyDone = currentSearch.done === true
+              || (Number(currentSearch.max || 0) > 0
+                && Number(currentSearch.progress || 0) >= Number(currentSearch.max || 0));
             nextSearch = {
-              ...(accStats.tasks.search || {}),
+              ...currentSearch,
               name: "必应 PC 搜索任务",
               unit: "分",
               icon: "🔍",
-              statusMessage: `官网返回未知搜索配额 ${pcMax}，已暂停搜索`
+              statusMessage: searchAlreadyDone
+                ? ''
+                : `官网返回未知搜索配额 ${pcMax}，已暂停搜索`
             };
           }
           accStats.tasks.search = this.mergeMonotonicTask(previousSearch, nextSearch);
         } else {
-          accStats.tasks.search = this.mergeMonotonicTask(accStats.tasks.search, {
-            ...(accStats.tasks.search || {}),
+          const currentSearch = accStats.tasks.search || {};
+          const searchAlreadyDone = currentSearch.done === true
+            || (Number(currentSearch.max || 0) > 0
+              && Number(currentSearch.progress || 0) >= Number(currentSearch.max || 0));
+          accStats.tasks.search = this.mergeMonotonicTask(currentSearch, {
+            ...currentSearch,
             name: "必应 PC 搜索任务",
             unit: "分",
             icon: "🔍",
-            statusMessage: '官网未返回搜索等级配额，已暂停搜索'
+            statusMessage: searchAlreadyDone ? '' : '官网未返回搜索等级配额，已暂停搜索'
           });
         }
 
@@ -1661,7 +1671,14 @@ export class TaskManager {
         }
       } else if (taskKey === 'dailySet' || taskKey === 'promos') {
         const category = taskKey === 'dailySet' ? 'dailyset' : 'promo';
-        const allCards = await rewardsApi.discoverCards();
+        const allCards = await rewardsApi.discoverCards({
+          retryEmpty: true,
+          attempts: 3,
+          onRetry: async ({ attempt, attempts, delayMs }) => {
+            const delayText = delayMs > 0 ? `${Math.max(1, Math.round(delayMs / 1000))} 秒后` : '立即';
+            logger.log('🟡', `活动卡片暂未读取到，${delayText}重试 (${attempt}/${attempts})`, acc.name);
+          }
+        });
         const cards = allCards.filter(c => c.category === category);
 
         if (cards.length === 0) {
@@ -1728,7 +1745,14 @@ export class TaskManager {
       } else if (taskKey === 'desktopApp') {
         const beforeInfo = await rewardsApi.getRewardsInfo(1).catch(() => null);
         const beforeProgress = Number(beforeInfo?.desktopApp?.progress || before?.tasks?.desktopApp?.progress || 0);
-        const desktopCards = (await rewardsApi.discoverCards())
+        const desktopCards = (await rewardsApi.discoverCards({
+          retryEmpty: true,
+          attempts: 3,
+          onRetry: async ({ attempt, attempts, delayMs }) => {
+            const delayText = delayMs > 0 ? `${Math.max(1, Math.round(delayMs / 1000))} 秒后` : '立即';
+            logger.log('🟡', `桌面任务暂未读取到，${delayText}重试 (${attempt}/${attempts})`, acc.name);
+          }
+        }))
           .filter(card => card.category === 'desktop');
 
         if (desktopCards.length === 0) {
@@ -1929,6 +1953,7 @@ export class TaskManager {
 
     // syncAccountOfficialStatus 已优先从网页端拿到真实余额；只有它没拿到时才回退 DAPI。
     const startBalance = Number(accStats.balance) > 0 ? Number(accStats.balance) : await rewardsApi.getBalance();
+    const runStartBalance = Number.isFinite(Number(startBalance)) ? Number(startBalance) : null;
     // 每天只记录一次「今日起始余额」，用日期字段判断，
     // 不再用 `startBalance === 0` 判断（余额恰好为 0 的账号会被反复覆盖）
     if (startBalance !== null) {
@@ -2051,7 +2076,14 @@ export class TaskManager {
     const wantPromos = globalCfg.tasks?.promos !== false;
     if ((wantPromos || wantDailySet || wantDesktop) && this.running) {
       logger.log('🧩', '正在扫描活动卡片与日常活动...', accountName);
-      const allCards = await rewardsApi.discoverCards();
+      const allCards = await rewardsApi.discoverCards({
+        retryEmpty: true,
+        attempts: 3,
+        onRetry: async ({ attempt, attempts, delayMs }) => {
+          const delayText = delayMs > 0 ? `${Math.max(1, Math.round(delayMs / 1000))} 秒后` : '立即';
+          logger.log('🟡', `活动卡片暂未读取到，${delayText}重试 (${attempt}/${attempts})`, accountName);
+        }
+      });
       // 按分类过滤：dailyset=每日活动集，desktop=桌面端打孔卡，其余归 promos
       const cards = allCards.filter(c => {
         if (c.category === 'dailyset') return wantDailySet;
@@ -2141,18 +2173,45 @@ export class TaskManager {
         // 一张都没扫到：用官网 activityCards 的真实完成情况判断，
         // 不再无脑标成「已完成 +10 分」（那正是虚高分数的来源之一）。
         const cardStatus = await rewardsApi.getActivityCardStatus();
+        const currentPromos = this.ensureAccountStats(accountId).tasks?.promos || {};
         if (cardStatus && cardStatus.completed >= cardStatus.total) {
           logger.log('✅', `今日活动卡片已全部完成 (${cardStatus.completed}/${cardStatus.total})`, accountName);
-          this.updateTask('promos', {
+          this.ensureAccountStats(accountId).tasks.promos = this.mergeMonotonicTask(currentPromos, {
+            ...currentPromos,
             progress: cardStatus.completed,
             max: cardStatus.total,
-            points: 0,
-            done: true
-          }, accountId);
+            points: Number(currentPromos.points || 0),
+            done: true,
+            statusMessage: ''
+          });
+          this.saveStats();
         } else {
           const detail = cardStatus ? `（官网显示 ${cardStatus.completed}/${cardStatus.total}）` : '（未能读取官网状态）';
           logger.log('ℹ️', `今日未发现可执行的活动卡片${detail}，保持未完成状态，不记分`, accountName);
-          this.updateTask('promos', { progress: 0, max: 0, points: 0, done: false }, accountId);
+          if (cardStatus) {
+            this.ensureAccountStats(accountId).tasks.promos = this.mergeMonotonicTask(currentPromos, {
+              ...currentPromos,
+              progress: Number(cardStatus.completed || 0),
+              max: Number(cardStatus.total || 0),
+              points: Number(currentPromos.points || 0),
+              done: false,
+              statusMessage: `官网活动进度 ${cardStatus.completed}/${cardStatus.total}`
+            });
+            this.saveStats();
+          } else {
+            // 页面瞬时读取失败不能把已确认进度清零。
+            this.updateTask('promos', {
+              statusMessage: '官网活动状态暂不可读，保留上次已确认进度'
+            }, accountId);
+          }
+        }
+      }
+
+      // 活动卡片流程结束后主动同步一次官网，避免 Daily Set/桌面任务仍显示旧缓存。
+      if ((wantDailySet || wantDesktop) && this.running && !this.isAccountPaused(accountId)) {
+        const synced = await this.syncAccountOfficialStatus(accCfg, { owned: true });
+        if (!synced) {
+          logger.log('🟡', '活动卡片完成后官网状态同步失败，保留上次已确认进度', accountName);
         }
       }
     }
@@ -2416,7 +2475,24 @@ export class TaskManager {
     accStats.lastUpdate = Date.now();
     this.saveStats();
 
-    logger.log('✅', `账号 [${accountName}] 任务完成！今日新增: +${accStats.earned} | 当前余额: ${accStats.balance}`, accountName);
+    const runEndBalance = Number.isFinite(Number(accStats.balance)) ? Number(accStats.balance) : null;
+    const runEarned = runStartBalance !== null && runEndBalance !== null
+      ? Math.max(0, runEndBalance - runStartBalance)
+      : null;
+    const runEarnedText = runEarned === null ? '--' : `+${runEarned}`;
+    logger.log(
+      '✅',
+      `账号 [${accountName}] 任务完成！本轮新增: ${runEarnedText} | 今日累计: +${accStats.earned} | 当前余额: ${accStats.balance}`,
+      accountName
+    );
+    return {
+      accountId,
+      accountName,
+      startBalance: runStartBalance,
+      endBalance: runEndBalance,
+      runEarned,
+      todayEarned: Number(accStats.earned || 0)
+    };
   }
 
   /**
@@ -2550,6 +2626,7 @@ export class TaskManager {
     }
 
     this.running = true;
+    logger.setAccountContext('');
     const startTime = Date.now();
 
     try {
@@ -2587,6 +2664,7 @@ export class TaskManager {
       // 逐账号执行：单个账号抛异常不能拖垮后面所有账号（旧实现会直接跳出整个循环，
       // 导致第 1 个账号失败后第 2、3 个账号当天完全不执行）
       const failures = [];
+      const runResults = [];
       for (let i = 0; i < targetList.length && this.running; i++) {
         const acc = targetList[i];
         const runStartedAt = Date.now();
@@ -2595,7 +2673,8 @@ export class TaskManager {
           continue;
         }
         try {
-          await this.runSingleAccount(acc, globalCfg, { manual });
+          const result = await this.runSingleAccount(acc, globalCfg, { manual });
+          if (result) runResults.push(result);
         } catch (e) {
           failures.push({ name: acc.name || acc.id, error: e.message });
           logger.log('🔴', `账号 [${acc.name || acc.id}] 执行异常，已跳过并继续下一个账号: ${e.message}`, '', acc.name || acc.id);
@@ -2628,12 +2707,24 @@ export class TaskManager {
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       const summary = this.computeSummary();
-      const reportLines = summary.accountsList.map(a => `• ${a.name}: 今日 +${a.earned} | 余额 ${a.balance} | 连签 ${a.streakDays}天`);
+      const runResultById = new Map(runResults.map(item => [item.accountId, item]));
+      const totalRunEarned = runResults.reduce((sum, item) => (
+        sum + (Number.isFinite(item.runEarned) ? item.runEarned : 0)
+      ), 0);
+      const reportLines = summary.accountsList.map(a => {
+        const run = runResultById.get(a.id);
+        const runValue = run
+          ? (Number.isFinite(run.runEarned) ? `+${run.runEarned}` : '--')
+          : null;
+        const runText = run ? `本轮 ${runValue} | ` : '';
+        return `• ${a.name}: ${runText}今日 +${a.earned} | 余额 ${a.balance} | 连签 ${a.streakDays}天`;
+      });
       const failLines = failures.map(f => `• ${f.name}: ❌ ${f.error}`);
       const isSingleRun = !!targetAccountId && targetAccountId !== 'all';
       const summaryTitle = isSingleRun ? `账号 [${targetList[0]?.name || targetAccountId}] 任务执行完毕` : '全部任务执行完毕';
-      const summaryMsg = `🎉 ${summaryTitle}！用时 ${elapsed} 秒\n总计今日新增: +${summary.totalEarned} 积分\n总积分余额: ${summary.totalBalance}\n\n${reportLines.join('\n')}`
+      const summaryMsg = `🎉 ${summaryTitle}！用时 ${elapsed} 秒\n本轮新增: +${totalRunEarned} 积分\n今日累计: +${summary.totalEarned} 积分\n总积分余额: ${summary.totalBalance}\n\n${reportLines.join('\n')}`
         + (failLines.length > 0 ? `\n\n异常账号 (${failLines.length}):\n${failLines.join('\n')}` : '');
+      logger.setAccountContext('');
       logger.log('🎉', summaryMsg);
 
       // 推送规则：失败立刻推送（上面 catch 已发）；成功统一推送（全部账号满额后统一推一次总览，或手动全跑时推）
