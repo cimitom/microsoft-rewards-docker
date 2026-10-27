@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.9.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.9.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,13 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🛡️ **搜索配额瞬时缺失自动恢复 (v1.9.2)**：
+  - **双页面配额解析**：同时解析 `/earn` 与 `/dashboard`，不再因单页返回残缺 `pointsCounters` 就跳过整轮 PC 搜索；
+  - **独立渐进重试**：配额为空时使用缓存绕过与 3/10/30 秒退避重试，恢复后自动继续搜索；
+  - **同日官方配额兜底**：仅允许复用当天、同网页身份、12 小时内已由官网确认的配额；跨日或身份变化仍拒绝搜索；
+  - **未知配额保护**：遇到 `45` 等非标准配额会先重试，仍未知则停止，不伪造默认 60 分；
+  - **保留已验证进度**：瞬时读取失败不再把已有 `max/progress` 清零，避免后续恢复失去依据；
+  - **回归测试覆盖**：新增骨架页恢复、同日缓存、未知配额与进度保留测试，测试总数 222。
 - 🧭 **指标级趋势与可调列宽总览 (v1.9.1)**：
   - **按指标展示趋势**：当前积分、今日获取、待领取、连签、印章与 7/30 日均分别展示对应指标的近 14 日历史；
   - **交互十字线**：趋势浮窗支持鼠标滑动查看每日日期、数值和峰值，不再固定显示新增积分；

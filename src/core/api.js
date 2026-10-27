@@ -101,6 +101,134 @@ export function extractJsonObjectsWithKey(text, anchor = '"offerId"') {
   return objects;
 }
 
+const KNOWN_SEARCH_QUOTAS = new Set([15, 30, 60]);
+
+function extractBalancedJsonObject(text, start) {
+  if (!text || start < 0 || text[start] !== '{') return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth++;
+    } else if (char === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * 从 earn/dashboard 页面中提取搜索配额。
+ *
+ * 两个页面都可能偶发返回骨架、旧 Flight 数据或缺少 pc 字段，因此不能
+ * 看到第一个 pointsCounters 就停止。这里收集所有候选，再优先选择
+ * dashboard 中已知的 15/30/60 配额；未知配额仍会返回，供调用方拒绝执行。
+ */
+export function extractSearchQuota(...inputs) {
+  const sources = inputs.map((input, index) => {
+    if (typeof input === 'string') {
+      return { text: input, source: index === 0 ? 'dashboard' : 'earn', priority: index };
+    }
+    return {
+      text: String(input?.text || ''),
+      source: input?.source || 'page',
+      priority: Number.isFinite(Number(input?.priority)) ? Number(input.priority) : index
+    };
+  });
+  const candidates = [];
+
+  const addCandidate = (source, priority, origin, pc, extra = {}, index = 0) => {
+    const max = Number(pc?.max);
+    if (!Number.isFinite(max) || max <= 0) return;
+    candidates.push({
+      max,
+      progress: Math.max(0, Number(pc?.progress) || 0),
+      mobileMax: Math.max(0, Number(extra.mobile?.max) || 0),
+      mobileProgress: Math.max(0, Number(extra.mobile?.progress) || 0),
+      dailyOffer: Math.max(0, Number(extra.dailyOffer) || 0),
+      source,
+      priority,
+      origin,
+      index
+    });
+  };
+
+  for (const item of sources) {
+    const text = String(item.text || '').replace(/\\"/g, '"');
+    if (!text) continue;
+
+    const counterRe = /"pointsCounters"\s*:\s*\{/g;
+    let counterMatch;
+    while ((counterMatch = counterRe.exec(text)) !== null) {
+      const start = counterMatch.index + counterMatch[0].lastIndexOf('{');
+      const raw = extractBalancedJsonObject(text, start);
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(
+          raw.replace(/:\$undefined/g, ':null').replace(/:\$D[^",}]+/g, ':null')
+        );
+        addCandidate(item.source, item.priority, 'pointsCounters', parsed?.pc, parsed, counterMatch.index);
+      } catch {}
+    }
+
+    const searchRowMatch = text.match(/<p>\s*必应搜索\s*<\/p>\s*<\/div>\s*<div(?=[^>]*justify-self-end)[^>]*>([\s\S]{0,500}?)<\/div>/i);
+    const searchHtmlMatch = searchRowMatch
+      ? (searchRowMatch[1].match(/<span[^>]*>([\d,]+)<\/span>\s*<span[^>]*>\s*\/\s*([\d,]+)\s*<\/span>/i)
+          || searchRowMatch[1].match(/([\d,]+)\s*\/\s*([\d,]+)/))
+      : null;
+    if (searchHtmlMatch) {
+      addCandidate(item.source, item.priority, 'searchRow', {
+        progress: parseInt(String(searchHtmlMatch[1]).replace(/,/g, ''), 10),
+        max: parseInt(String(searchHtmlMatch[2]).replace(/,/g, ''), 10)
+      });
+    }
+
+    const searchRscMatch = text.match(/"combinedSearch":\{[^}]*"progress":(\d+)[^}]*"max":(\d+)/);
+    if (searchRscMatch) {
+      addCandidate(item.source, item.priority, 'combinedSearch', {
+        progress: Number(searchRscMatch[1]),
+        max: Number(searchRscMatch[2])
+      });
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    // dashboard 是当前账号的权威页面。即使它返回未知配额，也不能让
+    // earn 中可能残留的旧 15/30/60 数据把它覆盖掉。
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    const aKnown = KNOWN_SEARCH_QUOTAS.has(a.max) ? 1 : 0;
+    const bKnown = KNOWN_SEARCH_QUOTAS.has(b.max) ? 1 : 0;
+    if (aKnown !== bKnown) return bKnown - aKnown;
+    const aCounter = a.origin === 'pointsCounters' ? 1 : 0;
+    const bCounter = b.origin === 'pointsCounters' ? 1 : 0;
+    if (aCounter !== bCounter) return bCounter - aCounter;
+    if (a.index !== b.index) return b.index - a.index;
+    return b.progress - a.progress;
+  });
+  const best = candidates[0];
+  return {
+    progress: best.progress,
+    max: best.max,
+    mobileProgress: best.mobileProgress,
+    mobileMax: best.mobileMax,
+    dailyOffer: best.dailyOffer,
+    source: best.source,
+    origin: best.origin
+  };
+}
+
 export function isServerActionAcknowledged(payload) {
   return /^\d+:true\s*$/m.test(String(payload || ''));
 }
@@ -569,6 +697,51 @@ export class RewardsApi {
   }
 
   /**
+   * 独立读取搜索配额。仅在任务真正需要执行搜索且首轮配额为空时调用，
+   * 用渐进延迟重试吸收官网偶发的骨架页/不完整 Flight 数据。
+   */
+  async getSearchQuota(options = {}) {
+    const attempts = Math.min(6, Math.max(1, parseInt(options.attempts, 10) || 4));
+    const retryDelaysMs = Array.isArray(options.retryDelaysMs)
+      ? options.retryDelaysMs
+      : [3000, 10000, 30000, 45000, 60000];
+    const headers = {
+      ...pcPageHeaders(),
+      'cache-control': 'no-cache',
+      'pragma': 'no-cache'
+    };
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const cacheBust = Date.now();
+        const [earnHtml, dashHtml] = await Promise.all([
+          networkClient.request({
+            url: `https://rewards.bing.com/earn?_=${cacheBust}`,
+            headers
+          }).catch(() => ''),
+          networkClient.request({
+            url: `https://rewards.bing.com/dashboard?_=${cacheBust}`,
+            headers
+          }).catch(() => '')
+        ]);
+        const quota = extractSearchQuota(
+          { text: dashHtml, source: 'dashboard', priority: 0 },
+          { text: earnHtml, source: 'earn', priority: 1 }
+        );
+        if (quota) return { ...quota, attemptsUsed: attempt };
+      } catch {}
+
+      if (attempt >= attempts) break;
+      const delayMs = Math.max(0, Number(retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)]) || 0);
+      if (typeof options.onRetry === 'function') {
+        await options.onRetry({ attempt, attempts, delayMs });
+      }
+      if (delayMs > 0) await this.delay(delayMs);
+    }
+    return null;
+  }
+
+  /**
    * 获取用户积分、各项任务配额与明细 (Dashboard Info)
    */
   async getRewardsInfo(maxRetries = 3) {
@@ -586,29 +759,23 @@ export class RewardsApi {
         ]);
         const clean = String(html || '').replace(/\\"/g, '"');
         const cleanDash = String(dashHtml || '').replace(/\\"/g, '"');
-        const quotaHtml = clean.includes('"pointsCounters"') ? clean : cleanDash;
+        const quota = extractSearchQuota(
+          { text: cleanDash, source: 'dashboard', priority: 0 },
+          { text: clean, source: 'earn', priority: 1 }
+        );
         let balance = 0;
         let webBalance = null;
         let pcMax = 0, pcCur = 0, mobMax = 0, mobCur = 0;
         let dailyOffer = 0;
         let searchQuotaFound = false;
 
-        const pcIdx = quotaHtml.indexOf('"pointsCounters":{');
-        if (pcIdx !== -1) {
-          let start = pcIdx + 17, depth = 0, end = start;
-          for (let i = start; i < quotaHtml.length && i < start + 500; i++) {
-            if (quotaHtml[i] === '{') depth++;
-            if (quotaHtml[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
-          }
-          try {
-            const pts = JSON.parse(quotaHtml.substring(start, end));
-            pcMax = Number(pts.pc?.max);
-            pcCur = pts.pc?.progress ?? 0;
-            mobMax = pts.mobile?.max ?? 0;
-            mobCur = pts.mobile?.progress ?? 0;
-            dailyOffer = pts.dailyOffer ?? 0;
-            searchQuotaFound = Number.isFinite(pcMax) && pcMax > 0;
-          } catch {}
+        if (quota) {
+          pcMax = Number(quota.max);
+          pcCur = Number(quota.progress || 0);
+          mobMax = Number(quota.mobileMax || 0);
+          mobCur = Number(quota.mobileProgress || 0);
+          dailyOffer = Number(quota.dailyOffer || 0);
+          searchQuotaFound = Number.isFinite(pcMax) && pcMax > 0;
         }
 
         const balMatch = clean.match(/"balance":(\d+)/) || clean.match(/"availablePoints":(\d+)/);
@@ -657,24 +824,7 @@ export class RewardsApi {
         }
 
         const todayDetails = [];
-        const toNum = v => parseInt(String(v).replace(/,/g, ''), 10) || 0;
-        const searchRowMatch = quotaHtml.match(/<p>\s*必应搜索\s*<\/p>\s*<\/div>\s*<div(?=[^>]*justify-self-end)[^>]*>([\s\S]{0,500}?)<\/div>/i);
-        const searchHtmlMatch = searchRowMatch
-          ? (searchRowMatch[1].match(/<span[^>]*>([\d,]+)<\/span>\s*<span[^>]*>\s*\/\s*([\d,]+)\s*<\/span>/i)
-              || searchRowMatch[1].match(/([\d,]+)\s*\/\s*([\d,]+)/))
-          : null;
-        if (searchHtmlMatch) {
-          pcCur = toNum(searchHtmlMatch[1]);
-          pcMax = toNum(searchHtmlMatch[2]);
-          searchQuotaFound = pcMax > 0;
-          todayDetails.push({ title: '必应搜索', points: pcCur, max: pcMax });
-        }
-
-        const searchRscMatch = quotaHtml.match(/"combinedSearch":\{[^}]*"progress":(\d+)[^}]*"max":(\d+)/);
-        if (searchRscMatch && !todayDetails.some(d => d.title === '必应搜索')) {
-          pcCur = toNum(searchRscMatch[1]);
-          pcMax = toNum(searchRscMatch[2]);
-          searchQuotaFound = pcMax > 0;
+        if (searchQuotaFound) {
           todayDetails.push({ title: '必应搜索', points: pcCur, max: pcMax });
         }
 
@@ -740,6 +890,7 @@ export class RewardsApi {
           quests,
           specialActivities,
           searchTier: searchQuotaFound ? searchTierFromMax(pcMax) : null,
+          searchQuotaSource: quota?.source || '',
           stamps: {
             progress: stampsProgress,
             max: stampsMax

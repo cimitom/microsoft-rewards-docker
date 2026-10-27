@@ -83,6 +83,41 @@ test('getRewardsInfo 可从 dashboard 读取搜索等级配额', async () => {
   }
 });
 
+test('getRewardsInfo 不会被 earn 中残缺的 pointsCounters 遮蔽 dashboard 的有效配额', async () => {
+  const origRequest = networkClient.request;
+  networkClient.request = async ({ url }) => {
+    if (url.includes('/dashboard')) {
+      return '<script>{"pointsCounters":{"pc":{"max":30,"progress":6},"totalPoints":100}}</script>';
+    }
+    return '<script>{"pointsCounters":{"dailyOffer":10,"pc":null,"totalPoints":0}}</script>';
+  };
+  try {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.deepEqual(info.pc, { progress: 6, max: 30 });
+    assert.equal(info.searchTier.code, 'silver');
+    assert.equal(info.searchQuotaSource, 'dashboard');
+  } finally {
+    networkClient.request = origRequest;
+  }
+});
+
+test('dashboard 的未知配额优先于 earn 中可能残留的已知配额', async () => {
+  const origRequest = networkClient.request;
+  networkClient.request = async ({ url }) => {
+    if (url.includes('/dashboard')) {
+      return '<script>{"pointsCounters":{"pc":{"max":45,"progress":3},"totalPoints":100}}</script>';
+    }
+    return '<script>{"pointsCounters":{"pc":{"max":60,"progress":3},"totalPoints":100}}</script>';
+  };
+  try {
+    const info = await rewardsApi.getRewardsInfo(1);
+    assert.deepEqual(info.pc, { progress: 3, max: 45 });
+    assert.equal(info.searchTier.code, 'unknown');
+  } finally {
+    networkClient.request = origRequest;
+  }
+});
+
 test('getRewardsInfo 遇到多份「今日积分」Flight 数据时取最大值，不被首个 0 覆盖', async () => {
   const html = `
 <script>self.__next_f.push([1,"a:\\"children\\":\\"今日积分\\",\\"b\\":{\\"className\\":\\"text-pageHeader\\",\\"children\\":\\"0\\"}"])</script>

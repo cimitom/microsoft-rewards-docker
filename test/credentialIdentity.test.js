@@ -66,8 +66,10 @@ test('Cookie 网页身份变化时清空旧账号诊断与进度', () => {
 test('PC 搜索只接受官网返回的 15/30/60 等级配额', async (t) => {
   const taskManager = new TaskManager();
   const originalGetRewardsInfo = rewardsApi.getRewardsInfo;
+  const originalGetSearchQuota = rewardsApi.getSearchQuota;
   t.after(() => {
     rewardsApi.getRewardsInfo = originalGetRewardsInfo;
+    rewardsApi.getSearchQuota = originalGetSearchQuota;
   });
 
   const account = { id: 'acc_quota', name: '配额测试', cookie: '_U=QUOTA_USER' };
@@ -83,11 +85,13 @@ test('PC 搜索只接受官网返回的 15/30/60 等级配额', async (t) => {
     pc: { progress: 3, max: 45 },
     webBalance: 0
   });
+  rewardsApi.getSearchQuota = async () => null;
   const unknown = await taskManager.getSearchReadiness(account);
   assert.equal(unknown.ok, false);
   assert.match(unknown.reason, /未知搜索配额 45/);
 
   rewardsApi.getRewardsInfo = async () => ({ pc: null, webBalance: 0 });
+  rewardsApi.getSearchQuota = async () => null;
   const missing = await taskManager.getSearchReadiness(account);
   assert.equal(missing.ok, false);
   assert.match(missing.reason, /未返回当日搜索等级配额/);

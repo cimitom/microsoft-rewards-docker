@@ -52,6 +52,11 @@ export class TaskManager {
       lastClaimedPoints: 0,
       streakDays: 0,
       stamps: { progress: 0, max: 12 },
+      searchQuotaVerifiedAt: 0,
+      searchQuotaMax: 0,
+      searchQuotaProgress: 0,
+      searchQuotaSource: '',
+      searchQuotaErrorAt: 0,
       webIdentityKey: '',
       identityAppliedAt: 0,
       credentialAppliedAt: 0,
@@ -346,6 +351,126 @@ export class TaskManager {
     }
   }
 
+  isSameLocalDay(timestamp) {
+    const ts = Number(timestamp);
+    if (!Number.isFinite(ts) || ts <= 0) return false;
+    const date = new Date(ts);
+    const now = new Date();
+    return date.getFullYear() === now.getFullYear()
+      && date.getMonth() === now.getMonth()
+      && date.getDate() === now.getDate();
+  }
+
+  recordSearchQuotaVerification(accStats, pc, source = 'official') {
+    if (!accStats || !pc) return false;
+    const max = Number(pc.max);
+    const tier = searchTierFromMax(max);
+    if (!Number.isFinite(max) || max <= 0 || !tier || tier.code === 'unknown') return false;
+    accStats.searchQuotaVerifiedAt = Date.now();
+    accStats.searchQuotaMax = max;
+    accStats.searchQuotaProgress = Math.max(0, Number(pc.progress) || 0);
+    accStats.searchQuotaSource = source;
+    accStats.searchQuotaErrorAt = 0;
+    return true;
+  }
+
+  getCachedSearchQuota(accStats, options = {}) {
+    if (!accStats || !this.isSameLocalDay(accStats.searchQuotaVerifiedAt)) return null;
+    const verifiedAt = Number(accStats.searchQuotaVerifiedAt);
+    const maxAgeMs = Number(options.maxAgeMs) > 0
+      ? Number(options.maxAgeMs)
+      : 12 * 60 * 60 * 1000;
+    if (Date.now() - verifiedAt > maxAgeMs) return null;
+    const max = Number(accStats.searchQuotaMax || accStats.tasks?.search?.max);
+    const tier = searchTierFromMax(max);
+    if (!Number.isFinite(max) || max <= 0 || !tier || tier.code === 'unknown') return null;
+    return {
+      ok: true,
+      pc: {
+        progress: Math.max(0, Number(accStats.searchQuotaProgress || accStats.tasks?.search?.progress) || 0),
+        max
+      },
+      progress: Math.max(0, Number(accStats.searchQuotaProgress || accStats.tasks?.search?.progress) || 0),
+      max,
+      tier,
+      source: 'cache',
+      cached: true,
+      verifiedAt
+    };
+  }
+
+  /**
+   * 搜索配额解析的最终入口：
+   * 1. 首轮官网数据有效时直接使用；
+   * 2. 首轮为空时独立重试，不受其他任务解析失败影响；
+   * 3. 仍为空时只允许使用“当天且同网页身份”已确认的官方配额；
+   * 4. 跨日、身份不明或从未确认过时仍然拒绝搜索，绝不默认 60 分。
+   */
+  async resolveSearchQuota(accCfg, info, options = {}) {
+    const accStats = this.ensureAccountStats(accCfg?.id);
+    const evaluate = (pc, source, cached = false) => {
+      if (!pc) return null;
+      const max = Number(pc.max);
+      if (!Number.isFinite(max) || max <= 0) return null;
+      const tier = searchTierFromMax(max);
+      if (!tier || tier.code === 'unknown') {
+        return {
+          ok: false,
+          reason: `官网返回未知搜索配额 ${max}，已暂停搜索以避免按错误上限执行`
+        };
+      }
+      const progress = Math.max(0, Number(pc.progress) || 0);
+      if (!cached) {
+        this.recordSearchQuotaVerification(accStats, { progress, max }, source);
+      }
+      return {
+        ok: true,
+        pc: { progress, max },
+        progress,
+        max,
+        tier,
+        source,
+        cached
+      };
+    };
+
+    const official = evaluate(info?.pc, info?.searchQuotaSource || 'official');
+    if (official?.ok) {
+      if (options.persist !== false) this.saveStats();
+      return official;
+    }
+
+    if (options.probeMissing !== false) {
+      let retriedQuota = null;
+      try {
+        retriedQuota = await rewardsApi.getSearchQuota({
+          attempts: options.attempts || 4,
+          retryDelaysMs: options.retryDelaysMs,
+          onRetry: options.onRetry
+        });
+      } catch {}
+      const retried = evaluate(retriedQuota, 'retry');
+      if (retried) {
+        if (retried.ok && options.persist !== false) this.saveStats();
+        return retried;
+      }
+    }
+
+    // 官网明确返回未知配额时，可以重试一次尝试恢复为标准等级；
+    // 但重试后仍未知时必须拒绝，不能用当天缓存或固定 60 分覆盖它。
+    if (official && !official.ok) return official;
+
+    const cached = options.useCache === false ? null : this.getCachedSearchQuota(accStats, options);
+    if (cached) return cached;
+
+    return {
+      ok: false,
+      reason: options.probeMissing === false
+        ? '官网未返回当日搜索等级配额'
+        : '官网多次重试后仍未返回当日搜索等级配额'
+    };
+  }
+
   /**
    * 同一统计日内的任务进度只增不减。
    * 官网局部返回 0、空配额或短暂骨架页时，保留上一次已确认的状态。
@@ -553,6 +678,7 @@ export class TaskManager {
           const previousSearch = accStats.tasks.search;
           let nextSearch;
           if (Number.isFinite(pcMax) && pcMax > 0 && tier && tier.code !== 'unknown') {
+            this.recordSearchQuotaVerification(accStats, { progress: pcCur, max: pcMax }, info.searchQuotaSource || 'sync');
             const isPcDone = pcCur >= pcMax;
             nextSearch = {
               name: "必应 PC 搜索任务",
@@ -1090,7 +1216,7 @@ export class TaskManager {
    * PC 搜索只依赖网页 Cookie 和官网返回的等级配额。
    * 缺少 _U、官网配额未知或未读取成功时必须拒绝，不能沿用旧进度或默认 60 分。
    */
-  async getSearchReadiness(acc) {
+  async getSearchReadiness(acc, options = {}) {
     if (!acc?.cookie) {
       return { ok: false, reason: '未配置网页端 Cookie' };
     }
@@ -1099,25 +1225,19 @@ export class TaskManager {
     }
 
     const info = await rewardsApi.getRewardsInfo(1).catch(() => null);
-    if (!info) {
-      return { ok: false, reason: '无法读取微软官网状态，Cookie 可能失效或网络异常' };
-    }
-
-    const max = Number(info.pc?.max);
-    const tier = searchTierFromMax(max);
-    if (!info.pc || !Number.isFinite(max) || max <= 0) {
-      return { ok: false, reason: '官网未返回当日搜索等级配额' };
-    }
-    if (!tier || tier.code === 'unknown') {
-      return { ok: false, reason: `官网返回了未知搜索配额 ${max}，已暂停搜索以避免按错误上限执行` };
-    }
-
+    const quota = await this.resolveSearchQuota(acc, info, {
+      ...options,
+      probeMissing: options.probeMissing !== false,
+      useCache: options.useCache === true
+    });
+    if (!quota.ok) return quota;
     return {
-      ok: true,
-      info,
-      progress: Number(info.pc.progress || 0),
-      max,
-      tier,
+      ...quota,
+      info: {
+        ...(info || {}),
+        pc: quota.pc,
+        searchTier: quota.tier
+      },
       reason: ''
     };
   }
@@ -2080,23 +2200,27 @@ export class TaskManager {
     }
 
     if (globalCfg.tasks?.search && this.running) {
-      const curSearch = Number(info?.pc?.progress || 0);
-      const maxSearch = Number(info?.pc?.max);
-      const searchTier = searchTierFromMax(maxSearch);
-      if (!info?.pc || !Number.isFinite(maxSearch) || maxSearch <= 0 || !searchTier || searchTier.code === 'unknown') {
-        const reason = info?.pc
-          ? `官网返回未知搜索配额 ${maxSearch}`
-          : '官网未返回搜索等级配额';
-        logger.log('🛡️', `${reason}，本轮跳过 PC 搜索，不沿用旧进度或默认 60 分`, accountName);
+      const quota = await this.resolveSearchQuota(accCfg, info, {
+        attempts: 4,
+        onRetry: async ({ attempt, attempts, delayMs }) => {
+          const delayText = delayMs > 0 ? `${Math.max(1, Math.round(delayMs / 1000))} 秒后` : '立即';
+          logger.log('🟡', `搜索配额暂未返回，${delayText}重试 (${attempt}/${attempts})`, accountName);
+        }
+      });
+      if (!quota.ok) {
+        logger.log('🛡️', `${quota.reason}，本轮跳过 PC 搜索，不沿用旧进度或默认 60 分`, accountName);
         this.updateTask('search', {
-          progress: 0,
-          max: 0,
-          points: 0,
-          done: false,
-          searchTier: null,
-          statusMessage: `${reason}，已暂停搜索`
+          statusMessage: `${quota.reason}，已暂停搜索`,
+          searchQuotaErrorAt: Date.now()
         }, accountId);
       } else {
+        const curSearch = Number(quota.progress || 0);
+        const maxSearch = Number(quota.max);
+        const searchTier = quota.tier;
+        if (quota.cached) {
+          const verifiedTime = new Date(quota.verifiedAt).toLocaleTimeString('zh-CN', { hour12: false });
+          logger.log('🟡', `官网暂未返回配额，使用今日 ${verifiedTime} 已确认的官方配额 ${curSearch}/${maxSearch} 继续搜索，过程中仍会核验官网进度`, accountName);
+        }
         let lastOfficialSearch = Number(curSearch) || 0;
         let searchAttempted = 0;
         // 进度只接受官网读数。读不到时保持原值，绝不按“每次 +3”估算。
@@ -2105,6 +2229,7 @@ export class TaskManager {
           const official = Number(meta.officialProgress);
           if (!Number.isFinite(official)) return;
           lastOfficialSearch = official;
+          this.recordSearchQuotaVerification(accStats, { progress: official, max: maxSearch }, 'search-progress');
           this.updateTask('search', {
             progress: official,
             max: maxSearch,
@@ -2129,6 +2254,9 @@ export class TaskManager {
           const probeSearchProgress = async () => {
             const probe = await rewardsApi.getRewardsInfo();
             const p = Number(probe?.pc?.progress);
+            if (Number.isFinite(p)) {
+              this.recordSearchQuotaVerification(accStats, { progress: p, max: maxSearch }, 'search-probe');
+            }
             return Number.isFinite(p) ? p : null;
           };
           const stagnantLimit = normalizeStagnantLimit(globalCfg.tasks?.searchStagnantLimit);
@@ -2271,6 +2399,9 @@ export class TaskManager {
     // 6. 结算单账号总积分
     // 余额与「今日已增」都以官网为准：这里再取一次，把本轮新做的部分算进去
     const finalInfo = await rewardsApi.getRewardsInfo(1);
+    if (finalInfo?.pc) {
+      this.recordSearchQuotaVerification(accStats, finalInfo.pc, finalInfo.searchQuotaSource || 'final-sync');
+    }
     const finalBalance = Number(finalInfo?.balance);
     if (Number.isFinite(finalBalance) && finalBalance > 0) {
       accStats.balance = finalBalance;
