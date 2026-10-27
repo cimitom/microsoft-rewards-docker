@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.10.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.10.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,10 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🔐 **OAuth 弹窗捕获补强 (v1.10.5)**：
+  - **监听整个浏览器上下文**：授权码出现在新弹窗、iframe 或快速重定向链中时也能捕获；
+  - **授权码地址只读记录**：不打印 code 内容，不交换 Token、不写配置；
+  - **回归测试 252 项全部通过**。
 - 🔐 **VNC 登录链路、OAuth 捕获与窗口体验修复 (v1.10.4)**：
   - **默认从 Bing 开始登录**：VNC 先打开 `cn.bing.com`，检测到登录后自动进入 `rewards.bing.com/dashboard`，不再需要手动补开 Bing；
   - **OAuth code 防丢**：同时监听 request、response、重定向链和 frame URL，捕获只存在约 2 秒的授权码地址；

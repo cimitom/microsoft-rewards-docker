@@ -50,8 +50,8 @@ test('VNC 从 Bing 开始、登录后自动打开 Rewards，并支持调整窗�
   const loginSource = fs.readFileSync(new URL('../src/core/microsoftLoginWindow.js', import.meta.url), 'utf-8');
   assert.match(loginSource, /https:\/\/cn\.bing\.com\//);
   assert.match(loginSource, /navigateToRewardsAfterLogin/);
-  assert.match(loginSource, /page\.on\('request'/);
-  assert.match(loginSource, /page\.on\('response'/);
+  assert.match(loginSource, /target\.on\('request'/);
+  assert.match(loginSource, /target\.on\('response'/);
   assert.match(indexHtml, /id="btn-maximize-novnc"/);
   assert.match(styleCss, /\.novnc-modal-box[\s\S]*resize: both/);
 });

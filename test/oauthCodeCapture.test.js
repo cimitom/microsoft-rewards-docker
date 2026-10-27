@@ -47,3 +47,24 @@ test('OAuth 错误参数会立即返回真实错误', async () => {
   );
 });
 
+test('OAuth code 出现在快速弹窗中也能被上下文监听捕获', async () => {
+  const codeUrl = 'https://login.live.com/oauth20_desktop.srf?code=POPUP456';
+  const context = new EventEmitter();
+  context.pages = () => [];
+  const popup = new EventEmitter();
+  popup.mainFrame = () => ({ name: 'popup' });
+  popup.url = () => codeUrl;
+  const page = new EventEmitter();
+  page.mainFrame = () => ({ name: 'main' });
+  page.url = () => 'https://login.live.com/oauth20_authorize.srf';
+  page.goto = async () => {
+    context.emit('page', popup);
+    return null;
+  };
+  const captured = await waitForOAuthCode(context, page, {
+    authorizeUrl: 'https://login.live.com/oauth20_authorize.srf',
+    timeoutMs: 1000
+  });
+  assert.equal(captured, codeUrl);
+});
+

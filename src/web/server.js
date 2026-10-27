@@ -25,7 +25,7 @@ import { getFontStatus, refreshFontCache } from '../core/fontStatus.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.10.4';
+const CURRENT_VERSION = '1.10.5';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 

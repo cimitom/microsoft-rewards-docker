@@ -176,9 +176,7 @@ export async function waitForOAuthCode(context, page, options = {}) {
     return '';
   };
 
-  const onFrame = frame => {
-    if (frame === page.mainFrame()) inspect(frame.url());
-  };
+  const onFrame = frame => inspect(frame.url());
   const onRequest = request => inspect(request.url());
   const onResponse = response => {
     inspect(response.url());
@@ -192,9 +190,22 @@ export async function waitForOAuthCode(context, page, options = {}) {
       request = request.redirectedFrom?.();
     }
   };
-  page.on('framenavigated', onFrame);
-  page.on('request', onRequest);
-  page.on('response', onResponse);
+  const attachedPages = new Set();
+  const attachPage = target => {
+    if (!target || attachedPages.has(target)) return;
+    attachedPages.add(target);
+    target.on('framenavigated', onFrame);
+    target.on('request', onRequest);
+    target.on('response', onResponse);
+  };
+  const onPage = target => {
+    attachPage(target);
+    inspect(target.url());
+  };
+  attachPage(page);
+  context.on?.('page', onPage);
+  context.on?.('request', onRequest);
+  context.on?.('response', onResponse);
 
   try {
     // 授权码地址只存在约 2 秒。`commit` 让 goto 在首个响应时返回，
@@ -223,9 +234,14 @@ export async function waitForOAuthCode(context, page, options = {}) {
     }
     throw new Error('等待 OAuth 授权码超时，请确认已在 VNC 中完成同意授权');
   } finally {
-    page.off('framenavigated', onFrame);
-    page.off('request', onRequest);
-    page.off('response', onResponse);
+    context.off?.('page', onPage);
+    context.off?.('request', onRequest);
+    context.off?.('response', onResponse);
+    for (const target of attachedPages) {
+      target.off('framenavigated', onFrame);
+      target.off('request', onRequest);
+      target.off('response', onResponse);
+    }
   }
 }
 
