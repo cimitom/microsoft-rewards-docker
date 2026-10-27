@@ -93,3 +93,14 @@ export function isBalanceMismatch(webBalance, mobileBalance, threshold = 100) {
     && web >= 0 && mobile >= 0
     && Math.abs(web - mobile) > Math.max(0, Number(threshold) || 0);
 }
+
+/**
+ * 可选数字转换：null/undefined/空串必须保持 null。
+ * 直接使用 Number(null) 会得到 0，曾导致网页余额读取失败时被误判为真实 0 分，
+ * 进而把正常的移动端 Token 误报成绑定到了其他账号。
+ */
+export function toOptionalFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}

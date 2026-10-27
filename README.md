@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.9.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.9.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,13 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🛡️ **网页余额空值与 Cookie 误判修复 (v1.9.5)**：
+  - **修复 `null → 0` 余额误判**：新增可选数字转换，网页余额未读取时保持 `null`，不再把正常移动端 Token 误报成串号；
+  - **修复同步写入假余额**：官网未返回网页余额时不再把统计中的 `webBalance` 覆盖为 0；
+  - **收紧 Cookie 失效判断**：只有真正的登录表单、凭据输入框或登录 URL 才判定 Cookie 过期；
+  - **瞬时页面不硬阻断**：骨架页、网络异常或缺少 Rewards 数据时标记为瞬时异常，不再永久阻止账号运行；
+  - **保留真实 Cookie 失效拦截**：登录表单明确出现时仍会阻止任务并要求重新导入 Cookie；
+  - **回归测试覆盖**：新增可选余额、空值 Token 配对、瞬时 Cookie 页面、真实登录页和硬阻断判断测试，测试总数 233。
 - 🖥️ **桌面奖励请求身份与任务同步修复 (v1.9.4)**：
   - **恢复桌面客户端请求头**：主 Server Action 和 404 重试请求重新携带 `MSRewards/Desktop` UA、`X-MSRewards-App` 与 `X-Rewards-Source`，修复只读页面像客户端、实际提交却像普通网页的回归；
   - **活动卡片自动重试**：首次扫描为空时按渐进间隔重试 3 次，避免官网瞬时返回骨架页后整轮跳过活动卡片；

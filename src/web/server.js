@@ -22,7 +22,7 @@ import { normalizeProxyUrl } from '../core/proxy.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.9.4';
+const CURRENT_VERSION = '1.9.5';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -1088,6 +1088,7 @@ export function createServer() {
 
     const diagnosis = configManager.recordAuthDiagnosis(result.accountId, {
       cookieValid: result.cookie?.valid,
+      cookieTransient: result.cookie?.transient === true,
       tokenValid: result.token?.valid,
       overallValid: result.overallValid,
       warning: result.warning,

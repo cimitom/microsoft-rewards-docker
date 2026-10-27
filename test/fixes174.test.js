@@ -16,7 +16,11 @@ const { TaskManager } = await import('../src/core/taskManager.js');
 const { EpicManager } = await import('../src/core/epic.js');
 const { default: browserManager } = await import('../src/core/browser.js');
 const { firefoxSlotLock, browserSlotLock } = await import('../src/core/contextLock.js');
-const { accountNamesLikelyMatch, isBalanceMismatch } = await import('../src/core/accountIdentity.js');
+const {
+  accountNamesLikelyMatch,
+  isBalanceMismatch,
+  toOptionalFiniteNumber
+} = await import('../src/core/accountIdentity.js');
 const { createServer } = await import('../src/web/server.js');
 const { default: scheduler } = await import('../src/scheduler.js');
 
@@ -25,11 +29,37 @@ test('网页端余额与移动端余额明显不一致时判定为 Token 绑定�
   assert.equal(isBalanceMismatch(450, 470), false, '小幅同步延迟不应误报');
   assert.equal(isBalanceMismatch(0, 663), true, '新账号 0 分但 Token 属于有积分旧账号时必须识别');
   assert.equal(isBalanceMismatch(null, 663), false, '网页余额未读取时不能把 null 当成 0');
+  assert.equal(toOptionalFiniteNumber(null), null);
+  assert.equal(toOptionalFiniteNumber(undefined), null);
+  assert.equal(toOptionalFiniteNumber(''), null);
+  assert.equal(toOptionalFiniteNumber('418'), 418);
   assert.equal(accountNamesLikelyMatch('贺强 王', '贺强'), true);
   assert.equal(accountNamesLikelyMatch('贺强 王', '王 贺强'), true);
   assert.equal(accountNamesLikelyMatch('alice@example.com', 'alice@another.com'), true);
   assert.equal(accountNamesLikelyMatch('alice@example.com', '爱丽丝'), null);
   assert.equal(accountNamesLikelyMatch('alice', 'bob'), false);
+});
+
+test('网页余额缺失时移动端 Token 不能被误判为串号', async () => {
+  const tm = new TaskManager();
+  const origRefresh = authManager.refreshToken;
+  const origMobile = rewardsApi.getMobileSnapshot;
+  authManager.refreshToken = async () => true;
+  rewardsApi.getMobileSnapshot = async () => ({ balance: 418, userName: '孝清' });
+  try {
+    const binding = await tm.checkMobileAccountBinding({
+      id: 'acc_174_null_balance',
+      name: '缺失余额测试',
+      cookie: '_U=WEB; WLS=C=1&N=%E5%AD%9D%E6%B8%85'
+    }, null);
+    assert.equal(binding.tokenOk, true);
+    assert.equal(binding.mismatch, false);
+    assert.equal(binding.verified, true);
+    assert.equal(binding.message, '');
+  } finally {
+    authManager.refreshToken = origRefresh;
+    rewardsApi.getMobileSnapshot = origMobile;
+  }
 });
 
 test('getBalance 优先使用网页 Cookie 余额，避免错误 Token 覆盖当前账号余额', async () => {

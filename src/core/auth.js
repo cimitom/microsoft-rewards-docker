@@ -18,6 +18,14 @@ export const AUTH_CONFIG = {
   tokenUrl: 'https://login.live.com/oauth20_token.srf'
 };
 
+export function isActualLoginPageHtml(text) {
+  const source = String(text || '');
+  const hasCredentialInput = /<(?:input|textarea)[^>]+(?:name|id)=["'](?:loginfmt|i0116|passwd|i0118|password)["']/i.test(source);
+  const hasLoginForm = /<form[^>]+action=["'][^"']*login\.(?:live|microsoft)\.com/i.test(source);
+  const hasLoginTitle = /<title[^>]*>\s*(?:Sign in|登录)[^<]*Microsoft/i.test(source);
+  return hasCredentialInput || hasLoginForm || hasLoginTitle;
+}
+
 export class AuthManager {
   constructor() {
     this.accessToken = null;
@@ -333,17 +341,27 @@ export class AuthManager {
         };
       }
 
-      // 如果返回了页面但未包含 pointsCounters，检测是否跳转到了微软登录页
-      if (authText.includes('login.live.com') || authText.includes('Sign in')) {
+      // 只有真正的登录表单/登录 URL 才能判定 Cookie 过期。
+      // 已登录页面也可能在脚本或隐藏导航里出现 login.live.com / Sign in，
+      // 旧实现因此会把正常页面误报成 Cookie 失效。
+      if (isActualLoginPageHtml(authText)) {
         return { valid: false, message: 'Cookie 已过期失效，页面提示需要重新登录' };
       }
 
-      return { valid: false, message: '未能识别微软 Rewards 登录态，请检查是否复制了完整 Cookie' };
+      return {
+        valid: false,
+        transient: true,
+        message: '微软 Rewards 页面响应不完整，未据此判定 Cookie 失效，请稍后重试'
+      };
     } catch (e) {
       if (e.message && e.message.includes('401')) {
         return { valid: false, message: '微软官方返回 HTTP 401（未授权），Cookie 已过期，请在浏览器重新登录后获取' };
       }
-      return { valid: false, message: `网页端请求失败: ${e.message}` };
+      return {
+        valid: false,
+        transient: true,
+        message: `网页端请求失败: ${e.message}`
+      };
     }
   }
 

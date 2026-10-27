@@ -13,6 +13,7 @@ import {
   accountNamesLikelyMatch,
   isBalanceMismatch,
   searchTierFromMax,
+  toOptionalFiniteNumber,
   webIdentityKey
 } from './accountIdentity.js';
 import {
@@ -666,8 +667,9 @@ export class TaskManager {
         if (Number.isFinite(parsedBalance) && parsedBalance > 0) {
           accStats.balance = parsedBalance;
         }
-        if (Number.isFinite(Number(info.webBalance)) && Number(info.webBalance) >= 0) {
-          accStats.webBalance = Number(info.webBalance);
+        const parsedWebBalance = toOptionalFiniteNumber(info.webBalance);
+        if (parsedWebBalance !== null && parsedWebBalance >= 0) {
+          accStats.webBalance = parsedWebBalance;
         }
 
         // 1. 同步 PC 搜索真实配额
@@ -726,7 +728,7 @@ export class TaskManager {
         //    绝不能拿它覆盖当前网页 Cookie 账号的阅读状态。
         let mobileTrusted = true;
         if (accCfg.refreshToken) {
-          const effectiveWebBalance = Number.isFinite(Number(info.webBalance)) ? Number(info.webBalance) : null;
+          const effectiveWebBalance = toOptionalFiniteNumber(info.webBalance);
           const binding = await this.checkMobileAccountBinding(accCfg, effectiveWebBalance, {
             allowPaused: options.allowPaused === true
           }).catch(() => null);
@@ -1265,16 +1267,15 @@ export class TaskManager {
       return { tokenOk: false, mobileBalance: null, mismatch: false, message: '移动端 Token 未就绪或刷新失败' };
     }
     const mobileSnapshot = await rewardsApi.getMobileSnapshot().catch(() => null);
-    const mobileBalance = Number.isFinite(Number(mobileSnapshot?.balance))
-      ? Number(mobileSnapshot.balance)
-      : null;
+    const mobileBalance = toOptionalFiniteNumber(mobileSnapshot?.balance);
     const webUserName = configManager.extractUserNameFromCookie(acc.cookie || '');
     const mobileUserName = mobileSnapshot?.userName || '';
     const nameMatch = accountNamesLikelyMatch(webUserName, mobileUserName);
     const nameMismatch = nameMatch === false;
     const balanceMismatch = isBalanceMismatch(webBalance, mobileBalance);
     const mismatch = nameMismatch || balanceMismatch;
-    const hasWebBalance = Number.isFinite(Number(webBalance)) && Number(webBalance) >= 0;
+    const normalizedWebBalance = toOptionalFiniteNumber(webBalance);
+    const hasWebBalance = normalizedWebBalance !== null && normalizedWebBalance >= 0;
     const balanceEvidence = hasWebBalance && Number.isFinite(Number(mobileBalance));
     const verified = tokenOk && !mismatch && (nameMatch === true || balanceEvidence);
     return {
@@ -1307,6 +1308,7 @@ export class TaskManager {
     const diagnosis = acc?.authDiagnosis;
     if (!this.isAuthDiagnosisFresh(acc)) return '';
     if (acc?.cookie && diagnosis?.cookieValid === false) {
+      if (diagnosis.cookieTransient === true) return '';
       return diagnosis.cookieMessage || diagnosis.warningMessage || '网页端 Cookie 已失效';
     }
     return '';
@@ -1318,6 +1320,7 @@ export class TaskManager {
     if (hardReason) return hardReason;
     const diagnosis = acc?.authDiagnosis;
     if (!this.isAuthDiagnosisFresh(acc)) return '';
+    if (diagnosis?.cookieTransient === true) return '';
     if (diagnosis?.warning && diagnosis.warningMessage) return diagnosis.warningMessage;
     if (diagnosis?.overallValid === false) return diagnosis.warningMessage || 'Cookie 或 Token 状态异常';
     return '';
@@ -1581,7 +1584,7 @@ export class TaskManager {
           result.message = `今日已签到（官网 App 连签 ${appStatus.completedDays || 0}/7 天）`;
         } else {
           let points = 0;
-          const webBalance = Number.isFinite(Number(info?.webBalance)) ? Number(info.webBalance) : null;
+          const webBalance = toOptionalFiniteNumber(info?.webBalance);
           const binding = await this.checkMobileAccountBinding(acc, webBalance);
           if (binding.mismatch) {
             result.hadFailure = true;
@@ -1624,7 +1627,7 @@ export class TaskManager {
         }
       } else if (taskKey === 'read') {
         const info = await rewardsApi.getRewardsInfo(1).catch(() => null);
-        const webBalance = Number.isFinite(Number(info?.webBalance)) ? Number(info.webBalance) : null;
+        const webBalance = toOptionalFiniteNumber(info?.webBalance);
         const binding = await this.checkMobileAccountBinding(acc, webBalance);
         if (binding.mismatch) throw new Error(binding.message);
         if (!binding.tokenOk) throw new Error(binding.message);
@@ -1967,7 +1970,7 @@ export class TaskManager {
     logger.log('📊', `当前积分: ${accStats.balance}`, accountName);
 
     // 检查或刷新 Token，并确认它确实属于当前网页 Cookie 账号
-    const pairingWebBalance = Number.isFinite(Number(accStats.webBalance)) ? Number(accStats.webBalance) : null;
+    const pairingWebBalance = toOptionalFiniteNumber(accStats.webBalance);
     const binding = await this.checkMobileAccountBinding(accCfg, pairingWebBalance);
     const tokenOk = binding.tokenOk && !binding.mismatch && binding.verified !== false;
     if (binding.mismatch) {
@@ -2475,7 +2478,7 @@ export class TaskManager {
     accStats.lastUpdate = Date.now();
     this.saveStats();
 
-    const runEndBalance = Number.isFinite(Number(accStats.balance)) ? Number(accStats.balance) : null;
+    const runEndBalance = toOptionalFiniteNumber(accStats.balance);
     const runEarned = runStartBalance !== null && runEndBalance !== null
       ? Math.max(0, runEndBalance - runStartBalance)
       : null;

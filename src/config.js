@@ -914,6 +914,7 @@ class ConfigManager {
       credentialUpdatedAt: Number(acc.credentialUpdatedAt || 0),
       webIdentityKey: acc.webIdentityKey || '',
       cookieValid: !!diagnosis.cookieValid,
+      cookieTransient: diagnosis.cookieTransient === true,
       tokenValid: !!diagnosis.tokenValid,
       overallValid: !!diagnosis.overallValid,
       warning: !!diagnosis.warning,

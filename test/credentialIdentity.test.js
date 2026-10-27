@@ -63,6 +63,32 @@ test('Cookie 网页身份变化时清空旧账号诊断与进度', () => {
   assert.equal(reset.webIdentityKey, updated.webIdentityKey);
 });
 
+test('网页响应瞬时异常不会被持久化为硬性 Cookie 失效阻断', () => {
+  const accountId = 'acc_transient_cookie';
+  configManager.upsertAccount({
+    id: accountId,
+    name: '瞬时异常测试',
+    cookie: '_U=TRANSIENT; MUID=1',
+    refreshToken: 'RT'
+  });
+  configManager.recordAuthDiagnosis(accountId, {
+    cookieValid: false,
+    cookieTransient: true,
+    tokenValid: true,
+    overallValid: false,
+    warning: true,
+    warningMessage: '页面响应不完整',
+    balance: 100,
+    cookieMessage: '页面响应不完整',
+    tokenMessage: ''
+  });
+  const manager = new TaskManager();
+  const account = configManager.findAccount(accountId);
+  assert.equal(manager.getHardAccountBlockReason(account), '');
+  assert.equal(manager.getAccountBlockReason(account), '');
+  assert.equal(account.authDiagnosis.cookieTransient, true);
+});
+
 test('PC 搜索只接受官网返回的 15/30/60 等级配额', async (t) => {
   const taskManager = new TaskManager();
   const originalGetRewardsInfo = rewardsApi.getRewardsInfo;
@@ -189,6 +215,31 @@ test('Cookie 体检可从 dashboard 读取配额，并保留印章 0/12', async 
   assert.equal(status.searchReady, true);
   assert.equal(status.pcSearch, '6/30');
   assert.deepEqual(status.stamps, { progress: 0, max: 12 });
+});
+
+test('页面只含 Sign in 字样时按瞬时异常处理，真正的登录表单才判定 Cookie 过期', async (t) => {
+  const originalRequest = networkClient.request;
+  t.after(() => {
+    networkClient.request = originalRequest;
+  });
+
+  networkClient.request = async () => '<html><body><div>loading</div><a>Sign in</a></body></html>';
+  const transient = await authManager.checkCookieStatus('_U=COOKIE_TEST; MUID=1', null);
+  assert.equal(transient.valid, false);
+  assert.equal(transient.transient, true);
+  assert.match(transient.message, /响应不完整/);
+
+  networkClient.request = async () => `
+    <html>
+      <head><title>Sign in to your account</title></head>
+      <body><form action="https://login.live.com/oauth20_authorize.srf">
+        <input type="email" name="loginfmt">
+      </form></body>
+    </html>`;
+  const expired = await authManager.checkCookieStatus('_U=COOKIE_TEST; MUID=1', null);
+  assert.equal(expired.valid, false);
+  assert.notEqual(expired.transient, true);
+  assert.match(expired.message, /Cookie 已过期失效/);
 });
 
 test('测试候选 Cookie 不会把余额或印章写进当前账号统计', async (t) => {

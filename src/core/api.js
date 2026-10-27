@@ -3,7 +3,11 @@ import configManager from '../config.js';
 import networkClient from '../network.js';
 import logger from '../logger.js';
 import authManager from './auth.js';
-import { extractAccountDisplayName, searchTierFromMax } from './accountIdentity.js';
+import {
+  extractAccountDisplayName,
+  searchTierFromMax,
+  toOptionalFiniteNumber
+} from './accountIdentity.js';
 import {
   classifySpecialActivity,
   extractActivityCardsFromHtml,
@@ -683,7 +687,7 @@ export class RewardsApi {
 
   async getMobileBalance() {
     const snapshot = await this.getMobileSnapshot();
-    return Number.isFinite(Number(snapshot?.balance)) ? Number(snapshot.balance) : null;
+    return toOptionalFiniteNumber(snapshot?.balance);
   }
 
   async getBalance() {
