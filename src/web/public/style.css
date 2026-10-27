@@ -3359,6 +3359,24 @@ body.account-column-resizing * {
   overflow: hidden;
 }
 
+.novnc-modal-box {
+  width: min(94vw, 1400px);
+  height: min(86vh, 900px);
+  max-width: 96vw;
+  max-height: 92vh;
+  min-width: 640px;
+  min-height: 420px;
+  resize: both;
+  overflow: hidden;
+}
+
+.novnc-modal-box.novnc-maximized {
+  width: 98vw !important;
+  height: 94vh !important;
+  max-width: none !important;
+  min-width: 0;
+}
+
 .modal-header {
   padding: 18px 24px;
   border-bottom: 1px solid var(--border-color);
@@ -4685,6 +4703,16 @@ body.account-column-resizing * {
     padding-bottom: 2px;
   }
   .ms-toolbar-actions .btn { flex-shrink: 0; }
+}
+
+@media (max-width: 700px) {
+  .novnc-modal-box {
+    width: 96vw !important;
+    height: 88vh !important;
+    min-width: 0;
+    min-height: 0;
+    resize: none;
+  }
 }
 
 @media (max-width: 900px) {

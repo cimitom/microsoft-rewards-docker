@@ -149,15 +149,22 @@ async function captureBingCookies(context) {
   return serializeBingCookies(batches.flat());
 }
 
-async function waitForOAuthCode(context, page) {
+export async function waitForOAuthCode(context, page, options = {}) {
+  const authorizeUrl = options.authorizeUrl || AUTH_CONFIG.authorizeUrl;
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs) || OAUTH_CODE_TIMEOUT_MS);
   const seen = new Set();
   let lastError = '';
+  let capturedUrl = '';
   const inspect = (value) => {
+    if (capturedUrl) return capturedUrl;
     const url = String(value || '');
     if (!url || seen.has(url)) return '';
     seen.add(url);
     const code = extractOAuthCode(url);
-    if (code) return url;
+    if (code) {
+      capturedUrl = url;
+      return url;
+    }
     try {
       const parsed = new URL(url);
       if (parsed.searchParams.get('error')) {
@@ -172,32 +179,54 @@ async function waitForOAuthCode(context, page) {
   const onFrame = frame => {
     if (frame === page.mainFrame()) inspect(frame.url());
   };
+  const onRequest = request => inspect(request.url());
+  const onResponse = response => {
+    inspect(response.url());
+    try {
+      const location = response.headers()?.location;
+      if (location) inspect(new URL(location, response.url()).toString());
+    } catch {}
+    let request = response.request?.();
+    while (request) {
+      inspect(request.url());
+      request = request.redirectedFrom?.();
+    }
+  };
   page.on('framenavigated', onFrame);
-  await page.goto(AUTH_CONFIG.authorizeUrl, {
-    waitUntil: 'domcontentloaded',
-    timeout: 45000
-  }).catch(() => {});
+  page.on('request', onRequest);
+  page.on('response', onResponse);
 
-  const deadline = Date.now() + OAUTH_CODE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const urls = [
-      page.url(),
-      ...context.pages().map(item => item.url())
-    ];
-    for (const url of urls) {
-      if (inspect(url)) {
-        page.off('framenavigated', onFrame);
-        return url;
+  try {
+    // 授权码地址只存在约 2 秒。`commit` 让 goto 在首个响应时返回，
+    // 后续 request/response/redirect chain 负责捕获一闪而过的 code。
+    const response = await page.goto(authorizeUrl, {
+      waitUntil: 'commit',
+      timeout: 45000
+    }).catch(() => null);
+    inspect(page.url());
+    if (response) {
+      onResponse(response);
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const urls = [
+        page.url(),
+        ...context.pages().map(item => item.url())
+      ];
+      for (const url of urls) {
+        inspect(url);
+        if (capturedUrl) return capturedUrl;
       }
+      if (lastError) throw new Error(lastError);
+      await delay(250);
     }
-    if (lastError) {
-      page.off('framenavigated', onFrame);
-      throw new Error(lastError);
-    }
-    await delay(1000);
+    throw new Error('等待 OAuth 授权码超时，请确认已在 VNC 中完成同意授权');
+  } finally {
+    page.off('framenavigated', onFrame);
+    page.off('request', onRequest);
+    page.off('response', onResponse);
   }
-  page.off('framenavigated', onFrame);
-  throw new Error('等待 OAuth 授权码超时，请确认已在 VNC 中完成同意授权');
 }
 
 function sameAccount(cookieStatus, tokenStatus) {
@@ -241,6 +270,7 @@ class MicrosoftLoginWindowManager {
     this.profileDir = '';
     this.capturing = false;
     this.useGpu = false;
+    this.rewardsNavigationStarted = false;
     this.lastResult = null;
   }
 
@@ -270,8 +300,13 @@ class MicrosoftLoginWindowManager {
       } catch {}
       if (login.userName || login.cookieHasU || contextHasU) {
         if (login.userName) this.detectedName = login.userName;
-        this.phase = 'logged_in';
-        this.message = `已检测到登录${login.userName ? `用户：${login.userName}` : ''}，准备抓取 Cookie 与 Token`;
+        this.phase = 'navigating_rewards';
+        this.message = `已检测到登录${login.userName ? `用户：${login.userName}` : ''}，正在打开 Bing Rewards...`;
+        this.navigateToRewardsAfterLogin().catch(error => {
+          this.phase = 'waiting_login';
+          this.rewardsNavigationStarted = false;
+          this.message = `已登录，但打开 Bing Rewards 失败：${String(error?.message || error).split('\n')[0]}`;
+        });
       }
     }
     return {
@@ -292,6 +327,24 @@ class MicrosoftLoginWindowManager {
     };
   }
 
+  async navigateToRewardsAfterLogin() {
+    if (this.rewardsNavigationStarted || !this.page || this.page.isClosed?.()) return;
+    this.rewardsNavigationStarted = true;
+    try {
+      if (!/rewards\.bing\.com\/dashboard/i.test(String(this.page.url() || ''))) {
+        await this.page.goto('https://rewards.bing.com/dashboard', {
+          waitUntil: 'domcontentloaded',
+          timeout: 45000
+        });
+      }
+      await delay(800);
+      this.phase = 'logged_in';
+      this.message = `已检测到登录${this.detectedName ? `用户：${this.detectedName}` : ''}，准备抓取 Cookie 与 Token`;
+    } catch (error) {
+      throw error;
+    }
+  }
+
   async open(input = {}) {
     if (!isVncAvailable()) {
       throw new Error('当前未启用 VNC，请设置 VNC_ENABLED=1 后重启容器');
@@ -299,16 +352,6 @@ class MicrosoftLoginWindowManager {
     if (this.context) {
       throw new Error('已有微软登录窗口正在运行，请先保存或关闭');
     }
-    const cfg = configManager.get();
-    if (
-      !cfg.server?.authPassword
-      && !cfg.server?.vncPassword
-      && !process.env.NOVNC_PASSWORD
-      && process.env.VNC_ALLOW_INSECURE !== '1'
-    ) {
-      throw new Error('为避免局域网内他人接管登录窗口，请先设置 WebUI 访问密码或 NOVNC_PASSWORD');
-    }
-
     const accountId = String(input.accountId || '').trim();
     const draftId = String(input.draftId || accountId || `draft_${Date.now()}`).trim();
     const account = accountId ? configManager.findAccount(accountId) : null;
@@ -343,6 +386,7 @@ class MicrosoftLoginWindowManager {
     this.detectedName = '';
     this.cookieReady = false;
     this.tokenReady = false;
+    this.rewardsNavigationStarted = false;
     this.startedAt = Date.now();
     this.lastResult = null;
     // Xvfb 下的有头 Chromium 使用 ANGLE/Vulkan 时会只显示白屏，
@@ -389,11 +433,11 @@ class MicrosoftLoginWindowManager {
       this.context.on?.('page', newPage => {
         alignPageFingerprint(this.context, newPage).catch(() => {});
       });
-      await this.page.goto('https://rewards.bing.com/dashboard', {
+      await this.page.goto('https://cn.bing.com/', {
         waitUntil: 'domcontentloaded',
         timeout: 45000
       }).catch(error => {
-        logger.log('🟡', `微软登录页加载提示: ${String(error.message || error).split('\n')[0]}`);
+        logger.log('🟡', `Bing 登录页加载提示: ${String(error.message || error).split('\n')[0]}`);
       });
       this.phase = 'waiting_login';
       this.message = '请在 VNC 中完成微软登录、MFA 或安全验证';
@@ -647,6 +691,7 @@ class MicrosoftLoginWindowManager {
       this.detectedName = '';
       this.cookieReady = false;
       this.tokenReady = false;
+      this.rewardsNavigationStarted = false;
       this.startedAt = 0;
       this.expiresAt = 0;
       this.capturing = false;

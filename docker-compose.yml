@@ -15,7 +15,6 @@ services:
       - PORT=5308
       - EPIC_VISIBLE=${EPIC_VISIBLE:-1}
       - VNC_ENABLED=${VNC_ENABLED:-1}
-      - NOVNC_PASSWORD=${NOVNC_PASSWORD:-}
       - NOVNC_PORT=6080
       - VNC_PORT=5900
       - WINDOWS_FONT_DIR=/usr/share/fonts/truetype/windows

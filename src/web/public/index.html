@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.10.3</span>
+            <span class="version-label" id="version-label">v1.10.4</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -870,12 +870,7 @@
           <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border-color); margin-top: 14px;">
             <label class="form-label">VNC 登录窗口</label>
             <div id="vnc-runtime-status" class="hint-msg">正在检测 VNC...</div>
-            <div class="form-group" style="margin-top: 12px; margin-bottom: 0;">
-              <label class="form-label">VNC 密码（最多 8 位）</label>
-              <input type="password" id="cfg-vnc-password" class="form-input" maxlength="8" autocomplete="new-password" placeholder="留空则使用 NOVNC_PASSWORD 或仅依赖 WebUI 密码">
-              <small class="form-hint">保存后立即热更新 x11vnc。VNC 协议最多使用 8 位密码；修改时会短暂断开当前 noVNC 连接。</small>
-            </div>
-            <small class="form-hint">微软积分 VNC 登录会暂停其他浏览器任务。为保证安全，请设置 VNC 密码或 WebUI 访问密码。</small>
+            <small class="form-hint">微软积分 VNC 登录会暂停其他浏览器任务。VNC 本身不设置密码，请通过 WebUI 访问控制保护面板。</small>
           </div>
         </div>
 
@@ -1409,16 +1404,17 @@
 
   <!-- noVNC 可见浏览器内嵌小窗 -->
   <div class="modal-backdrop" id="novnc-modal">
-    <div class="modal-box" style="max-width: 980px; width: 94vw; height: 82vh;">
+    <div class="modal-box novnc-modal-box">
       <div class="modal-header">
         <div class="modal-title"><span>🖥️</span> <span id="novnc-modal-title">Epic 可见浏览器</span></div>
         <button class="btn-close" id="btn-close-novnc">&times;</button>
       </div>
       <div id="novnc-status-text" class="hint-msg" style="padding: 8px 16px 0; margin: 0;"></div>
       <div class="modal-body" style="padding: 0; flex: 1; min-height: 0;">
-        <iframe id="novnc-frame" title="Epic Chromium 可见浏览器" style="width: 100%; height: 100%; border: 0; background: #111827;"></iframe>
+        <iframe id="novnc-frame" title="内置 Chromium 可见浏览器" style="width: 100%; height: 100%; border: 0; background: #111827;"></iframe>
       </div>
       <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-maximize-novnc" title="放大 / 还原 VNC 窗口">⛶ 放大</button>
         <button class="btn btn-secondary" id="btn-refresh-novnc">🔄 刷新画面</button>
         <button class="btn btn-primary" id="btn-novnc-save-login" style="display: none;">✅ 我已登录，保存凭据</button>
         <button class="btn btn-danger-soft" id="btn-cancel-novnc-session" style="display: none;">取消登录</button>

@@ -7,24 +7,7 @@ if [ "${VNC_ENABLED:-1}" = "1" ] || [ "${EPIC_VISIBLE:-0}" = "1" ]; then
   Xvfb "$DISPLAY" -ac -screen 0 "${VNC_WIDTH:-1366}x${VNC_HEIGHT:-768}x24" &
   sleep 1
 
-  CONFIG_FILE="${MSR_DATA_DIR:-/app/data}/config.json"
-  CONFIG_VNC_PASSWORD="$(
-    MSR_CONFIG_FILE="$CONFIG_FILE" node -e '
-      const fs = require("fs");
-      try {
-        const config = JSON.parse(fs.readFileSync(process.env.MSR_CONFIG_FILE, "utf-8"));
-        process.stdout.write(String(config?.server?.vncPassword || ""));
-      } catch {}
-    ' 2>/dev/null || true
-  )"
-  VNC_PASSWORD="${CONFIG_VNC_PASSWORD:-${NOVNC_PASSWORD:-}}"
-
-  if [ -n "$VNC_PASSWORD" ]; then
-    x11vnc -display "$DISPLAY" -forever -shared -rfbport "${VNC_PORT:-5900}" -passwd "$VNC_PASSWORD" &
-  else
-    x11vnc -display "$DISPLAY" -forever -shared -rfbport "${VNC_PORT:-5900}" -nopw &
-  fi
-  echo "$!" > /tmp/ms-rewards-x11vnc.pid
+  x11vnc -display "$DISPLAY" -forever -shared -rfbport "${VNC_PORT:-5900}" -nopw &
 
   websockify -D --web=/usr/share/novnc/ "${NOVNC_PORT:-6080}" "localhost:${VNC_PORT:-5900}"
   echo "Visible browser VNC (WebUI embedded): http://<host>:${PORT:-5308}/novnc/vnc.html"

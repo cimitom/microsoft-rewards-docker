@@ -1757,6 +1757,14 @@ function refreshNovncModal() {
   frame.src = `${base}?autoconnect=1&resize=scale&path=websockify&reconnect=1&reconnect_delay=1000&t=${Date.now()}`;
 }
 
+function toggleNovncMaximize() {
+  const box = document.querySelector('#novnc-modal .novnc-modal-box');
+  if (!box) return;
+  box.classList.toggle('novnc-maximized');
+  const button = document.getElementById('btn-maximize-novnc');
+  if (button) button.innerText = box.classList.contains('novnc-maximized') ? '⛶ 还原' : '⛶ 放大';
+}
+
 function closeNovncModal() {
   stopMicrosoftVncPolling();
   const frame = document.getElementById('novnc-frame');
@@ -1800,6 +1808,8 @@ async function pollMicrosoftLoginStatus() {
     }
     const statusText = data.message || (data.phase === 'waiting_login'
       ? '请在 VNC 中完成微软登录'
+      : data.phase === 'navigating_rewards'
+        ? '已登录，正在打开 Bing Rewards...'
       : data.phase === 'capturing'
         ? '正在自动抓取 Cookie 与 Token...'
         : '登录窗口已就绪');
@@ -2945,7 +2955,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.10.3';
+  const current = updateInfo?.currentVersion || '1.10.4';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -3000,8 +3010,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.3'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.3'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.4'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.4'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -5436,8 +5446,6 @@ function populateSettingsForm() {
   // Web 访问密码
   const authPassElem = document.getElementById('cfg-auth-password');
   if (authPassElem) authPassElem.value = c.server?.authPassword || '';
-  const vncPassElem = document.getElementById('cfg-vnc-password');
-  if (vncPassElem) vncPassElem.value = c.server?.vncPassword || '';
   // 通知
   document.getElementById('cfg-notify-wework').value = c.notify?.wework || '';
   document.getElementById('cfg-notify-dingding').value = c.notify?.dingding || '';
@@ -5641,8 +5649,7 @@ async function saveSettingsFromModal() {
       cron: document.getElementById('cfg-sched-cron').value.trim()
     },
     server: {
-      authPassword: document.getElementById('cfg-auth-password')?.value.trim() || '',
-      vncPassword: document.getElementById('cfg-vnc-password')?.value.trim() || ''
+      authPassword: document.getElementById('cfg-auth-password')?.value.trim() || ''
     },
     notify: {
       wework: document.getElementById('cfg-notify-wework').value.trim(),
@@ -5667,20 +5674,16 @@ async function saveSettingsFromModal() {
   if (res.success) {
     currentConfig = res.data;
     cfgDraftTokens = null;
-    const vncWarning = res.vncRestart?.restarted === false && res.vncRestart?.error
-      ? `配置已保存，但 VNC 密码热更新失败：${res.vncRestart.error}`
-      : '';
     const savedAccount = currentConfig.accounts?.find(account => account.id === currentAccId);
     renderRunHourGrid('cfg-run-hours', getAccountRunHours(savedAccount), { excludeAccountId: currentAccId });
     const cleared = currentConfig.scheduleConflicts?.find(item => item.id === currentAccId);
     setSaveStatus(
-      cleared || vncWarning ? 'warn' : 'ok',
-      vncWarning
-        || (cleared
-          ? `⚠️ 时间档位与账号 [${cleared.occupiedByName || cleared.occupiedBy}] 冲突，已清空该账号勾选`
-          : (runHours.length === 0
-            ? '✅ 配置已保存；未选择运行时间，该账号自动任务已暂停'
-            : '✅ 配置已保存并即时生效'))
+      cleared ? 'warn' : 'ok',
+      cleared
+        ? `⚠️ 时间档位与账号 [${cleared.occupiedByName || cleared.occupiedBy}] 冲突，已清空该账号勾选`
+        : (runHours.length === 0
+          ? '✅ 配置已保存；未选择运行时间，该账号自动任务已暂停'
+          : '✅ 配置已保存并即时生效')
     );
     fetchStatus();
   } else {
@@ -6450,6 +6453,7 @@ function initEpicUI() {
   });
   document.getElementById('btn-cancel-novnc-session')?.addEventListener('click', closeMicrosoftVncSession);
   document.getElementById('btn-refresh-novnc')?.addEventListener('click', refreshNovncModal);
+  document.getElementById('btn-maximize-novnc')?.addEventListener('click', toggleNovncMaximize);
   document.getElementById('btn-novnc-save-login')?.addEventListener('click', () => {
     if (novncMode === 'microsoft') captureMicrosoftLoginWindow();
     else saveEpicLoginWindow();

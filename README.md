@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.10.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.10.4-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,14 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🔐 **VNC 登录链路、OAuth 捕获与窗口体验修复 (v1.10.4)**：
+  - **默认从 Bing 开始登录**：VNC 先打开 `cn.bing.com`，检测到登录后自动进入 `rewards.bing.com/dashboard`，不再需要手动补开 Bing；
+  - **OAuth code 防丢**：同时监听 request、response、重定向链和 frame URL，捕获只存在约 2 秒的授权码地址；
+  - **移除 VNC 密码**：x11vnc 使用 `-nopw`，noVNC 不再弹出密码框，面板安全由 WebUI 访问控制负责；
+  - **确认代理继承**：VNC 浏览器、Cookie 校验与 Token 交换继续使用账号指定代理或显式选择的直连出口；
+  - **VNC 窗口可调整**：弹窗支持拖动缩放，并新增放大/还原按钮；
+  - **Passkey 限制说明**：Vaultwarden 不能直接作为 Chromium 的 WebAuthn 认证器，需要 Bitwarden 兼容扩展；WebAuthn passkey 本身也不支持通过二维码导出私钥。
+  - **回归测试 251 项全部通过**。
 - 🛑 **停止响应、VNC 白屏与账号日切修复 (v1.10.3)**：
   - **停止按钮立即生效**：搜索配额退避等待改为可中断轮询，不再在停止后继续等待 3/10/30 秒；
   - **修复微软 VNC 白屏**：Xvfb 下的有头 Chromium 固定使用软件渲染，避免 Vulkan 画面全白；
@@ -389,7 +397,7 @@
 - 🖥️ **Epic 可见浏览器与并行运行**：
   - Epic 使用 Chromium + Patchright，并通过独立资源锁与微软任务协调，避免浏览器资源争抢；
   - Docker 默认启用 Xvfb 可见 Chromium；遇到验证码时 WebUI 会自动打开内嵌 VNC 小窗；
-  - 可通过 `EPIC_VISIBLE=0` 切回纯无头模式，通过 `NOVNC_PASSWORD` 为可见浏览器设置访问密码。
+  - 可通过 `EPIC_VISIBLE=0` 切回纯无头模式。
 - 🖥️ **完全脱离电脑与浏览器**：基于轻量 Docker 容器后台静默常驻，7×24 小时自动巡检。
 - 📊 **现代化 Fluent 毛玻璃 Web 控制台**：
   - 五核 Hero 指标大屏：今日已增积分、当前总积分、今日任务达成率、连续签到天数、连签印章进度 (8/12)；
@@ -473,7 +481,7 @@ docker compose up -d
 
 4. 启动后，打开浏览器访问：`http://<NAS或VPS的IP>:5308`，即可进入现代化控制台！
 
-> VNC 登录窗口可以操作已登录的微软浏览器。请在配置中心设置 Web 访问密码，或通过 `NOVNC_PASSWORD` 设置 VNC 密码后再使用。
+> VNC 登录窗口可以操作已登录的微软浏览器。VNC 本身不设置密码，请通过 WebUI 访问控制保护面板。
 
 > Windows 字体放到 `data/fonts/windows/`，例如 `msyh.ttc`、`segoeui.ttf`。启动时会自动刷新字体缓存；没有检测到时继续使用镜像内置开源字体。
 

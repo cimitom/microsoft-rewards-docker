@@ -27,6 +27,7 @@ const { default: authManager } = await import('../src/core/auth.js');
 const { default: networkClient } = await import('../src/network.js');
 const { normalizeProxyUrl, toBrowserProxy } = await import('../src/core/proxy.js');
 const { createServer: createApp } = await import('../src/web/server.js');
+const { resolveLoginProxy } = await import('../src/core/microsoftLoginWindow.js');
 
 test.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -77,6 +78,18 @@ test('账号可独立选择跟随全局、直连或指定代理', () => {
   assert.equal(networkClient.getActiveProxyContext().proxyId, 'proxy_gz');
   rewardsApi.setCurrentAccount(configManager.findAccount('acc_direct'));
   assert.equal(networkClient.getActiveProxyContext().mode, 'direct');
+});
+
+test('VNC 登录浏览器会继承账号代理，并允许显式切换直连', () => {
+  const proxied = configManager.findAccount('acc_proxy');
+  const direct = resolveLoginProxy({}, proxied);
+  assert.equal(direct.mode, 'proxy');
+  assert.equal(direct.proxyId, 'proxy_gz');
+  assert.match(direct.label, /广州/);
+
+  const override = resolveLoginProxy({ mode: 'direct' }, proxied);
+  assert.equal(override.mode, 'direct');
+  assert.equal(override.proxyUrl, '');
 });
 
 test('未显式配置代理策略时默认直连', () => {

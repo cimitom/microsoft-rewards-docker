@@ -123,8 +123,7 @@ const DEFAULT_CONFIG = {
   },
   server: {
     port: 5308,
-    authPassword: '',
-    vncPassword: ''
+    authPassword: ''
   }
 };
 
