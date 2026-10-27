@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.10.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.10.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,12 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🖥️ **GPU 后端强制探测与软件渲染修复 (v1.10.2)**：
+  - **不再默认接受 SwiftShader**：核显检测依次尝试 OpenGL/ANGLE、Vulkan/ANGLE、EGL 三种后端；
+  - **强制硬件渲染**：GPU 模式增加 `--use-angle=gl`、`--disable-software-rasterizer` 等参数，避免 Chromium 在 headless 下静默回退 SwiftShader；
+  - **自动记录后端**：检测成功后自动保存可用的 `gpuBackend`，后续微软任务和 VNC 登录使用同一后端；
+  - **补充 Mesa Vulkan 驱动**：镜像新增 `mesa-vulkan-drivers`，为 Intel N305 核显提供 Vulkan/ANV 路径；
+  - **回归测试增至 243 个**。
 - 🖥️ **微软积分 VNC 登录、核显与字体增强 (v1.10.1)**：
   - **微软积分 VNC 登录**：配置向导、快速添加、编辑账号和配置中心均可打开内置 Chromium，自行输入账号密码并完成 MFA/安全验证；
   - **自动抓取 Cookie 与 Token**：登录成功后自动读取 Bing/Rewards Cookie、打开 OAuth 授权页、捕获授权码并换取 Access Token / Refresh Token；

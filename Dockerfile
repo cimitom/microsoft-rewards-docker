@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgles2 \
     libglx-mesa0 \
     libgl1-mesa-dri \
+    mesa-vulkan-drivers \
     tzdata \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*

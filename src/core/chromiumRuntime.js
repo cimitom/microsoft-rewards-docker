@@ -20,13 +20,28 @@ const BASE_ARGS = [
   '--no-default-browser-check'
 ];
 
-export function buildChromiumArgs({ useGpu = false, visible = false, extraArgs = [] } = {}) {
+export const GPU_BACKENDS = ['gl', 'vulkan', 'egl'];
+
+const GPU_BACKEND_ARGS = {
+  gl: ['--use-gl=angle', '--use-angle=gl'],
+  vulkan: ['--use-gl=angle', '--use-angle=vulkan', '--enable-features=Vulkan'],
+  egl: ['--use-gl=egl']
+};
+
+export function normalizeGpuBackend(value) {
+  const backend = String(value || '').toLowerCase();
+  return GPU_BACKENDS.includes(backend) ? backend : 'gl';
+}
+
+export function buildChromiumArgs({ useGpu = false, gpuBackend = 'gl', visible = false, extraArgs = [] } = {}) {
   const args = [...BASE_ARGS];
   if (useGpu) {
     args.push(
       '--ignore-gpu-blocklist',
       '--enable-gpu-rasterization',
-      '--enable-zero-copy'
+      '--enable-zero-copy',
+      '--disable-software-rasterizer',
+      ...(GPU_BACKEND_ARGS[normalizeGpuBackend(gpuBackend)] || GPU_BACKEND_ARGS.gl)
     );
   } else {
     args.push('--disable-gpu');

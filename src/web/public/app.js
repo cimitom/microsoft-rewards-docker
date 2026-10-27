@@ -2101,10 +2101,13 @@ async function handleGpuCheck() {
     const data = res.data || {};
     if (res.success && data.success) {
       result.className = 'hint-msg ok';
-      result.innerHTML = `<div>✅ ${escapeHtml(data.message || '核显工作正常')}</div><div style="margin-top:4px;">Renderer: ${escapeHtml(data.renderer || '未知')}</div><div>耗时: ${Number(data.durationMs || 0)} ms</div>`;
+      result.innerHTML = `<div>✅ ${escapeHtml(data.message || '核显工作正常')}</div><div style="margin-top:4px;">后端: ${escapeHtml(data.recommendedBackend || data.backend || '未知')}</div><div>Renderer: ${escapeHtml(data.renderer || '未知')}</div><div>耗时: ${Number(data.durationMs || 0)} ms</div>`;
     } else {
       result.className = 'hint-msg warn';
-      result.innerHTML = `<div>⚠️ ${escapeHtml(data.message || res.message || '核显不可用')}</div><div style="margin-top:4px;">/dev/dri: ${(data.dri?.devices || []).map(escapeHtml).join(', ') || '未发现'}</div>${data.renderer ? `<div>Renderer: ${escapeHtml(data.renderer)}</div>` : ''}`;
+      const attempts = Array.isArray(data.attempts)
+        ? data.attempts.map(item => `${item.backend}: ${item.renderer || item.error || '未获取到硬件 WebGL'}`).join(' | ')
+        : '';
+      result.innerHTML = `<div>⚠️ ${escapeHtml(data.message || res.message || '核显不可用')}</div><div style="margin-top:4px;">/dev/dri: ${(data.dri?.devices || []).map(escapeHtml).join(', ') || '未发现'}</div>${data.renderer ? `<div>Renderer: ${escapeHtml(data.renderer)}</div>` : ''}${attempts ? `<div>尝试: ${escapeHtml(attempts)}</div>` : ''}`;
     }
   } catch (e) {
     result.className = 'hint-msg err';
@@ -2942,7 +2945,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.10.1';
+  const current = updateInfo?.currentVersion || '1.10.2';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2997,8 +3000,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.1'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.1'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.2'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.2'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );

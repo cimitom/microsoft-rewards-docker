@@ -341,7 +341,9 @@ class MicrosoftLoginWindowManager {
     this.tokenReady = false;
     this.startedAt = Date.now();
     this.lastResult = null;
-    this.useGpu = configManager.get().browser?.useGpu === true;
+    const browserConfig = configManager.get().browser || {};
+    this.useGpu = browserConfig.useGpu === true;
+    this.gpuBackend = browserConfig.gpuBackend || 'gl';
     if (this.useGpu && !inspectDriEnvironment().available) {
       logger.log('🟡', '微软登录窗口请求核显，但容器内未发现 /dev/dri，已回退软件渲染');
       this.useGpu = false;
@@ -370,6 +372,7 @@ class MicrosoftLoginWindowManager {
         ...(this.proxyBridge?.proxy ? { proxy: this.proxyBridge.proxy } : {}),
         args: buildChromiumArgs({
           useGpu,
+          gpuBackend: this.gpuBackend,
           visible: true,
           extraArgs: ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
         }),

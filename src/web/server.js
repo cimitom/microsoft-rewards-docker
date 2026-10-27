@@ -25,7 +25,7 @@ import { getFontStatus, refreshFontCache } from '../core/fontStatus.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.10.1';
+const CURRENT_VERSION = '1.10.2';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -719,7 +719,8 @@ export function createServer() {
         success: true,
         data: {
           gpu: {
-            enabled: configManager.get().browser?.useGpu === true
+            enabled: configManager.get().browser?.useGpu === true,
+            backend: configManager.get().browser?.gpuBackend || 'gl'
           },
           vnc: {
             enabled: isVncAvailable(),
@@ -736,6 +737,17 @@ export function createServer() {
   app.post('/api/browser/gpu/check', async (req, res) => {
     try {
       const result = await checkGpuCapability();
+      if (result.success && result.recommendedBackend) {
+        const current = configManager.get().browser || {};
+        if (current.gpuBackend !== result.recommendedBackend) {
+          configManager.update({
+            browser: {
+              gpuBackend: result.recommendedBackend
+            }
+          });
+          logger.log('🖥️', `已记录可用 GPU 后端: ${result.recommendedBackend}`);
+        }
+      }
       res.status(result.busy ? 409 : 200).json({ success: result.success, data: result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });

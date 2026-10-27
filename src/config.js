@@ -75,7 +75,8 @@ const DEFAULT_CONFIG = {
     keepRunning: true // 全部完成后，手动再次执行时是否仍完整跑一遍（定时任务每账号每天只排一次）
   },
   browser: {
-    useGpu: false
+    useGpu: false,
+    gpuBackend: 'gl'
   },
   schedule: {
     enabled: true,

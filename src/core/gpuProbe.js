@@ -3,6 +3,7 @@ import logger from '../logger.js';
 import { browserSlotLock } from './contextLock.js';
 import { findChromiumExecutable } from './chromiumExecutable.js';
 import {
+  GPU_BACKENDS,
   buildChromiumArgs,
   buildChromiumEnv,
   classifyWebglRenderer,
@@ -103,9 +104,59 @@ async function readSystemInfo(browser) {
   }
 }
 
+async function probeGpuBackend({ executablePath, backend }) {
+  const startedAt = Date.now();
+  let browser = null;
+  try {
+    logger.log('🖥️', `尝试 GPU 后端: ${backend}`);
+    browser = await chromium.launch({
+      executablePath,
+      headless: true,
+      timeout: GPU_PROBE_TIMEOUT_MS,
+      args: buildChromiumArgs({ useGpu: true, gpuBackend: backend }),
+      env: buildChromiumEnv({ useGpu: true })
+    });
+    const page = await browser.newPage();
+    await page.goto('about:blank', { timeout: 10000 }).catch(() => {});
+    const signals = await readGpuSignals(page);
+    const systemInfo = await readSystemInfo(browser);
+    const kind = classifyWebglRenderer(signals.vendor, signals.renderer);
+    const hardware = signals.webgl && !kind.software && signals.drawOk && !signals.contextLost;
+    return {
+      backend,
+      success: hardware,
+      software: kind.software,
+      renderer: signals.renderer,
+      vendor: signals.vendor,
+      webgl: signals.webgl,
+      webgl2: signals.webgl2,
+      drawOk: signals.drawOk,
+      contextLost: signals.contextLost,
+      glError: signals.error,
+      version: signals.version,
+      shadingLanguageVersion: signals.shadingLanguageVersion,
+      systemInfo,
+      activeDevices: systemInfo?.devices?.filter(device => device.active) || [],
+      durationMs: Date.now() - startedAt
+    };
+  } catch (error) {
+    return {
+      backend,
+      success: false,
+      error: String(error?.message || error).split('\n')[0],
+      durationMs: Date.now() - startedAt
+    };
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
 /**
  * 用未注入 WebGL 伪装的临时 Chromium 检查核显是否真的可用。
  * 检测必须绕过指纹伪装，否则 SwiftShader 也会被报告成 UHD 630。
+ *
+ * Chromium 在 Linux headless 下默认可能选择 ANGLE Vulkan + SwiftShader。
+ * 因此依次尝试 OpenGL、Vulkan、EGL 三种后端，只有拿到非软件渲染器才算成功。
  */
 export async function checkGpuCapability() {
   const dri = inspectDriEnvironment();
@@ -139,48 +190,43 @@ export async function checkGpuCapability() {
   }
 
   const startedAt = Date.now();
-  let browser = null;
+  const attempts = [];
   try {
     logger.log('🖥️', '开始检测核显与 Chromium 硬件渲染能力...');
-    browser = await chromium.launch({
-      executablePath,
-      headless: true,
-      args: buildChromiumArgs({ useGpu: true }),
-      env: buildChromiumEnv({ useGpu: true })
-    });
-    const page = await browser.newPage();
-    await page.goto('about:blank', { timeout: 10000 }).catch(() => {});
-    const signals = await readGpuSignals(page);
-    const systemInfo = await readSystemInfo(browser);
-    const kind = classifyWebglRenderer(signals.vendor, signals.renderer);
-    const hardware = signals.webgl && !kind.software && signals.drawOk && !signals.contextLost;
-    const activeDevices = systemInfo?.devices?.filter(device => device.active) || [];
-    const durationMs = Date.now() - startedAt;
+    for (const backend of GPU_BACKENDS) {
+      const attempt = await probeGpuBackend({ executablePath, backend });
+      attempts.push(attempt);
+      if (attempt.success) {
+        const result = {
+          ...attempt,
+          recommendedBackend: backend,
+          dri,
+          attempts,
+          durationMs: Date.now() - startedAt,
+          message: `核显工作正常（${backend}）：${attempt.renderer || '未知渲染器'}`,
+          checkedAt: Date.now()
+        };
+        logger.log('🟢', result.message);
+        return result;
+      }
+    }
 
+    const softwareAttempt = attempts.find(item => item.software);
     const result = {
-      success: hardware,
-      software: kind.software,
-      renderer: signals.renderer,
-      vendor: signals.vendor,
-      webgl: signals.webgl,
-      webgl2: signals.webgl2,
-      drawOk: signals.drawOk,
-      contextLost: signals.contextLost,
-      glError: signals.error,
-      version: signals.version,
-      shadingLanguageVersion: signals.shadingLanguageVersion,
-      systemInfo,
-      activeDevices,
+      success: false,
+      software: !!softwareAttempt,
+      recommendedBackend: '',
       dri,
-      durationMs,
-      message: hardware
-        ? `核显工作正常：${signals.renderer || '未知渲染器'}`
-        : (kind.software
-          ? `检测到软件渲染：${signals.renderer || '未知渲染器'}`
-          : '核显 WebGL 初始化失败，请检查 /dev/dri 权限与极空间 GPU 设置'),
+      attempts,
+      durationMs: Date.now() - startedAt,
+      renderer: softwareAttempt?.renderer || attempts[0]?.renderer || '',
+      vendor: softwareAttempt?.vendor || attempts[0]?.vendor || '',
+      message: softwareAttempt
+        ? `所有 GPU 后端仍回退到软件渲染：${softwareAttempt.renderer || '未知渲染器'}`
+        : '所有 GPU 后端均未成功初始化硬件 WebGL，请检查 /dev/dri 权限、Mesa 驱动与极空间 GPU 设置',
       checkedAt: Date.now()
     };
-    logger.log(result.success ? '🟢' : '🟡', result.message);
+    logger.log('🟡', result.message);
     return result;
   } catch (error) {
     const message = String(error?.message || error).split('\n')[0];
@@ -188,15 +234,13 @@ export async function checkGpuCapability() {
     return {
       success: false,
       dri,
+      attempts,
       error: message,
       durationMs: Date.now() - startedAt,
       message: `核显检测失败: ${message}`,
       checkedAt: Date.now()
     };
   } finally {
-    if (browser) {
-      await browser.close().catch(() => {});
-    }
     browserSlotLock.release(owner);
   }
 }

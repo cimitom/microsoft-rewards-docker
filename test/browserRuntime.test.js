@@ -24,7 +24,17 @@ test('核显模式移除软件渲染限制并启用 GPU 参数', () => {
   assert.ok(!args.includes('--disable-gpu'));
   assert.ok(args.includes('--ignore-gpu-blocklist'));
   assert.ok(args.includes('--disable-quic'));
+  assert.ok(args.includes('--use-angle=gl'));
+  assert.ok(args.includes('--disable-software-rasterizer'));
   assert.equal(env.LIBGL_ALWAYS_SOFTWARE, undefined);
+});
+
+test('GPU 后端可选择 Vulkan 或 EGL', () => {
+  const vulkanArgs = buildChromiumArgs({ useGpu: true, gpuBackend: 'vulkan' });
+  const eglArgs = buildChromiumArgs({ useGpu: true, gpuBackend: 'egl' });
+  assert.ok(vulkanArgs.includes('--use-angle=vulkan'));
+  assert.ok(vulkanArgs.includes('--enable-features=Vulkan'));
+  assert.ok(eglArgs.includes('--use-gl=egl'));
 });
 
 test('WebGL 渲染器可以区分软件与硬件', () => {

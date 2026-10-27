@@ -188,7 +188,9 @@ class BrowserManager extends EventEmitter {
     });
 
     let browser = null;
-    let effectiveGpu = configManager.get().browser?.useGpu === true;
+    const browserConfig = configManager.get().browser || {};
+    let effectiveGpu = browserConfig.useGpu === true;
+    const gpuBackend = browserConfig.gpuBackend || 'gl';
     if (effectiveGpu && !inspectDriEnvironment().available) {
       logger.log('🟡', '配置已启用核显，但容器内未发现 /dev/dri，本次自动回退软件渲染');
       effectiveGpu = false;
@@ -197,7 +199,7 @@ class BrowserManager extends EventEmitter {
       const launch = (useGpu) => chromium.launch({
         executablePath: execPath,
         headless: true,
-        args: buildChromiumArgs({ useGpu }),
+        args: buildChromiumArgs({ useGpu, gpuBackend }),
         env: buildChromiumEnv({ useGpu })
       });
       try {
