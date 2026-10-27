@@ -170,3 +170,34 @@ test('缺少配额时更新状态不能清空当天已验证的搜索额度', ()
   assert.equal(preserved.tasks.search.max, 30);
   assert.equal(preserved.searchQuotaMax, 30);
 });
+
+test('搜索配额重试收到停止指令后立即取消，不再等待退避时间', async () => {
+  const startedAt = Date.now();
+  const quota = await rewardsApi.getSearchQuota({
+    attempts: 4,
+    retryDelaysMs: [5000, 10000, 30000],
+    shouldStop: () => true
+  });
+  assert.equal(quota.aborted, true);
+  assert.ok(Date.now() - startedAt < 250, '停止指令不能继续等待配额退避');
+});
+
+test('任务停止后 resolveSearchQuota 返回 stopped，不继续搜索', async () => {
+  const accountId = 'acc_quota_stopped';
+  configManager.upsertAccount({
+    id: accountId,
+    name: '配额停止测试',
+    cookie: '_U=QUOTA_STOPPED; MUID=1'
+  });
+  const manager = new TaskManager();
+  const account = configManager.findAccount(accountId);
+  const result = await manager.resolveSearchQuota(account, null, {
+    attempts: 4,
+    retryDelaysMs: [5000, 10000, 30000],
+    shouldStop: () => true,
+    persist: false
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.stopped, true);
+  assert.match(result.reason, /任务已停止/);
+});

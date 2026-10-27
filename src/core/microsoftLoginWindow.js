@@ -16,8 +16,7 @@ import { findChromiumExecutable } from './chromiumExecutable.js';
 import { prepareBrowserProxy } from './localProxyBridge.js';
 import {
   buildChromiumArgs,
-  buildChromiumEnv,
-  inspectDriEnvironment
+  buildChromiumEnv
 } from './chromiumRuntime.js';
 import {
   PC_USER_AGENT,
@@ -301,7 +300,12 @@ class MicrosoftLoginWindowManager {
       throw new Error('已有微软登录窗口正在运行，请先保存或关闭');
     }
     const cfg = configManager.get();
-    if (!cfg.server?.authPassword && !process.env.NOVNC_PASSWORD && process.env.VNC_ALLOW_INSECURE !== '1') {
+    if (
+      !cfg.server?.authPassword
+      && !cfg.server?.vncPassword
+      && !process.env.NOVNC_PASSWORD
+      && process.env.VNC_ALLOW_INSECURE !== '1'
+    ) {
       throw new Error('为避免局域网内他人接管登录窗口，请先设置 WebUI 访问密码或 NOVNC_PASSWORD');
     }
 
@@ -341,13 +345,11 @@ class MicrosoftLoginWindowManager {
     this.tokenReady = false;
     this.startedAt = Date.now();
     this.lastResult = null;
-    const browserConfig = configManager.get().browser || {};
-    this.useGpu = browserConfig.useGpu === true;
-    this.gpuBackend = browserConfig.gpuBackend || 'gl';
-    if (this.useGpu && !inspectDriEnvironment().available) {
-      logger.log('🟡', '微软登录窗口请求核显，但容器内未发现 /dev/dri，已回退软件渲染');
-      this.useGpu = false;
-    }
+    // Xvfb 下的有头 Chromium 使用 ANGLE/Vulkan 时会只显示白屏，
+    // 但同一容器的无头任务和核显检测都正常。登录窗口以“能看见、能操作”为第一优先级，
+    // 因此固定使用软件渲染；核显开关只影响无头任务。
+    this.useGpu = false;
+    this.gpuBackend = 'gl';
     this.profileDir = path.join(LOGIN_PROFILE_DIR, `${safeSessionId(draftId)}-${Date.now()}-chromium`);
     fs.rmSync(this.profileDir, { recursive: true, force: true });
     fs.mkdirSync(this.profileDir, { recursive: true });
@@ -355,7 +357,7 @@ class MicrosoftLoginWindowManager {
 
     try {
       this.proxyBridge = await prepareBrowserProxy(proxy.proxyUrl);
-      const launch = (useGpu) => chromium.launchPersistentContext(this.profileDir, {
+      const launch = () => chromium.launchPersistentContext(this.profileDir, {
         executablePath,
         headless: false,
         timeout: 90000,
@@ -371,24 +373,15 @@ class MicrosoftLoginWindowManager {
         },
         ...(this.proxyBridge?.proxy ? { proxy: this.proxyBridge.proxy } : {}),
         args: buildChromiumArgs({
-          useGpu,
+          useGpu: false,
           gpuBackend: this.gpuBackend,
           visible: true,
           extraArgs: ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
         }),
-        env: buildChromiumEnv({ useGpu })
+        env: buildChromiumEnv({ useGpu: false })
       });
 
-      try {
-        this.context = await launch(this.useGpu);
-      } catch (gpuError) {
-        if (!this.useGpu) throw gpuError;
-        logger.log('🟡', `微软登录窗口核显启动失败，自动回退软件渲染: ${String(gpuError.message || gpuError).split('\n')[0]}`);
-        this.useGpu = false;
-        fs.rmSync(this.profileDir, { recursive: true, force: true });
-        fs.mkdirSync(this.profileDir, { recursive: true });
-        this.context = await launch(false);
-      }
+      this.context = await launch();
 
       await applyWebGLFingerprint(this.context);
       this.page = this.context.pages()[0] || await this.context.newPage();

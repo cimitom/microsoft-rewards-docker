@@ -21,11 +21,12 @@ import { normalizeProxyUrl } from '../core/proxy.js';
 import microsoftLoginWindow, { isVncAvailable } from '../core/microsoftLoginWindow.js';
 import { checkGpuCapability } from '../core/gpuProbe.js';
 import { getFontStatus, refreshFontCache } from '../core/fontStatus.js';
+import { normalizeVncPassword, restartVncServer } from '../core/vncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.10.2';
+const CURRENT_VERSION = '1.10.3';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -853,17 +854,44 @@ export function createServer() {
   });
 
   // 3. 更新配置
-  app.post('/api/config', (req, res) => {
+  app.post('/api/config', async (req, res) => {
     try {
       if (Array.isArray(req.body?.accounts) && accountContextLock.isBusy()) {
         return res.status(409).json({ success: false, message: '任务正在执行中，暂不能保存账号配置' });
       }
+      const previousVncPassword = String(configManager.get()?.server?.vncPassword || '');
+      let nextVncPassword = previousVncPassword;
+      let vncPasswordChanged = false;
+      if (Object.prototype.hasOwnProperty.call(req.body?.server || {}, 'vncPassword')) {
+        nextVncPassword = normalizeVncPassword(req.body.server.vncPassword);
+        req.body.server.vncPassword = nextVncPassword;
+        vncPasswordChanged = nextVncPassword !== previousVncPassword;
+      }
+      if (vncPasswordChanged && microsoftLoginWindow.isOpen()) {
+        return res.status(409).json({
+          success: false,
+          message: 'VNC 登录窗口正在使用中，请先关闭登录窗口再修改 VNC 密码'
+        });
+      }
       const updated = configManager.update(req.body);
+      let vncRestart = null;
+      if (vncPasswordChanged) {
+        try {
+          vncRestart = await restartVncServer(nextVncPassword);
+        } catch (error) {
+          vncRestart = {
+            restarted: false,
+            error: String(error?.message || error),
+            message: '配置已保存，但 VNC 密码热更新失败，请重启容器后生效'
+          };
+          logger.log('🔴', vncRestart.message);
+        }
+      }
       scheduler.restart();
       logger.log('⚙️', '配置已更新并已生效');
-      res.json({ success: true, data: configManager.getPublicConfig() });
+      res.json({ success: true, data: configManager.getPublicConfig(), vncRestart });
     } catch (e) {
-      res.status(500).json({ success: false, message: e.message });
+      res.status(400).json({ success: false, message: e.message });
     }
   });
 

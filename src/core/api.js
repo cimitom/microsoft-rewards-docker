@@ -709,6 +709,9 @@ export class RewardsApi {
     const retryDelaysMs = Array.isArray(options.retryDelaysMs)
       ? options.retryDelaysMs
       : [3000, 10000, 30000, 45000, 60000];
+    const shouldStop = typeof options.shouldStop === 'function'
+      ? options.shouldStop
+      : () => false;
     const headers = {
       ...pcPageHeaders(),
       'cache-control': 'no-cache',
@@ -716,6 +719,7 @@ export class RewardsApi {
     };
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (shouldStop()) return { aborted: true };
       try {
         const cacheBust = Date.now();
         const [earnHtml, dashHtml] = await Promise.all([
@@ -737,10 +741,17 @@ export class RewardsApi {
 
       if (attempt >= attempts) break;
       const delayMs = Math.max(0, Number(retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)]) || 0);
+      if (shouldStop()) return { aborted: true };
       if (typeof options.onRetry === 'function') {
         await options.onRetry({ attempt, attempts, delayMs });
       }
-      if (delayMs > 0) await this.delay(delayMs);
+      if (delayMs > 0) {
+        const deadline = Date.now() + delayMs;
+        while (Date.now() < deadline) {
+          if (shouldStop()) return { aborted: true };
+          await this.delay(Math.min(250, Math.max(0, deadline - Date.now())));
+        }
+      }
     }
     return null;
   }

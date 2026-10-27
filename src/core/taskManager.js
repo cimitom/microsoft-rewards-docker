@@ -125,6 +125,20 @@ export class TaskManager {
               baseStats.accounts[accId].startBalanceDate = today;
             }
             baseStats.accounts[accId].lastRunAt = Number(oldAcc.lastRunAt || 0);
+            // 跨日只应清空每日进度，不应把“凭据更新时间”当成“账号身份变化”。
+            // 旧实现丢失了这两个时间戳，导致每天 00:00 第一次访问账号时误报
+            // “网页身份已变化”，把余额、搜索配额和任务状态再次清空。
+            const accCfg = configManager.findAccount(accId);
+            baseStats.accounts[accId].webIdentityKey = oldAcc.webIdentityKey
+              || webIdentityKey(accCfg?.cookie || '');
+            baseStats.accounts[accId].identityAppliedAt = Math.max(
+              Number(oldAcc.identityAppliedAt || 0),
+              Number(accCfg?.identityChangedAt || 0)
+            );
+            baseStats.accounts[accId].credentialAppliedAt = Math.max(
+              Number(oldAcc.credentialAppliedAt || 0),
+              Number(accCfg?.credentialUpdatedAt || 0)
+            );
             for (const [k, oldTask] of Object.entries(oldAcc.tasks || {})) {
               if (oldTask && (oldTask.isPunchCard || k === 'desktopApp' || k === 'monthlyQuest' || k.startsWith('quest_'))) {
                 baseStats.accounts[accId].tasks[k] = { ...oldTask };
@@ -447,9 +461,17 @@ export class TaskManager {
         retriedQuota = await rewardsApi.getSearchQuota({
           attempts: options.attempts || 4,
           retryDelaysMs: options.retryDelaysMs,
-          onRetry: options.onRetry
+          onRetry: options.onRetry,
+          shouldStop: options.shouldStop
         });
       } catch {}
+      if (retriedQuota?.aborted) {
+        return {
+          ok: false,
+          stopped: true,
+          reason: '任务已停止，已取消搜索配额重试'
+        };
+      }
       const retried = evaluate(retriedQuota, 'retry');
       if (retried) {
         if (retried.ok && options.persist !== false) this.saveStats();
@@ -2264,12 +2286,17 @@ export class TaskManager {
     if (globalCfg.tasks?.search && this.running) {
       const quota = await this.resolveSearchQuota(accCfg, info, {
         attempts: 4,
+        shouldStop: () => !this.running || this.isAccountPaused(accountId),
         onRetry: async ({ attempt, attempts, delayMs }) => {
           const delayText = delayMs > 0 ? `${Math.max(1, Math.round(delayMs / 1000))} 秒后` : '立即';
           logger.log('🟡', `搜索配额暂未返回，${delayText}重试 (${attempt}/${attempts})`, accountName);
         }
       });
       if (!quota.ok) {
+        if (quota.stopped) {
+          logger.log('🛑', '已停止搜索配额重试，不再等待剩余退避时间', accountName);
+          return;
+        }
         logger.log('🛡️', `${quota.reason}，本轮跳过 PC 搜索，不沿用旧进度或默认 60 分`, accountName);
         this.updateTask('search', {
           statusMessage: `${quota.reason}，已暂停搜索`,

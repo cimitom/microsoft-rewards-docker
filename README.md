@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.10.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.10.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,14 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🛑 **停止响应、VNC 白屏与账号日切修复 (v1.10.3)**：
+  - **停止按钮立即生效**：搜索配额退避等待改为可中断轮询，不再在停止后继续等待 3/10/30 秒；
+  - **修复微软 VNC 白屏**：Xvfb 下的有头 Chromium 固定使用软件渲染，避免 Vulkan 画面全白；
+  - **VNC 密码可在配置中心修改**：保存后热重启 x11vnc，无需重建容器；密码限制为 VNC 协议支持的 8 位；
+  - **同步 Chromium 156 指纹**：UA、Client Hints 与 `userAgentData` 统一更新到 156；
+  - **修复每日 00:00 误判身份变化**：跨日保留身份与凭据时间戳，不再重复清空余额和当日进度；
+  - **搜索未计分诊断更明确**：账号在浏览器与 HTTP 搜索均未获得官网进度时，保留 `0/15` 并提示账号可能处于观察期、限流或市场不匹配。
+  - **回归测试 249 项全部通过**。
 - 🖥️ **GPU 后端强制探测与软件渲染修复 (v1.10.2)**：
   - **不再默认接受 SwiftShader**：核显检测依次尝试 OpenGL/ANGLE、Vulkan/ANGLE、EGL 三种后端；
   - **强制硬件渲染**：GPU 模式增加 `--use-angle=gl`、`--disable-software-rasterizer` 等参数，避免 Chromium 在 headless 下静默回退 SwiftShader；

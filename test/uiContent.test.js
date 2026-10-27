@@ -31,11 +31,19 @@ test('v1.10.1 暴露核显、字体和微软 VNC 登录入口', () => {
   assert.match(indexHtml, /id="guide-btn-vnc-login"/);
   assert.match(indexHtml, /id="btn-quick-vnc-login"/);
   assert.match(indexHtml, /id="btn-cfg-vnc-login"/);
+  assert.match(indexHtml, /id="cfg-vnc-password"/);
   assert.match(appJs, /startMicrosoftVncLogin/);
   assert.match(appJs, /captureMicrosoftLoginWindow/);
   assert.match(dockerfile, /WINDOWS_FONT_DIR=\/usr\/share\/fonts\/truetype\/windows/);
   assert.doesNotMatch(dockerfile, /ENV LIBGL_ALWAYS_SOFTWARE=1/);
   assert.match(composeFile, /\.\/data\/fonts\/windows:\/usr\/share\/fonts\/truetype\/windows:ro/);
+});
+
+test('微软 VNC 登录窗口固定使用软件渲染，避免 Xvfb 下 Vulkan 白屏', () => {
+  const loginSource = fs.readFileSync(new URL('../src/core/microsoftLoginWindow.js', import.meta.url), 'utf-8');
+  assert.match(loginSource, /this\.useGpu = false/);
+  assert.match(loginSource, /useGpu: false/);
+  assert.match(loginSource, /buildChromiumEnv\(\{ useGpu: false \}\)/);
 });
 
 test('发布版本号在 package 与 Web 服务端保持一致', () => {
