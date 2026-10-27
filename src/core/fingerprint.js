@@ -148,6 +148,16 @@ export async function applyWebGLFingerprint(context) {
  */
 export async function createAlignedPage(context) {
   const page = await context.newPage();
+  await alignPageFingerprint(context, page);
+  return page;
+}
+
+/**
+ * 对齐一个已经存在的页面。VNC 登录窗口使用持久化上下文时，
+ * 初始页面不是由 createAlignedPage 创建的，需要单独对齐。
+ */
+export async function alignPageFingerprint(context, page) {
+  if (!context || !page) return page;
   try {
     const cdp = await context.newCDPSession(page);
     await cdp.send('Emulation.setUserAgentOverride', {

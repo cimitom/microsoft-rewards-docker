@@ -51,6 +51,13 @@ const ACCOUNT_TREND_METRICS = {
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
 const SECRET_CLEAR = '__MSR_SECRET_CLEAR__';
 let guideNetworkConfirmed = false;
+let cfgDraftTokens = null;
+let novncMode = 'epic';
+let microsoftVncSuccessHandler = null;
+let microsoftVncStatusTimer = null;
+let microsoftVncPollingActive = false;
+let microsoftVncCaptureInFlight = false;
+let microsoftVncAutoCaptureTriggered = false;
 let guideDraftAccount = {
   id: '',
   name: '新账号',
@@ -74,6 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   fetchSystemMetrics();
   fetchBrowserStatus();
+  fetchBrowserRuntimeStatus();
   fetchConfig();
   fetchHistory(7);
   initLogStream();
@@ -980,6 +988,47 @@ function initUIEvents() {
     el?.addEventListener('change', () => { guideNetworkConfirmed = false; });
   });
   document.getElementById('guide-btn-save-network')?.addEventListener('click', saveGuideNetworkSettings);
+  document.getElementById('guide-btn-vnc-login')?.addEventListener('click', openGuideMicrosoftVnc);
+  document.querySelectorAll('input[name="guide-credential-mode"]').forEach(input => {
+    input.addEventListener('change', updateGuideCredentialMode);
+  });
+  document.getElementById('btn-quick-vnc-login')?.addEventListener('click', openQuickAddMicrosoftVnc);
+  document.getElementById('btn-cfg-vnc-login')?.addEventListener('click', openSettingsMicrosoftVnc);
+  document.getElementById('btn-check-gpu')?.addEventListener('click', handleGpuCheck);
+  document.getElementById('btn-refresh-fonts')?.addEventListener('click', handleFontRefresh);
+  document.getElementById('quick-add-cookie')?.addEventListener('input', () => {
+    if (quickAddDraftTokens) {
+      quickAddDraftTokens = null;
+      const result = document.getElementById('quick-add-vnc-result');
+      if (result) result.innerHTML = '<span style="color:#F59E0B;">Cookie 已手动修改，之前暂存的 Token 已清空，请重新获取或手动填写 Token。</span>';
+    }
+  });
+  document.getElementById('cfg-cookie')?.addEventListener('input', () => {
+    if (cfgDraftTokens) {
+      cfgDraftTokens = null;
+      const result = document.getElementById('cfg-vnc-result');
+      if (result) result.innerHTML = '<span style="color:#F59E0B;">Cookie 已手动修改，之前暂存的 Token 已清空，请重新获取或手动填写 Token。</span>';
+    }
+  });
+  document.getElementById('cfg-authcode')?.addEventListener('input', () => {
+    cfgDraftTokens = null;
+  });
+  document.getElementById('guide-cookie-input')?.addEventListener('input', () => {
+    if (guideDraftAccount.refreshToken || guideDraftAccount.accessToken) {
+      guideDraftAccount.refreshToken = '';
+      guideDraftAccount.accessToken = '';
+      guideDraftAccount.tokenTime = 0;
+      const result = document.getElementById('guide-vnc-result');
+      if (result) result.innerHTML = '<span style="color:#F59E0B;">Cookie 已手动修改，自动获取的 Token 已清空，请重新登录或手动填写授权码。</span>';
+    }
+  });
+  document.getElementById('guide-code-input')?.addEventListener('input', () => {
+    if (guideDraftAccount.refreshToken || guideDraftAccount.accessToken) {
+      guideDraftAccount.refreshToken = '';
+      guideDraftAccount.accessToken = '';
+      guideDraftAccount.tokenTime = 0;
+    }
+  });
 
   // 任务清单栏的快捷编辑当前账号按钮
   document.getElementById('btn-edit-current-account-header')?.addEventListener('click', () => {
@@ -1070,6 +1119,7 @@ function initUIEvents() {
       saveStatus.textContent = '';
     }
     populateSettingsForm();
+    fetchBrowserRuntimeStatus();
     openModal('settings-modal');
   });
   document.getElementById('btn-close-settings').addEventListener('click', () => closeModal('settings-modal'));
@@ -1672,11 +1722,25 @@ function closeModal(id) {
   document.getElementById(id)?.classList.remove('show');
 }
 
-function openNovncModal(title = 'Epic 可见浏览器', { showSave = false } = {}) {
+function setNovncStatus(text = '', tone = '') {
+  const el = document.getElementById('novnc-status-text');
+  if (!el) return;
+  el.className = `hint-msg${tone ? ` ${tone}` : ''}`;
+  el.textContent = text;
+}
+
+function openNovncModal(title = 'Epic 可见浏览器', { showSave = false, mode = 'epic', onSuccess = null } = {}) {
+  novncMode = mode;
+  microsoftVncSuccessHandler = onSuccess;
   const titleEl = document.getElementById('novnc-modal-title');
   if (titleEl) titleEl.innerText = title;
   const saveBtn = document.getElementById('btn-novnc-save-login');
-  if (saveBtn) saveBtn.style.display = showSave ? 'inline-flex' : 'none';
+  if (saveBtn) {
+    saveBtn.style.display = showSave ? 'inline-flex' : 'none';
+    saveBtn.innerText = mode === 'microsoft' ? '✅ 检测并保存 Cookie + Token' : '✅ 我已登录，保存凭据';
+  }
+  const cancelBtn = document.getElementById('btn-cancel-novnc-session');
+  if (cancelBtn) cancelBtn.style.display = mode === 'microsoft' ? 'inline-flex' : 'none';
   const frame = document.getElementById('novnc-frame');
   if (frame) {
     const base = `${location.origin}/novnc/vnc.html`;
@@ -1694,11 +1758,376 @@ function refreshNovncModal() {
 }
 
 function closeNovncModal() {
+  stopMicrosoftVncPolling();
   const frame = document.getElementById('novnc-frame');
   if (frame) frame.src = 'about:blank';
   const saveBtn = document.getElementById('btn-novnc-save-login');
   if (saveBtn) saveBtn.style.display = 'none';
+  const cancelBtn = document.getElementById('btn-cancel-novnc-session');
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  setNovncStatus('');
   closeModal('novnc-modal');
+  novncMode = 'epic';
+  microsoftVncSuccessHandler = null;
+  microsoftVncCaptureInFlight = false;
+  microsoftVncAutoCaptureTriggered = false;
+}
+
+function stopMicrosoftVncPolling() {
+  microsoftVncPollingActive = false;
+  if (microsoftVncStatusTimer) {
+    clearTimeout(microsoftVncStatusTimer);
+    microsoftVncStatusTimer = null;
+  }
+}
+
+async function closeMicrosoftVncSession() {
+  stopMicrosoftVncPolling();
+  await fetch('/api/auth/login-window/close', { method: 'POST' }).catch(() => {});
+  closeNovncModal();
+}
+
+async function pollMicrosoftLoginStatus() {
+  if (novncMode !== 'microsoft') return;
+  microsoftVncPollingActive = true;
+  try {
+    const res = await fetch('/api/auth/login-window/status').then(r => r.json());
+    const data = res.data || {};
+    if (!data.open) {
+      if (data.phase === 'closed' && data.message) setNovncStatus(data.message);
+      stopMicrosoftVncPolling();
+      return;
+    }
+    const statusText = data.message || (data.phase === 'waiting_login'
+      ? '请在 VNC 中完成微软登录'
+      : data.phase === 'capturing'
+        ? '正在自动抓取 Cookie 与 Token...'
+        : '登录窗口已就绪');
+    setNovncStatus(statusText, data.phase === 'logged_in' ? 'ok' : '');
+    if (data.phase === 'logged_in' && !microsoftVncAutoCaptureTriggered) {
+      microsoftVncAutoCaptureTriggered = true;
+      captureMicrosoftLoginWindow().catch(() => {});
+    }
+  } catch (e) {
+    setNovncStatus(`状态检测失败：${e.message}`);
+  } finally {
+    if (novncMode === 'microsoft' && microsoftVncPollingActive) {
+      microsoftVncStatusTimer = setTimeout(pollMicrosoftLoginStatus, 2000);
+    }
+  }
+}
+
+async function captureMicrosoftLoginWindow() {
+  if (microsoftVncCaptureInFlight || novncMode !== 'microsoft') return;
+  microsoftVncCaptureInFlight = true;
+  setNovncStatus('正在确认登录、抓取 Cookie 并换取 Token，请稍候...');
+  try {
+    const res = await fetch('/api/auth/login-window/capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    }).then(r => r.json());
+    if (res.success && res.data?.success) {
+      const data = res.data;
+      setNovncStatus('Cookie 与 Token 已获取，正在写回账号表单...', 'ok');
+      if (microsoftVncSuccessHandler) await microsoftVncSuccessHandler(data);
+      closeNovncModal();
+      return;
+    }
+    if (res.partial || res.data?.partial) {
+      const data = res.data?.data || res.data || {};
+      setNovncStatus(res.message || data.message || 'Cookie 已获取，但 Token 自动获取失败', 'warn');
+      if (microsoftVncSuccessHandler && data.cookie) {
+        await microsoftVncSuccessHandler({
+          partial: true,
+          cookie: data.cookie,
+          cookieStatus: data.cookieStatus,
+          detectedName: data.detectedName,
+          message: res.message || data.message
+        });
+      }
+      closeNovncModal();
+      return;
+    }
+    if (res.data?.waitingLogin) {
+      microsoftVncAutoCaptureTriggered = false;
+      setNovncStatus(res.message || '尚未检测到登录，请继续在 VNC 中完成登录', 'warn');
+      return;
+    }
+    setNovncStatus(res.message || '自动抓取失败，请继续在 VNC 中完成登录或手动填写', 'warn');
+  } catch (e) {
+    setNovncStatus(`自动抓取异常：${e.message}`, 'err');
+  } finally {
+    microsoftVncCaptureInFlight = false;
+  }
+}
+
+async function startMicrosoftVncLogin({ accountId = '', draftId = '', name = '', order = 0, proxy = null, title = '微软积分登录窗口', onSuccess = null } = {}) {
+  stopMicrosoftVncPolling();
+  microsoftVncCaptureInFlight = false;
+  microsoftVncAutoCaptureTriggered = false;
+  const res = await fetch('/api/auth/login-window/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountId, draftId, name, order, proxy })
+  }).then(r => r.json());
+  if (!res.success) throw new Error(res.message || '打开微软登录窗口失败');
+  openNovncModal(title, {
+    showSave: true,
+    mode: 'microsoft',
+    onSuccess
+  });
+  setNovncStatus(`登录窗口已打开，出口：${res.data?.proxy?.label || '未知'}。请在 VNC 中完成微软登录。`);
+  pollMicrosoftLoginStatus();
+  return res.data;
+}
+
+function getGuideCredentialMode() {
+  return document.querySelector('input[name="guide-credential-mode"]:checked')?.value === 'manual'
+    ? 'manual'
+    : 'vnc';
+}
+
+function updateGuideCredentialMode() {
+  const mode = getGuideCredentialMode();
+  const vncBox = document.getElementById('guide-vnc-credential-box');
+  const manualBox = document.getElementById('guide-manual-credential-box');
+  const manualCookieBox = document.getElementById('guide-manual-cookie-box');
+  const vncCookieBox = document.getElementById('guide-vnc-cookie-summary');
+  if (vncBox) vncBox.style.display = mode === 'vnc' ? '' : 'none';
+  if (manualBox) manualBox.style.display = mode === 'manual' ? '' : 'none';
+  if (manualCookieBox) manualCookieBox.style.display = mode === 'manual' ? '' : 'none';
+  if (vncCookieBox) vncCookieBox.style.display = mode === 'vnc' ? '' : 'none';
+  const status = document.getElementById('guide-vnc-cookie-status');
+  if (status && mode === 'vnc') {
+    status.innerHTML = guideDraftAccount.cookie
+      ? '✅ 已获取网页 Cookie。'
+      : '<span style="color:var(--text-sub);">尚未获取 Cookie，请返回第二步打开内置浏览器登录。</span>';
+  }
+}
+
+async function openGuideMicrosoftVnc() {
+  const result = document.getElementById('guide-vnc-result');
+  if (!guideNetworkConfirmed) {
+    if (result) result.innerHTML = '<span style="color:#EF4444;">请先返回第一步保存网络出口。</span>';
+    return;
+  }
+  const proxy = readProxySelection('guide-account-proxy-mode', 'guide-account-proxy-id');
+  const name = document.getElementById('guide-account-name')?.value.trim() || guideDraftAccount.name;
+  const order = parseInt(document.getElementById('guide-account-order')?.value, 10) || guideDraftAccount.order;
+  if (result) result.innerHTML = '<span style="color:#38BDF8;">正在启动内置浏览器...</span>';
+  try {
+    await startMicrosoftVncLogin({
+      draftId: guideDraftAccount.id,
+      name,
+      order,
+      proxy,
+      title: '微软积分登录向导',
+      onSuccess: async data => {
+        guideDraftAccount.cookie = data.cookie || guideDraftAccount.cookie;
+        if (data.refreshToken && data.accessToken) {
+          guideDraftAccount.refreshToken = data.refreshToken;
+          guideDraftAccount.accessToken = data.accessToken;
+          guideDraftAccount.tokenTime = data.tokenTime || Date.now();
+          guideDraftAccount.authCodeUrl = '';
+        } else if (data.partial) {
+          guideDraftAccount.refreshToken = '';
+          guideDraftAccount.accessToken = '';
+          guideDraftAccount.tokenTime = 0;
+        }
+        const cookieInput = document.getElementById('guide-cookie-input');
+        if (cookieInput && data.cookie) cookieInput.value = data.cookie;
+        if (result) {
+          result.innerHTML = data.partial
+            ? `<span style="color:#F59E0B;">⚠️ ${escapeHtml(data.message || 'Cookie 已获取，Token 需手动授权')}</span>`
+            : '<span style="color:#34D399;">✅ Cookie 与 Token 已自动获取，点击下一步保存账号。</span>';
+        }
+        updateGuideCredentialMode();
+      }
+    });
+  } catch (e) {
+    if (result) result.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function openQuickAddMicrosoftVnc() {
+  const result = document.getElementById('quick-add-vnc-result');
+  const name = document.getElementById('quick-add-name')?.value.trim() || '候选账号';
+  const order = parseInt(document.getElementById('quick-add-order')?.value, 10) || 1;
+  const proxy = readProxySelection('quick-add-proxy-mode', 'quick-add-proxy-id');
+  const accountId = editingAccountIdInQuickModal || '';
+  const draftId = accountId || `draft_${Date.now()}`;
+  if (result) result.innerHTML = '<span style="color:#38BDF8;">正在启动内置浏览器...</span>';
+  try {
+    await startMicrosoftVncLogin({
+      accountId,
+      draftId,
+      name,
+      order,
+      proxy,
+      title: accountId ? '更新微软账号登录' : '添加微软账号登录',
+      onSuccess: async data => {
+        if (data.cookie) {
+          const cookieInput = document.getElementById('quick-add-cookie');
+          if (cookieInput) {
+            cookieInput.value = data.cookie;
+            cookieInput.disabled = false;
+          }
+          quickAddCookieCleared = false;
+        }
+        if (data.refreshToken && data.accessToken) {
+          quickAddDraftTokens = {
+            accessToken: data.accessToken,
+            refreshToken: data.refreshToken,
+            tokenTime: data.tokenTime || Date.now(),
+            authCodeUrl: ''
+          };
+        } else {
+          quickAddDraftTokens = null;
+        }
+        if (result) {
+          result.innerHTML = data.partial
+            ? `<span style="color:#F59E0B;">⚠️ ${escapeHtml(data.message || 'Cookie 已获取，Token 需手动授权')}</span>`
+            : '<span style="color:#34D399;">✅ Cookie 与 Token 已自动获取，点击保存修改后生效。</span>';
+        }
+      }
+    });
+  } catch (e) {
+    if (result) result.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+async function openSettingsMicrosoftVnc() {
+  const result = document.getElementById('cfg-vnc-result');
+  const accountId = editingAccountIdInModal || 'acc_1';
+  const name = document.getElementById('cfg-account-name')?.value.trim() || accountId;
+  const order = parseInt(document.getElementById('cfg-account-order')?.value, 10) || 1;
+  const proxy = readProxySelection('cfg-account-proxy-mode', 'cfg-account-proxy-id');
+  if (result) result.innerHTML = '<span style="color:#38BDF8;">正在启动内置浏览器...</span>';
+  try {
+    await startMicrosoftVncLogin({
+      accountId,
+      draftId: accountId,
+      name,
+      order,
+      proxy,
+      title: '更新微软账号凭据',
+      onSuccess: async data => {
+        if (data.cookie) {
+          const cookieInput = document.getElementById('cfg-cookie');
+          if (cookieInput) {
+            cookieInput.value = data.cookie;
+            cookieInput.type = 'password';
+          }
+          updateCookieHint(true);
+        }
+        if (data.refreshToken && data.accessToken) {
+          cfgDraftTokens = {
+            accessToken: data.accessToken,
+            refreshToken: data.refreshToken,
+            tokenTime: data.tokenTime || Date.now(),
+            authCodeUrl: ''
+          };
+          const authInput = document.getElementById('cfg-authcode');
+          if (authInput) authInput.value = '';
+          const refreshInput = document.getElementById('cfg-refresh-token');
+          if (refreshInput) {
+            refreshInput.value = '********';
+            delete refreshInput.dataset.clear;
+          }
+        } else {
+          cfgDraftTokens = null;
+        }
+        if (result) {
+          result.innerHTML = data.partial
+            ? `<span style="color:#F59E0B;">⚠️ ${escapeHtml(data.message || 'Cookie 已获取，Token 需手动授权')}</span>`
+            : '<span style="color:#34D399;">✅ Cookie 与 Token 已自动获取，点击底部「保存配置」后生效。</span>';
+        }
+      }
+    });
+  } catch (e) {
+    if (result) result.innerHTML = `<span style="color:#EF4444;">❌ ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+function renderFontStatus(fonts = {}) {
+  const el = document.getElementById('font-status-result');
+  if (!el) return;
+  const tone = fonts.windowsFontsReady ? 'ok' : 'warn';
+  el.className = `hint-msg ${tone}`;
+  el.innerHTML = `
+    <div>${escapeHtml(fonts.message || '字体状态未知')}</div>
+    <div style="margin-top:4px;">Microsoft YaHei: ${escapeHtml(fonts.matches?.yahei || '未匹配')}</div>
+    <div>Segoe UI: ${escapeHtml(fonts.matches?.segoe || '未匹配')}</div>
+    <div>目录: <code>${escapeHtml(fonts.dir || 'data/fonts/windows')}</code> · 文件 ${Number(fonts.fileCount || 0)} 个</div>
+  `;
+}
+
+function renderVncRuntimeStatus(vnc = {}) {
+  const el = document.getElementById('vnc-runtime-status');
+  if (!el) return;
+  if (!vnc.enabled) {
+    el.className = 'hint-msg warn';
+    el.textContent = 'VNC 未启用，请设置 VNC_ENABLED=1 并重启容器。';
+    return;
+  }
+  const login = vnc.loginWindow || {};
+  el.className = `hint-msg ${login.open ? 'ok' : ''}`;
+  el.textContent = login.open
+    ? `登录窗口已打开：${login.name || login.draftId || '微软账号'} · ${login.proxy?.label || '直连'}`
+    : 'VNC 已启用，可在配置向导或账号编辑中打开微软登录窗口。';
+}
+
+async function fetchBrowserRuntimeStatus() {
+  try {
+    const res = await fetch('/api/browser/runtime').then(r => r.json());
+    if (!res.success) return;
+    renderFontStatus(res.data?.fonts);
+    renderVncRuntimeStatus(res.data?.vnc);
+  } catch {}
+}
+
+async function handleGpuCheck() {
+  const button = document.getElementById('btn-check-gpu');
+  const result = document.getElementById('gpu-check-result');
+  if (!button || !result) return;
+  const original = button.innerText;
+  button.disabled = true;
+  button.innerText = '正在检测...';
+  result.className = 'hint-msg';
+  result.textContent = '正在启动临时 Chromium 检测核显...';
+  try {
+    const res = await fetch('/api/browser/gpu/check', { method: 'POST' }).then(r => r.json());
+    const data = res.data || {};
+    if (res.success && data.success) {
+      result.className = 'hint-msg ok';
+      result.innerHTML = `<div>✅ ${escapeHtml(data.message || '核显工作正常')}</div><div style="margin-top:4px;">Renderer: ${escapeHtml(data.renderer || '未知')}</div><div>耗时: ${Number(data.durationMs || 0)} ms</div>`;
+    } else {
+      result.className = 'hint-msg warn';
+      result.innerHTML = `<div>⚠️ ${escapeHtml(data.message || res.message || '核显不可用')}</div><div style="margin-top:4px;">/dev/dri: ${(data.dri?.devices || []).map(escapeHtml).join(', ') || '未发现'}</div>${data.renderer ? `<div>Renderer: ${escapeHtml(data.renderer)}</div>` : ''}`;
+    }
+  } catch (e) {
+    result.className = 'hint-msg err';
+    result.textContent = `检测失败：${e.message}`;
+  } finally {
+    button.disabled = false;
+    button.innerText = original;
+    fetchBrowserRuntimeStatus();
+  }
+}
+
+async function handleFontRefresh() {
+  const button = document.getElementById('btn-refresh-fonts');
+  if (!button) return;
+  const original = button.innerText;
+  button.disabled = true;
+  button.innerText = '正在刷新字体缓存...';
+  try {
+    const res = await fetch('/api/browser/fonts/refresh', { method: 'POST' }).then(r => r.json());
+    if (res.success) renderFontStatus(res.data);
+  } catch {}
+  button.disabled = false;
+  button.innerText = original;
 }
 
 function stopEpicConfetti() {
@@ -2198,6 +2627,7 @@ function openQuickAddAccountModal(accountId = null) {
   const proxyModeInput = document.getElementById('quick-add-proxy-mode');
   const cookieTestResult = document.getElementById('quick-add-cookie-result');
   const authTestResult = document.getElementById('quick-add-auth-result');
+  const vncResult = document.getElementById('quick-add-vnc-result');
 
   if (clearCookieBtn) {
     clearCookieBtn.style.display = 'none';
@@ -2206,6 +2636,7 @@ function openQuickAddAccountModal(accountId = null) {
   if (cookieInput) cookieInput.disabled = false;
   if (cookieTestResult) cookieTestResult.innerHTML = '';
   if (authTestResult) authTestResult.innerHTML = '';
+  if (vncResult) vncResult.innerHTML = '';
 
   if (accountId) {
     const acc = currentConfig?.accounts?.find(a => a.id === accountId);
@@ -2286,6 +2717,11 @@ function openGuideModal() {
   document.getElementById('guide-token-result').innerHTML = '';
   document.getElementById('guide-cookie-input').value = '';
   document.getElementById('guide-cookie-result').innerHTML = '';
+  const guideVncResult = document.getElementById('guide-vnc-result');
+  if (guideVncResult) guideVncResult.innerHTML = '';
+  document.querySelectorAll('input[name="guide-credential-mode"]').forEach(input => {
+    input.checked = input.value === 'vnc';
+  });
   document.getElementById('guide-proxy-result').innerHTML = '';
   document.getElementById('guide-use-proxy').checked = currentConfig?.network?.useProxy === true;
   document.getElementById('guide-proxy-url').value = currentConfig?.network?.proxyUrl || '';
@@ -2295,6 +2731,7 @@ function openGuideModal() {
   renderRunHourGrid('guide-run-hours', [pickFirstAvailableRunHour()].filter(Boolean));
   document.querySelectorAll('.guide-network-summary').forEach(el => { el.textContent = ''; });
   updateGuideProxyControls('');
+  updateGuideCredentialMode();
   switchStep(1);
   openModal('guide-modal');
 }
@@ -2505,7 +2942,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.9.5';
+  const current = updateInfo?.currentVersion || '1.10.1';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -2560,8 +2997,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.9.5'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.9.5'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.1'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.1'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -4973,6 +5410,8 @@ function populateSettingsForm() {
   document.getElementById('cfg-task-dailyset').checked = c.tasks?.dailySet !== false;
   document.getElementById('cfg-task-desktop').checked = c.tasks?.desktopApp !== false;
   document.getElementById('cfg-task-keep').checked = c.tasks?.keepRunning !== false;
+  const gpuEl = document.getElementById('cfg-browser-gpu');
+  if (gpuEl) gpuEl.checked = c.browser?.useGpu === true;
   const intervalEl = document.getElementById('cfg-search-interval');
   const jitterEl = document.getElementById('cfg-search-jitter');
   if (intervalEl) intervalEl.value = c.tasks?.searchIntervalSec ?? 60;
@@ -5047,6 +5486,9 @@ function loadAccountIntoForm(accId) {
   if (cookieRes) cookieRes.innerHTML = '';
   const authRes = document.getElementById('cfg-auth-test-result');
   if (authRes) authRes.innerHTML = '';
+  cfgDraftTokens = null;
+  const vncRes = document.getElementById('cfg-vnc-result');
+  if (vncRes) vncRes.innerHTML = '';
 
   renderRunHourGrid('cfg-run-hours', getAccountRunHours(acc), {
     excludeAccountId: acc.id
@@ -5138,6 +5580,12 @@ async function saveSettingsFromModal() {
     updatedAccountData.refreshToken = SECRET_CLEAR;
     updatedAccountData.accessToken = SECRET_CLEAR;
   }
+  if (cfgDraftTokens) {
+    updatedAccountData.authCodeUrl = SECRET_CLEAR;
+    updatedAccountData.refreshToken = cfgDraftTokens.refreshToken;
+    updatedAccountData.accessToken = cfgDraftTokens.accessToken;
+    updatedAccountData.tokenTime = cfgDraftTokens.tokenTime || Date.now();
+  }
 
   if (idx !== -1) {
     currentAccounts[idx] = { ...currentAccounts[idx], ...updatedAccountData };
@@ -5177,6 +5625,9 @@ async function saveSettingsFromModal() {
       searchEngineMode: document.getElementById('cfg-search-engine')?.value || 'browser',
       searchApi: document.getElementById('cfg-search-api')?.value || 'baidu.official'
     },
+    browser: {
+      useGpu: document.getElementById('cfg-browser-gpu')?.checked === true
+    },
     ui: {
       theme: selectedTheme
     },
@@ -5209,6 +5660,7 @@ async function saveSettingsFromModal() {
 
   if (res.success) {
     currentConfig = res.data;
+    cfgDraftTokens = null;
     const savedAccount = currentConfig.accounts?.find(account => account.id === currentAccId);
     renderRunHourGrid('cfg-run-hours', getAccountRunHours(savedAccount), { excludeAccountId: currentAccId });
     const cleared = currentConfig.scheduleConflicts?.find(item => item.id === currentAccId);
@@ -5283,6 +5735,11 @@ async function saveGuideSettings() {
   if (!guideNetworkConfirmed) {
     openEpicActionModal('请先确认网络出口', '必须先保存代理策略，才能绑定 Cookie 或 Token。', ['返回网络出口', '重新保存'], 0);
     updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+    return;
+  }
+  if (getGuideCredentialMode() === 'vnc' && !guideDraftAccount.cookie) {
+    openEpicActionModal('尚未获取登录凭据', '请先在第二步打开内置浏览器完成登录，或切换到手动填写模式。', ['返回登录', '切换手动填写'], 0);
+    updateEpicActionModal({ progress: 100, badge: { text: '等待登录', cls: 'warn' } });
     return;
   }
 
@@ -5973,10 +6430,20 @@ function initEpicUI() {
   document.getElementById('btn-epic-refresh-games')?.addEventListener('click', () => fetchEpicFreeGames(true));
   document.getElementById('btn-epic-save-settings')?.addEventListener('click', saveEpicSettings);
   document.getElementById('btn-epic-stop')?.addEventListener('click', stopEpicTask);
-  document.getElementById('btn-close-novnc')?.addEventListener('click', closeNovncModal);
-  document.getElementById('btn-close-novnc-btn')?.addEventListener('click', closeNovncModal);
+  document.getElementById('btn-close-novnc')?.addEventListener('click', () => {
+    if (novncMode === 'microsoft') closeMicrosoftVncSession();
+    else closeNovncModal();
+  });
+  document.getElementById('btn-close-novnc-btn')?.addEventListener('click', () => {
+    if (novncMode === 'microsoft') closeMicrosoftVncSession();
+    else closeNovncModal();
+  });
+  document.getElementById('btn-cancel-novnc-session')?.addEventListener('click', closeMicrosoftVncSession);
   document.getElementById('btn-refresh-novnc')?.addEventListener('click', refreshNovncModal);
-  document.getElementById('btn-novnc-save-login')?.addEventListener('click', saveEpicLoginWindow);
+  document.getElementById('btn-novnc-save-login')?.addEventListener('click', () => {
+    if (novncMode === 'microsoft') captureMicrosoftLoginWindow();
+    else saveEpicLoginWindow();
+  });
   document.getElementById('btn-close-epic-celebration')?.addEventListener('click', closeEpicCelebration);
   document.getElementById('epic-celebration')?.addEventListener('click', event => {
     if (event.target?.id === 'epic-celebration') closeEpicCelebration();

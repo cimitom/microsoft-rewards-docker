@@ -37,6 +37,12 @@ import {
 } from './fingerprint.js';
 import { findChromiumExecutable } from './chromiumExecutable.js';
 import { prepareBrowserProxy } from './localProxyBridge.js';
+import {
+  buildChromiumArgs,
+  buildChromiumEnv,
+  inspectDriEnvironment
+} from './chromiumRuntime.js';
+import { humanClick, humanType, humanWheel } from './humanInput.js';
 
 export function classifyBingLoginState(signals = {}) {
   const userName = [signals.idN, signals.idA, signals.idName]
@@ -50,6 +56,25 @@ export function classifyBingLoginState(signals = {}) {
     status: userName ? 'logged-in' : (signInVisible ? 'guest' : 'unknown'),
     cookieHasU: signals.cookieHasU === true
   };
+}
+
+export async function readBingLoginState(page) {
+  try {
+    const signals = await page.evaluate(() => {
+      const textOf = (selector) => (document.querySelector(selector)?.textContent || '').trim();
+      const signInBtn = document.querySelector('#id_s, #id_l, a[href*="account.live.com"], a[href*="login.live.com"]');
+      return {
+        idN: textOf('#id_n'),
+        idA: textOf('#id_a'),
+        idName: textOf('.id_name'),
+        signInVisible: !!signInBtn,
+        cookieHasU: /(?:^|;\s*)_U=/.test(document.cookie || '')
+      };
+    });
+    return classifyBingLoginState(signals);
+  } catch {
+    return { userName: null, signInVisible: false, isGuest: false, status: 'unknown', cookieHasU: false };
+  }
 }
 
 export function parseClaimablePoints(text) {
@@ -163,19 +188,29 @@ class BrowserManager extends EventEmitter {
     });
 
     let browser = null;
+    let effectiveGpu = configManager.get().browser?.useGpu === true;
+    if (effectiveGpu && !inspectDriEnvironment().available) {
+      logger.log('🟡', '配置已启用核显，但容器内未发现 /dev/dri，本次自动回退软件渲染');
+      effectiveGpu = false;
+    }
     try {
-      browser = await chromium.launch({
+      const launch = (useGpu) => chromium.launch({
         executablePath: execPath,
         headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--no-first-run',
-          '--no-default-browser-check'
-        ]
+        args: buildChromiumArgs({ useGpu }),
+        env: buildChromiumEnv({ useGpu })
       });
+      try {
+        browser = await launch(effectiveGpu);
+        if (effectiveGpu) {
+          logger.log('🖥️', '微软积分浏览器已启用核显加速');
+        }
+      } catch (gpuError) {
+        if (!effectiveGpu) throw gpuError;
+        logger.log('🟡', `核显启动失败，自动回退软件渲染: ${String(gpuError.message || gpuError).split('\n')[0]}`);
+        effectiveGpu = false;
+        browser = await launch(false);
+      }
 
       // 镜像里的 Chromium 主版本如果和指纹常量脱节，这里提醒维护者同步，
       // 否则会重新出现「UA 版本 ≠ 真实引擎版本」的矛盾。
@@ -374,22 +409,7 @@ class BrowserManager extends EventEmitter {
    * 读取 Bing 首页的登录态。这里只返回诊断信息，不修改页面。
    */
   async getBingLoginState(page) {
-    try {
-      const signals = await page.evaluate(() => {
-        const textOf = (selector) => (document.querySelector(selector)?.textContent || '').trim();
-        const signInBtn = document.querySelector('#id_s, #id_l, a[href*="account.live.com"], a[href*="login.live.com"]');
-        return {
-          idN: textOf('#id_n'),
-          idA: textOf('#id_a'),
-          idName: textOf('.id_name'),
-          signInVisible: !!signInBtn,
-          cookieHasU: /(?:^|;\s*)_U=/.test(document.cookie || '')
-        };
-      });
-      return classifyBingLoginState(signals);
-    } catch {
-      return { userName: null, signInVisible: false, isGuest: false, status: 'unknown', cookieHasU: false };
-    }
+    return readBingLoginState(page);
   }
 
   /**
@@ -428,12 +448,10 @@ class BrowserManager extends EventEmitter {
       if (!query) throw new Error('缺少搜索关键词');
       const searchInputSelector = '#sb_form_q';
       await page.waitForSelector(searchInputSelector, { timeout: 10000 });
-      await page.click(searchInputSelector);
+      await humanClick(page.locator(searchInputSelector), { page });
       await this.delay(200);
       await page.fill(searchInputSelector, '');
-      for (const char of query) {
-        await page.type(searchInputSelector, char, { delay: rewardsApi.randomRange(50, 110) });
-      }
+      await humanType(page, query, { minDelay: 45, maxDelay: 105 });
       await this.delay(350);
       await page.keyboard.press('Enter');
     }
@@ -443,7 +461,7 @@ class BrowserManager extends EventEmitter {
       page.waitForSelector('#b_results', { timeout: 15000 }).then(() => true).catch(() => false)
     ]);
     await page.waitForTimeout(rewardsApi.randomRange(2500, 4500));
-    await page.mouse.wheel(0, rewardsApi.randomRange(350, 800)).catch(() => {});
+    await humanWheel(page, { times: 1, min: 350, max: 800 }).catch(() => {});
     await this.delay(rewardsApi.randomRange(2500, 4500));
 
     const finalUrl = String(page.url() || '');
@@ -608,7 +626,7 @@ class BrowserManager extends EventEmitter {
         status: 'dwelling',
         lastAction: '正在点击“浏览器中的奖励”活动卡片...'
       });
-      await link.click({ timeout: 15000 });
+      await humanClick(link, { page, timeout: 15000 });
 
       const reportStatus = await reportPromise;
       const popup = await popupPromise;
@@ -924,7 +942,7 @@ class BrowserManager extends EventEmitter {
     const popupPromise = context.waitForEvent('page', { timeout: 7000 }).catch(() => null);
     let clicked = false;
     try {
-      await page.click(`[data-msr-subtask="${target.index}"]`, { timeout: 8000 });
+      await humanClick(page.locator(`[data-msr-subtask="${target.index}"]`), { page, timeout: 8000 });
       clicked = true;
     } catch (e) {
       if (target.href && /^https?:\/\//i.test(target.href)) {
@@ -972,7 +990,7 @@ class BrowserManager extends EventEmitter {
         await searchPage.close().catch(() => {});
       }
     } else if (landingPage) {
-      await landingPage.mouse.wheel(0, rewardsApi.randomRange(350, 800)).catch(() => {});
+      await humanWheel(landingPage, { times: 1, min: 350, max: 800 }).catch(() => {});
       await this.delay(rewardsApi.randomRange(3500, 6000));
       if (landingPage !== page && !landingPage.isClosed?.()) {
         await landingPage.close().catch(() => {});
@@ -1248,13 +1266,17 @@ class BrowserManager extends EventEmitter {
         let clicked = false;
         if (overlayCleared) {
           try {
-            await cardBtn.click({ timeout: 6000 });
+            await humanClick(cardBtn, { page, timeout: 6000 });
             clicked = true;
           } catch (e) {
-            logger.log('🟡', `可领取卡片点击失败，改用 DOM 事件继续: ${String(e.message || e).split('\n')[0]}`, '', accName);
+            logger.log('🟡', `可领取卡片拟人点击失败，改用可信点击继续: ${String(e.message || e).split('\n')[0]}`, '', accName);
           }
         }
         if (!clicked) {
+          clicked = await cardBtn.click({ timeout: 5000, force: true }).then(() => true).catch(() => false);
+        }
+        if (!clicked) {
+          logger.log('🟡', '可信点击仍被遮挡，最后使用 DOM 事件兜底', '', accName);
           clicked = await cardBtn.evaluate(el => {
             el.click();
             return true;
@@ -1267,7 +1289,7 @@ class BrowserManager extends EventEmitter {
           '[role="dialog"] button, [class*="bg-bgSmoke"] button'
         ).filter({ hasText: /领取积分|立即领取|确认领取/ }).first();
         if (await confirmBtn.isVisible().catch(() => false)) {
-          await confirmBtn.click({ timeout: 5000 });
+          await humanClick(confirmBtn, { page, timeout: 5000 });
           await this.delay(2500);
         }
 

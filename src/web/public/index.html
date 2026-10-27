@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.9.5</span>
+            <span class="version-label" id="version-label">v1.10.1</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -536,8 +536,22 @@
             </div>
           </div>
           <div id="guide-token-network-summary" class="guide-network-summary"></div>
+          <div class="form-group" style="background: var(--card-inner); padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color);">
+            <label class="form-label">凭据获取方式</label>
+            <label class="checkbox-label" style="margin-right: 18px;">
+              <input type="radio" name="guide-credential-mode" value="vnc" checked> 内置浏览器自动获取 Cookie + Token（推荐）
+            </label>
+            <label class="checkbox-label">
+              <input type="radio" name="guide-credential-mode" value="manual"> 手动输入 Cookie / 授权码
+            </label>
+            <div id="guide-vnc-credential-box" style="margin-top: 12px;">
+              <button type="button" class="btn btn-primary" id="guide-btn-vnc-login">🖥️ 打开内置浏览器登录</button>
+              <div id="guide-vnc-result" class="hint-msg"></div>
+            </div>
+          </div>
           <h3 class="step-title">第二步：获取移动端与 App 签到授权 (OAuth Token)</h3>
           <p class="step-desc">该授权用于自动完成「每日移动端签到」与「新闻资讯阅读（30分）」，一次绑定长期自动续期，无需反复操作。</p>
+          <div id="guide-manual-credential-box" style="display: none;">
           <div class="step-action-box">
             <p>1. 点击下方按钮，将在新窗口打开微软官方登录授权页：</p>
             <a href="https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf" target="_blank" class="btn btn-primary btn-sm">
@@ -550,6 +564,7 @@
             <button id="guide-btn-exchange" class="btn btn-primary" style="margin-top: 8px;">一键换取并保存 Token</button>
             <div id="guide-token-result" class="hint-msg"></div>
           </div>
+          </div>
           <div class="step-footer">
             <button class="btn btn-secondary" onclick="switchStep(1)">上一步</button>
             <button class="btn btn-primary" onclick="switchStep(3)">下一步：配置网页 Cookie ➜</button>
@@ -561,11 +576,17 @@
           <div id="guide-cookie-network-summary" class="guide-network-summary"></div>
           <h3 class="step-title">第三步：配置必应网页端 Cookie</h3>
           <p class="step-desc">该 Cookie 用于「必应 PC 搜索」、「每日活动集 Daily Set」与「桌面专享任务」。</p>
+          <div id="guide-vnc-cookie-summary" class="step-action-box" style="display: none;">
+            <p>Cookie 已通过内置浏览器获取。点击下方保存即可完成账号创建。</p>
+            <div id="guide-vnc-cookie-status" class="hint-msg"></div>
+          </div>
+          <div id="guide-manual-cookie-box">
           <div class="step-action-box">
             <p>在电脑浏览器中登录 <a href="https://rewards.bing.com/dashboard" target="_blank" style="color:#38BDF8;">rewards.bing.com/dashboard</a>，按 <code>F12</code> 打开控制台，在【网络/Network】或【应用程序/Application】中复制 Cookie 字符串，粘贴在下方：</p>
             <textarea id="guide-cookie-input" class="form-textarea" rows="4" placeholder="粘贴完整的 Cookie 字符串（必须包含 _U，否则 PC 搜索不计分）"></textarea>
             <button id="guide-btn-test-cookie" class="btn btn-secondary" style="margin-top: 8px;">测试 Cookie 有效性</button>
             <div id="guide-cookie-result" class="hint-msg"></div>
+          </div>
           </div>
 
           <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 14px; border: 1px solid var(--border-color); margin-top: 14px;">
@@ -604,6 +625,7 @@
           <button class="tab-btn active" data-tab="tab-account">👤 账号与凭证</button>
           <button class="tab-btn" data-tab="tab-network">🌐 网络与代理</button>
           <button class="tab-btn" data-tab="tab-tasks">⚡ 任务与防风控</button>
+          <button class="tab-btn" data-tab="tab-browser">🖥️ 浏览器与性能</button>
           <button class="tab-btn" data-tab="tab-schedule">⏱️ 定时巡检</button>
           <button class="tab-btn" data-tab="tab-notify">🔔 消息推送</button>
           <button class="tab-btn" data-tab="tab-appearance">✨ 液态视觉与背景</button>
@@ -667,6 +689,10 @@
 
           <div class="form-group">
             <label class="form-label">必应网页端 Cookie (针对当前选中的账号)</label>
+            <div class="credential-action-row" style="margin-bottom: 8px;">
+              <button type="button" id="btn-cfg-vnc-login" class="btn btn-primary btn-sm">🖥️ 使用内置浏览器登录并获取 Cookie + Token</button>
+            </div>
+            <div id="cfg-vnc-result" class="hint-msg"></div>
             <div class="input-with-btn">
               <div class="secret-field">
                 <input type="password" id="cfg-cookie" class="form-input" autocomplete="off" spellcheck="false" placeholder="粘贴浏览器 rewards.bing.com/dashboard 的完整 Cookie（须含 _U）">
@@ -816,6 +842,35 @@
               <button class="btn btn-secondary btn-sm" id="btn-test-search-api">🔍 测试获取词库</button>
             </div>
             <small class="form-hint">点击按钮可实时检测当前词库是否畅通并查看获取到的词条明细</small>
+          </div>
+        </div>
+
+        <!-- Tab: 浏览器与性能 -->
+        <div class="tab-content" id="tab-browser">
+          <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border-color);">
+            <label class="form-label checkbox-label">
+              <input type="checkbox" id="cfg-browser-gpu"> 使用核显加速（默认关闭，失败自动回退软件渲染）
+            </label>
+            <small class="form-hint">需要在 docker-compose.yml 中映射 <code>/dev/dri:/dev/dri</code>。极空间官方界面可能还需要开启 GPU/设备访问。核显只影响渲染性能，浏览器仍保持现有 Windows 指纹伪装。</small>
+            <div class="credential-action-row" style="margin-top: 10px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-check-gpu">检测核显是否可用</button>
+            </div>
+            <div id="gpu-check-result" class="hint-msg"></div>
+          </div>
+
+          <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border-color); margin-top: 14px;">
+            <label class="form-label">Windows 中英文字体</label>
+            <div id="font-status-result" class="hint-msg">正在检测字体...</div>
+            <small class="form-hint">将字体放入持久化目录 <code>data/fonts/windows/</code>，推荐 <code>msyh.ttc</code>、<code>segoeui.ttf</code> 等。未检测到时自动回退镜像内置开源字体。</small>
+            <div class="credential-action-row" style="margin-top: 10px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-fonts">重新检测字体</button>
+            </div>
+          </div>
+
+          <div class="form-group" style="background: var(--card-inner); padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border-color); margin-top: 14px;">
+            <label class="form-label">VNC 登录窗口</label>
+            <div id="vnc-runtime-status" class="hint-msg">正在检测 VNC...</div>
+            <small class="form-hint">微软积分 VNC 登录会暂停其他浏览器任务。为保证安全，请先设置 WebUI 访问密码或 <code>NOVNC_PASSWORD</code>。</small>
           </div>
         </div>
 
@@ -1189,6 +1244,10 @@
           <small class="form-hint">每个账号只能选择一个 1 小时档位，其他账号已占用的档位不可选。未选择时间时不会自动执行。</small>
         </div>
         <div class="form-group">
+          <div class="credential-action-row" style="margin-bottom: 8px;">
+            <button type="button" id="btn-quick-vnc-login" class="btn btn-primary btn-sm">🖥️ 使用内置浏览器登录并获取 Cookie + Token</button>
+          </div>
+          <div id="quick-add-vnc-result" class="hint-msg"></div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
             <label class="form-label" style="margin-bottom: 0;">必应网页端 Cookie (可选)</label>
             <button type="button" class="btn btn-danger-soft btn-sm" id="btn-quick-clear-cookie" style="display: none; padding: 2px 8px; font-size: 11px;">清空已有 Cookie</button>
@@ -1350,12 +1409,14 @@
         <div class="modal-title"><span>🖥️</span> <span id="novnc-modal-title">Epic 可见浏览器</span></div>
         <button class="btn-close" id="btn-close-novnc">&times;</button>
       </div>
+      <div id="novnc-status-text" class="hint-msg" style="padding: 8px 16px 0; margin: 0;"></div>
       <div class="modal-body" style="padding: 0; flex: 1; min-height: 0;">
         <iframe id="novnc-frame" title="Epic Chromium 可见浏览器" style="width: 100%; height: 100%; border: 0; background: #111827;"></iframe>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-refresh-novnc">🔄 刷新画面</button>
         <button class="btn btn-primary" id="btn-novnc-save-login" style="display: none;">✅ 我已登录，保存凭据</button>
+        <button class="btn btn-danger-soft" id="btn-cancel-novnc-session" style="display: none;">取消登录</button>
         <button class="btn btn-primary" id="btn-close-novnc-btn">关闭小窗</button>
       </div>
     </div>

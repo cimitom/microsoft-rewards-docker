@@ -74,6 +74,9 @@ const DEFAULT_CONFIG = {
     accountGapSec: 180, // 多账号自动化连续执行时的安全隔离间隔（秒，默认 180 秒即 3 分钟）
     keepRunning: true // 全部完成后，手动再次执行时是否仍完整跑一遍（定时任务每账号每天只排一次）
   },
+  browser: {
+    useGpu: false
+  },
   schedule: {
     enabled: true,
     cron: '*/25 * * * *'

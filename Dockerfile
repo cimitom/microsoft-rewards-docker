@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim
 
-# 安装 Chromium、虚拟显示、字体与软件渲染的 OpenGL 支持
-# libgl*/libgl1-mesa-dri：Xvfb 里没有 GPU，靠 Mesa llvmpipe 提供 WebGL。
+# 安装 Chromium、虚拟显示、字体与 OpenGL 支持。
+# libgl*/libgl1-mesa-dri：没有核显时由 Mesa/SwiftShader 提供软件 WebGL。
 #   Epic 登录页的风控会采集 WebGL，缺了它会被判成异常浏览器。
 # fontconfig + 各字体包：--no-install-recommends 不会自动装推荐项，
 #   字体缺失会让页面回退到占位字形，出现满屏乱码。
@@ -29,9 +29,9 @@ ENV TZ=Asia/Shanghai
 ENV NODE_ENV=production
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV EPIC_VISIBLE=1
+ENV VNC_ENABLED=1
 ENV DISPLAY=:1
-# 容器内没有 GPU，固定走 Mesa 软件渲染，保证 Chromium 下 WebGL 可用。
-ENV LIBGL_ALWAYS_SOFTWARE=1
+ENV WINDOWS_FONT_DIR=/usr/share/fonts/truetype/windows
 
 WORKDIR /app
 
@@ -45,6 +45,9 @@ RUN npm ci --omit=dev
 COPY src/ ./src/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# 微软字体由私有持久化目录挂载进来；目录为空时 fontconfig 自动使用上面的开源字体。
+RUN mkdir -p /usr/share/fonts/truetype/windows
 
 # 创建持久化数据目录
 RUN mkdir -p /app/data

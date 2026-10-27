@@ -8,6 +8,8 @@ const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import
 const serverJs = fs.readFileSync(new URL('../src/web/server.js', import.meta.url), 'utf-8');
 const styleCss = fs.readFileSync(new URL('../src/web/public/style.css', import.meta.url), 'utf-8');
 const webglJs = fs.readFileSync(new URL('../src/web/public/webgl-bg.js', import.meta.url), 'utf-8');
+const dockerfile = fs.readFileSync(new URL('../Dockerfile', import.meta.url), 'utf-8');
+const composeFile = fs.readFileSync(new URL('../docker-compose.yml', import.meta.url), 'utf-8');
 
 test('v1.7.7 删除顶部重复编辑按钮，只保留任务清单编辑入口', () => {
   assert.equal(indexHtml.includes('id="btn-edit-active-account"'), false);
@@ -19,6 +21,21 @@ test('Cookie 配置向导统一使用 rewards.bing.com/dashboard', () => {
   assert.equal(indexHtml.includes('https://rewards.bing.com/dashboard'), true);
   assert.equal(indexHtml.includes('登录 <a href="https://cn.bing.com"'), false);
   assert.equal(indexHtml.includes('浏览器 cn.bing.com 的完整 Cookie'), false);
+});
+
+test('v1.10.1 暴露核显、字体和微软 VNC 登录入口', () => {
+  assert.match(indexHtml, /id="tab-browser"/);
+  assert.match(indexHtml, /id="cfg-browser-gpu"/);
+  assert.match(indexHtml, /id="btn-check-gpu"/);
+  assert.match(indexHtml, /id="btn-refresh-fonts"/);
+  assert.match(indexHtml, /id="guide-btn-vnc-login"/);
+  assert.match(indexHtml, /id="btn-quick-vnc-login"/);
+  assert.match(indexHtml, /id="btn-cfg-vnc-login"/);
+  assert.match(appJs, /startMicrosoftVncLogin/);
+  assert.match(appJs, /captureMicrosoftLoginWindow/);
+  assert.match(dockerfile, /WINDOWS_FONT_DIR=\/usr\/share\/fonts\/truetype\/windows/);
+  assert.doesNotMatch(dockerfile, /ENV LIBGL_ALWAYS_SOFTWARE=1/);
+  assert.match(composeFile, /\.\/data\/fonts\/windows:\/usr\/share\/fonts\/truetype\/windows:ro/);
 });
 
 test('发布版本号在 package 与 Web 服务端保持一致', () => {

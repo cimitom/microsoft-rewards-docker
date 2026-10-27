@@ -18,11 +18,14 @@ import epicManager, { normalizeAutoClaimTime } from '../core/epic.js';
 import { accountContextLock } from '../core/contextLock.js';
 import { isDemoMode } from '../core/demoMode.js';
 import { normalizeProxyUrl } from '../core/proxy.js';
+import microsoftLoginWindow, { isVncAvailable } from '../core/microsoftLoginWindow.js';
+import { checkGpuCapability } from '../core/gpuProbe.js';
+import { getFontStatus, refreshFontCache } from '../core/fontStatus.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.9.5';
+const CURRENT_VERSION = '1.10.1';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -706,6 +709,48 @@ export function createServer() {
     });
   });
 
+  app.get('/api/browser/runtime', async (req, res) => {
+    try {
+      const [fonts, loginWindow] = await Promise.all([
+        getFontStatus(),
+        microsoftLoginWindow.status()
+      ]);
+      res.json({
+        success: true,
+        data: {
+          gpu: {
+            enabled: configManager.get().browser?.useGpu === true
+          },
+          vnc: {
+            enabled: isVncAvailable(),
+            loginWindow
+          },
+          fonts
+        }
+      });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/browser/gpu/check', async (req, res) => {
+    try {
+      const result = await checkGpuCapability();
+      res.status(result.busy ? 409 : 200).json({ success: result.success, data: result });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/browser/fonts/refresh', async (req, res) => {
+    try {
+      const fonts = await refreshFontCache();
+      res.json({ success: true, data: fonts });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
   // 单独安全测试搜索一次（验证按键与加分，完全避免冷却限制）
   app.post('/api/tasks/single-search', async (req, res) => {
     try {
@@ -907,6 +952,45 @@ export function createServer() {
     } finally {
       rewardsApi.restoreAccountContext(prevContext);
       accountContextLock.release(lockOwner);
+    }
+  });
+
+  app.post('/api/auth/login-window/open', async (req, res) => {
+    try {
+      const result = await microsoftLoginWindow.open(req.body || {});
+      res.set('Cache-Control', 'no-store');
+      res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.get('/api/auth/login-window/status', async (req, res) => {
+    try {
+      const data = await microsoftLoginWindow.status();
+      res.set('Cache-Control', 'no-store');
+      res.json({ success: true, data });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/auth/login-window/capture', async (req, res) => {
+    try {
+      const result = await microsoftLoginWindow.capture(req.body || {});
+      res.set('Cache-Control', 'no-store');
+      res.json({ success: !!result.success, partial: !!result.partial, data: result });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/auth/login-window/close', async (req, res) => {
+    try {
+      const result = await microsoftLoginWindow.close('用户取消登录');
+      res.json({ success: true, data: result });
+    } catch (e) {
+      res.status(500).json({ success: false, message: e.message });
     }
   });
 

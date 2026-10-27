@@ -3,6 +3,7 @@ import logger from './logger.js';
 import scheduler from './scheduler.js';
 import historyManager from './core/history.js';
 import { createServer } from './web/server.js';
+import microsoftLoginWindow from './core/microsoftLoginWindow.js';
 
 async function bootstrap() {
   console.log(`
@@ -58,6 +59,7 @@ async function bootstrap() {
   const shutdown = () => {
     logger.log('🛑', '正在安全退出服务...');
     scheduler.stop();
+    microsoftLoginWindow.close('服务退出').catch(() => {});
     // 历史记录现在是「内存缓存 + 延迟落盘」，退出前必须冲一次，否则会丢最后几秒的记录
     historyManager.flush();
     server.close(() => {

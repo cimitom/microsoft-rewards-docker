@@ -4114,6 +4114,18 @@ body.account-column-resizing * {
   font-size: 12.5px;
 }
 
+.hint-msg.ok {
+  color: #34D399;
+}
+
+.hint-msg.warn {
+  color: #F59E0B;
+}
+
+.hint-msg.err {
+  color: #EF4444;
+}
+
 /* Diagnosis Modal Styling */
 .modal-diag {
   max-width: 620px;

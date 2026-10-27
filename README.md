@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.9.5-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.10.1-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,15 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🖥️ **微软积分 VNC 登录、核显与字体增强 (v1.10.1)**：
+  - **微软积分 VNC 登录**：配置向导、快速添加、编辑账号和配置中心均可打开内置 Chromium，自行输入账号密码并完成 MFA/安全验证；
+  - **自动抓取 Cookie 与 Token**：登录成功后自动读取 Bing/Rewards Cookie、打开 OAuth 授权页、捕获授权码并换取 Access Token / Refresh Token；
+  - **账号匹配校验**：对比网页 Cookie 与移动端 Token 的用户名和余额，拒绝把不同账号的凭据绑定在一起；
+  - **严格代理出口**：VNC 浏览器、Cookie 校验和 Token 交换使用同一个已选择代理，指定代理缺失时拒绝启动，不会静默直连；
+  - **核显开关与检测**：新增 `browser.useGpu` 配置和核显检测接口，默认继续使用软件渲染，核显启动失败自动回退；
+  - **字体持久化目录**：支持 `data/fonts/windows/`，放入 `Microsoft YaHei` / `Segoe UI` 后自动启用，未检测到时回退镜像内置开源字体；
+  - **拟人鼠标轨迹**：搜索输入、活动卡片、打孔卡和领取按钮加入贝塞尔鼠标轨迹、随机点击区域与可变输入节奏；
+  - **回归测试增至 242 个**。
 - 🛡️ **网页余额空值与 Cookie 误判修复 (v1.9.5)**：
   - **修复 `null → 0` 余额误判**：新增可选数字转换，网页余额未读取时保持 `null`，不再把正常移动端 Token 误报成串号；
   - **修复同步写入假余额**：官网未返回网页余额时不再把统计中的 `webBalance` 覆盖为 0；
@@ -421,8 +430,6 @@ mkdir -p ms-rewards && cd ms-rewards
 
 2. 在该目录下创建 `docker-compose.yml` 文件：
 ```yaml
-version: '3.8'
-
 services:
   microsoft-rewards:
     image: wangheqiang/microsoft-rewards-docker:latest
@@ -435,8 +442,14 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - PORT=5308
+      - VNC_ENABLED=1
+      - MS_LOGIN_TIMEOUT_MIN=20
     volumes:
       - ./data:/app/data
+      - ./data/fonts/windows:/usr/share/fonts/truetype/windows:ro
+    # 仅启用核显时取消注释，并确认宿主机存在 /dev/dri
+    # devices:
+    #   - /dev/dri:/dev/dri
 ```
 
 3. 启动容器：
@@ -445,6 +458,10 @@ docker compose up -d
 ```
 
 4. 启动后，打开浏览器访问：`http://<NAS或VPS的IP>:5308`，即可进入现代化控制台！
+
+> VNC 登录窗口可以操作已登录的微软浏览器。请在配置中心设置 Web 访问密码，或通过 `NOVNC_PASSWORD` 设置 VNC 密码后再使用。
+
+> Windows 字体放到 `data/fonts/windows/`，例如 `msyh.ttc`、`segoeui.ttf`。启动时会自动刷新字体缓存；没有检测到时继续使用镜像内置开源字体。
 
 ---
 
@@ -493,6 +510,8 @@ npm test
 | 文件路径 | 用途说明 |
 | :--- | :--- |
 | `data/config.json` | **核心配置文件**（包含微软凭据 Cookie/Token、代理配置、任务开关、通知渠道等） |
+| `data/fonts/windows/` | **可选 Windows 字体目录**（放入 `Microsoft YaHei` / `Segoe UI`，缺失时自动回退） |
+| `data/ms-login-profiles/` | 微软 VNC 登录临时浏览器 Profile（登录结束或超时后自动清理） |
 | `data/app.log` | **持久化运行日志文件**（实时记录后台自动打卡细节、接口请求与排查日志） |
 | `data/stats.json` | **任务状态快照**（记录当日积分、任务配额进度与连签天数） |
 | `data/history.json` | **历史积分账单数据**（用于前端 7 日 / 30 日历史趋势柱状图明细展示） |
