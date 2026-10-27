@@ -4,7 +4,7 @@
 > 配备全新**现代化深色 Fluent 毛玻璃控制台**、**小白一键可视化配置向导**、**HTTP/SOCKS5 代理支持**、**国区防风控锁**与**多渠道消息推送**。
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Version](https://img.shields.io/badge/Version-v1.9.2-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
+[![Version](https://img.shields.io/badge/Version-v1.9.3-blue.svg)](https://github.com/wangheqiang530/microsoft-rewards-docker)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
@@ -210,6 +210,13 @@
   - **结账弹窗在验证期间实时识别**：结账按钮一旦出现立即切换到 `checkout` 状态，不再等待后误按 `Escape`；
   - **指纹自检统一返回 Chromium 版本**，不再依赖 Firefox；
   - **回归测试 130 项全部通过**。
+- 🎁 **额外积分领取遮罩与结果核验修复 (v1.9.3)**：
+  - **等待全屏遮罩消失**：领取前不再固定等待数秒后盲点，改为等待 Dashboard React 水合与半透明遮罩隐藏；
+  - **自动关闭弹层**：遮罩未消失时尝试 `Escape` 或关闭、知道了、稍后等按钮，减少残留弹窗阻断；
+  - **DOM 事件兜底**：卡片仍被遮罩阻挡时，直接向目标按钮派发 DOM 点击，不再空等 6 秒后失败；
+  - **领取结果回读**：点击确认后重新加载 Dashboard，以官网最新待领取数量为准计算实际领取积分，不再仅凭“点了确认”虚报成功；
+  - **登录态校验**：刷新后若跳转登录页则拒绝判定成功，并保留原待领取状态；
+  - **回归测试覆盖**：新增遮罩拦截恢复、结果未变化拒绝虚报、登录态丢失与积分数解析测试，测试总数 226。
 - 🛡️ **搜索配额瞬时缺失自动恢复 (v1.9.2)**：
   - **双页面配额解析**：同时解析 `/earn` 与 `/dashboard`，不再因单页返回残缺 `pointsCounters` 就跳过整轮 PC 搜索；
   - **独立渐进重试**：配额为空时使用缓存绕过与 3/10/30 秒退避重试，恢复后自动继续搜索；
