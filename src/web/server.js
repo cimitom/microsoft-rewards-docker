@@ -25,7 +25,7 @@ import { getFontStatus, refreshFontCache } from '../core/fontStatus.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.10.6';
+const CURRENT_VERSION = '1.10.7';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -999,8 +999,8 @@ export function createServer() {
 
   app.post('/api/auth/login-window/close', async (req, res) => {
     try {
-      const result = await microsoftLoginWindow.close('用户取消登录');
-      res.json({ success: true, data: result });
+      const result = await microsoftLoginWindow.close(req.body?.reason || '用户关闭登录窗口');
+      res.json({ success: true, data: result?.lastResult?.data || result?.lastResult || result });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
     }

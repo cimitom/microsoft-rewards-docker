@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.10.6</span>
+            <span class="version-label" id="version-label">v1.10.7</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -1427,6 +1427,10 @@
         <iframe id="novnc-frame" title="内置 Chromium 可见浏览器" style="width: 100%; height: 100%; border: 0; background: #111827;"></iframe>
       </div>
       <div class="modal-footer">
+        <label class="form-checkbox" id="lbl-novnc-auto-close" style="display: none; align-items: center; gap: 6px; font-size: 13px; margin-right: auto; cursor: pointer; color: var(--text-muted); user-select: none;">
+          <input type="checkbox" id="chk-novnc-auto-close">
+          <span>凭据获取后直接自动关闭</span>
+        </label>
         <button class="btn btn-secondary" id="btn-maximize-novnc" title="放大 / 还原 VNC 窗口">⛶ 放大</button>
         <button class="btn btn-secondary" id="btn-refresh-novnc">🔄 刷新画面</button>
         <button class="btn btn-primary" id="btn-novnc-save-login" style="display: none;">✅ 我已登录，保存凭据</button>

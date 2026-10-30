@@ -70,6 +70,8 @@ const ACCOUNT_TREND_METRICS = {
 // 后端下发的凭据占位符：表示「已配置，内容保持隐藏」
 const SECRET_PLACEHOLDER = '__MSR_SECRET_KEEP__';
 const SECRET_CLEAR = '__MSR_SECRET_CLEAR__';
+const VNC_AUTO_CLOSE_KEY = 'msr.vncAutoClose.v1';
+let latestMicrosoftVncData = null;
 let guideNetworkConfirmed = false;
 let cfgDraftTokens = null;
 let novncMode = 'epic';
@@ -1754,6 +1756,14 @@ function setNovncStatus(text = '', tone = '') {
   el.textContent = text;
 }
 
+function isVncAutoCloseEnabled() {
+  return localStorage.getItem(VNC_AUTO_CLOSE_KEY) === 'true';
+}
+
+function setVncAutoCloseEnabled(val) {
+  localStorage.setItem(VNC_AUTO_CLOSE_KEY, val ? 'true' : 'false');
+}
+
 function openNovncModal(title = 'Epic 可见浏览器', { showSave = false, mode = 'epic', onSuccess = null } = {}) {
   novncMode = mode;
   microsoftVncSuccessHandler = onSuccess;
@@ -1766,6 +1776,16 @@ function openNovncModal(title = 'Epic 可见浏览器', { showSave = false, mode
   }
   const cancelBtn = document.getElementById('btn-cancel-novnc-session');
   if (cancelBtn) cancelBtn.style.display = mode === 'microsoft' ? 'inline-flex' : 'none';
+  const autoCloseLbl = document.getElementById('lbl-novnc-auto-close');
+  const autoCloseChk = document.getElementById('chk-novnc-auto-close');
+  if (autoCloseLbl && autoCloseChk) {
+    if (mode === 'microsoft') {
+      autoCloseLbl.style.display = 'inline-flex';
+      autoCloseChk.checked = isVncAutoCloseEnabled();
+    } else {
+      autoCloseLbl.style.display = 'none';
+    }
+  }
   const frame = document.getElementById('novnc-frame');
   if (frame) {
     const base = `${location.origin}/novnc/vnc.html`;
@@ -1798,12 +1818,15 @@ function closeNovncModal() {
   if (saveBtn) saveBtn.style.display = 'none';
   const cancelBtn = document.getElementById('btn-cancel-novnc-session');
   if (cancelBtn) cancelBtn.style.display = 'none';
+  const autoCloseLbl = document.getElementById('lbl-novnc-auto-close');
+  if (autoCloseLbl) autoCloseLbl.style.display = 'none';
   setNovncStatus('');
   closeModal('novnc-modal');
   novncMode = 'epic';
   microsoftVncSuccessHandler = null;
   microsoftVncCaptureInFlight = false;
   microsoftVncAutoCaptureTriggered = false;
+  latestMicrosoftVncData = null;
 }
 
 function stopMicrosoftVncPolling() {
@@ -1816,7 +1839,13 @@ function stopMicrosoftVncPolling() {
 
 async function closeMicrosoftVncSession() {
   stopMicrosoftVncPolling();
-  await fetch('/api/auth/login-window/close', { method: 'POST' }).catch(() => {});
+  try {
+    const res = await fetch('/api/auth/login-window/close', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+    const savedData = res.data?.data || res.data?.lastResult || res.data || latestMicrosoftVncData;
+    if (savedData && (savedData.cookie || savedData.refreshToken)) {
+      if (microsoftVncSuccessHandler) await microsoftVncSuccessHandler(savedData);
+    }
+  } catch {}
   closeNovncModal();
 }
 
@@ -1842,6 +1871,14 @@ async function pollMicrosoftLoginStatus() {
     if (data.phase === 'logged_in' && !microsoftVncAutoCaptureTriggered) {
       microsoftVncAutoCaptureTriggered = true;
       captureMicrosoftLoginWindow().catch(() => {});
+    } else if (data.phase === 'ready' && latestMicrosoftVncData) {
+      setNovncStatus(`🎉 Cookie 与 Token 已成功获取（用户：${latestMicrosoftVncData.detectedName || data.detectedName || '已登录'}）！已自动保存。您可以继续在此浏览器中浏览或操作设置，完成后点击「保存并关闭」或关闭小窗生效。`, 'ok');
+      const saveBtn = document.getElementById('btn-novnc-save-login');
+      if (saveBtn) {
+        saveBtn.style.display = 'inline-flex';
+        saveBtn.innerText = '💾 保存并关闭小窗';
+        saveBtn.className = 'btn btn-primary';
+      }
     }
   } catch (e) {
     setNovncStatus(`状态检测失败：${e.message}`);
@@ -1855,23 +1892,35 @@ async function pollMicrosoftLoginStatus() {
 async function captureMicrosoftLoginWindow() {
   if (microsoftVncCaptureInFlight || novncMode !== 'microsoft') return;
   microsoftVncCaptureInFlight = true;
+  const autoClose = isVncAutoCloseEnabled();
   setNovncStatus('正在确认登录、抓取 Cookie 并换取 Token，请稍候...');
   try {
     const res = await fetch('/api/auth/login-window/capture', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+      body: JSON.stringify({ autoClose })
     }).then(r => r.json());
     if (res.success && res.data?.success) {
       const data = res.data;
-      setNovncStatus('Cookie 与 Token 已获取，正在写回账号表单...', 'ok');
+      latestMicrosoftVncData = data;
       if (microsoftVncSuccessHandler) await microsoftVncSuccessHandler(data);
-      closeNovncModal();
+      if (autoClose) {
+        setNovncStatus('Cookie 与 Token 已获取，正在保存并关闭窗口...', 'ok');
+        await closeMicrosoftVncSession();
+        return;
+      }
+      setNovncStatus(`🎉 微软 Cookie 与 Token 已成功获取（用户：${data.detectedName || '已登录'}）！已自动保存。您可以继续在此浏览器中浏览或操作设置，完成后点击「保存并关闭」或关闭小窗即可生效。`, 'ok');
+      const saveBtn = document.getElementById('btn-novnc-save-login');
+      if (saveBtn) {
+        saveBtn.style.display = 'inline-flex';
+        saveBtn.innerText = '💾 保存并关闭小窗';
+        saveBtn.className = 'btn btn-primary';
+      }
       return;
     }
     if (res.partial || res.data?.partial) {
       const data = res.data?.data || res.data || {};
-      setNovncStatus(res.message || data.message || 'Cookie 已获取，但 Token 自动获取失败', 'warn');
+      latestMicrosoftVncData = data;
       if (microsoftVncSuccessHandler && data.cookie) {
         await microsoftVncSuccessHandler({
           partial: true,
@@ -1881,7 +1930,17 @@ async function captureMicrosoftLoginWindow() {
           message: res.message || data.message
         });
       }
-      closeNovncModal();
+      if (autoClose) {
+        setNovncStatus(res.message || data.message || 'Cookie 已获取，但 Token 自动获取失败', 'warn');
+        await closeMicrosoftVncSession();
+        return;
+      }
+      setNovncStatus(`⚠️ 微软 Cookie 已获取，但 Token 自动换取受阻。您可以继续在窗口中操作，完成后点击「保存并关闭」。`, 'warn');
+      const saveBtn = document.getElementById('btn-novnc-save-login');
+      if (saveBtn) {
+        saveBtn.style.display = 'inline-flex';
+        saveBtn.innerText = '💾 保存并关闭小窗';
+      }
       return;
     }
     if (res.data?.waitingLogin) {
@@ -2076,7 +2135,10 @@ async function openSettingsMicrosoftVnc() {
         if (result) {
           result.innerHTML = data.partial
             ? `<span style="color:#F59E0B;">⚠️ ${escapeHtml(data.message || 'Cookie 已获取，Token 需手动授权')}</span>`
-            : '<span style="color:#34D399;">✅ Cookie 与 Token 已自动获取，点击底部「保存配置」后生效。</span>';
+            : '<span style="color:#34D399;">✅ Cookie 与 Token 已自动获取并保存生效！</span>';
+        }
+        if (!data.partial && data.cookie) {
+          await saveSettingsFromModal();
         }
       }
     });
@@ -2981,7 +3043,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.10.6';
+  const current = updateInfo?.currentVersion || '1.10.7';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -3036,8 +3098,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.6'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.6'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.7'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.7'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -6541,8 +6603,17 @@ function initEpicUI() {
   document.getElementById('btn-refresh-novnc')?.addEventListener('click', refreshNovncModal);
   document.getElementById('btn-maximize-novnc')?.addEventListener('click', toggleNovncMaximize);
   document.getElementById('btn-novnc-save-login')?.addEventListener('click', () => {
-    if (novncMode === 'microsoft') captureMicrosoftLoginWindow();
+    if (novncMode === 'microsoft') {
+      if (latestMicrosoftVncData) {
+        closeMicrosoftVncSession();
+      } else {
+        captureMicrosoftLoginWindow();
+      }
+    }
     else saveEpicLoginWindow();
+  });
+  document.getElementById('chk-novnc-auto-close')?.addEventListener('change', (e) => {
+    setVncAutoCloseEnabled(e.target.checked);
   });
   document.getElementById('btn-close-epic-celebration')?.addEventListener('click', closeEpicCelebration);
   document.getElementById('epic-celebration')?.addEventListener('click', event => {

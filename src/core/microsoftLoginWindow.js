@@ -660,10 +660,12 @@ class MicrosoftLoginWindowManager {
       this.capturing = false;
       rewardsApi.restoreAccountContext(prevContext);
       networkClient.setActiveProxyContext(prevProxyContext);
-      if (this.phase === 'ready') {
-        await this.close('凭据已获取，登录窗口已关闭');
-      } else if (this.phase === 'partial') {
-        await this.close(this.message);
+      if (input.autoClose === true) {
+        if (this.phase === 'ready') {
+          await this.close('auto-close');
+        } else if (this.phase === 'partial') {
+          await this.close(this.message);
+        }
       }
     }
   }
@@ -677,6 +679,15 @@ class MicrosoftLoginWindowManager {
     const bridge = this.proxyBridge;
     const owner = this.owner;
     const profileDir = this.profileDir;
+    try {
+      if (context && this.lastResult?.data?.cookie) {
+        const latestCookie = await captureBingCookies(context).catch(() => '');
+        if (latestCookie && cookieValue(latestCookie, '_U')) {
+          this.lastResult.data.cookie = latestCookie;
+          if (this.lastResult.cookie) this.lastResult.cookie = latestCookie;
+        }
+      }
+    } catch {}
     this.context = null;
     this.page = null;
     this.proxyBridge = null;
@@ -712,7 +723,7 @@ class MicrosoftLoginWindowManager {
       this.expiresAt = 0;
       this.capturing = false;
     }
-    return { closed: true, message: this.message };
+    return { closed: true, message: this.message, lastResult: this.lastResult };
   }
 }
 
