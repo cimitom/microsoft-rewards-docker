@@ -261,6 +261,27 @@ test('Safari 格式 Cookie 自动规整化与解析测试', () => {
   assert.equal(parsed[1].value, '1XDZ_Sample_Auth_Cookie', '双引号应被自动剥离');
 });
 
+test('parseCookies 正确处理 __Host- 与 __Secure- 特殊 Cookie 前缀并兼容 Playwright', () => {
+  const raw = '__Host-XY=test_val; __Secure-AUTH=secure_val; MUID=normal_val';
+  const parsed = browserManager.parseCookies(raw, '.bing.com');
+  assert.equal(parsed.length, 3);
+
+  const hostCookie = parsed.find(c => c.name === '__Host-XY');
+  assert.ok(hostCookie);
+  assert.equal(hostCookie.domain, undefined, '__Host- Cookie 不得包含 domain 属性');
+  assert.equal(hostCookie.url, 'https://bing.com', '__Host- Cookie 应使用 url 指定源');
+  assert.equal(hostCookie.secure, true, '__Host- Cookie 必须包含 secure 属性');
+
+  const secureCookie = parsed.find(c => c.name === '__Secure-AUTH');
+  assert.ok(secureCookie);
+  assert.equal(secureCookie.secure, true, '__Secure- Cookie 必须包含 secure 属性');
+  assert.equal(secureCookie.domain, '.bing.com');
+
+  const normalCookie = parsed.find(c => c.name === 'MUID');
+  assert.ok(normalCookie);
+  assert.equal(normalCookie.domain, '.bing.com');
+});
+
 test('官网打孔卡列表瞬时为空时，不得误删已有打孔卡（防闪烁防丢卡）', async () => {
   const tm = new TaskManager();
   const accId = 'acc_preserve_test';

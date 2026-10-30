@@ -150,12 +150,30 @@ class BrowserManager extends EventEmitter {
         if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
           value = value.slice(1, -1);
         }
-        list.push({
-          name,
-          value,
-          domain: defaultDomain,
-          path: '/'
-        });
+        if (name.startsWith('__Host-')) {
+          const host = defaultDomain.replace(/^\./, '');
+          list.push({
+            name,
+            value,
+            url: `https://${host}`,
+            secure: true
+          });
+        } else if (name.startsWith('__Secure-')) {
+          list.push({
+            name,
+            value,
+            domain: defaultDomain,
+            path: '/',
+            secure: true
+          });
+        } else {
+          list.push({
+            name,
+            value,
+            domain: defaultDomain,
+            path: '/'
+          });
+        }
       }
     }
     return list;
@@ -288,7 +306,15 @@ class BrowserManager extends EventEmitter {
       if (acc?.cookie) {
         const cookies = this.parseCookies(acc.cookie, '.bing.com');
         const cnCookies = this.parseCookies(acc.cookie, 'cn.bing.com');
-        await context.addCookies([...cookies, ...cnCookies]);
+        try {
+          await context.addCookies([...cookies, ...cnCookies]);
+        } catch (cookieErr) {
+          for (const c of [...cookies, ...cnCookies]) {
+            try {
+              await context.addCookies([c]);
+            } catch {}
+          }
+        }
       }
 
       this.browser = browser;
