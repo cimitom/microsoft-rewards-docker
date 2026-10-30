@@ -428,8 +428,9 @@
 
     handleResize() {
       if (!this.canvas || !this.gl) return;
-      // Cap device pixel ratio at 1.25 to guarantee 60 FPS without high energy use
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+      // The background is heavily blurred, so rendering above 1x adds GPU cost
+      // with little visible detail. Keep it capped for smoother compositing.
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.0);
       const w = Math.floor(window.innerWidth * dpr);
       const h = Math.floor(window.innerHeight * dpr);
 

@@ -91,6 +91,12 @@ const DEFAULT_CONFIG = {
     telegram: {
       botToken: '',
       chatId: ''
+    },
+    qqbot: {
+      appId: '',
+      clientSecret: '',
+      openId: '',
+      groupOpenId: ''
     }
   },
   ui: {

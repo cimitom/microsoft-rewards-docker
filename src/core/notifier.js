@@ -46,6 +46,15 @@ export class Notifier {
       ));
     }
 
+    // 7. QQ 官方机器人 (QQBot OpenAPI v2)
+    if (notify.qqbot?.appId && notify.qqbot?.clientSecret && (notify.qqbot?.openId || notify.qqbot?.groupOpenId)) {
+      tasks.push(this.sendQqBot(
+        notify.qqbot,
+        title,
+        fullContent
+      ));
+    }
+
     if (tasks.length > 0) {
       const results = await Promise.allSettled(tasks);
       return results;
@@ -183,6 +192,84 @@ export class Notifier {
     }
   }
 
+  async getQqBotAccessToken(appId, clientSecret) {
+    const now = Date.now();
+    if (this.qqTokenCache?.appId === appId && this.qqTokenCache?.token && this.qqTokenCache?.expiresAt > now + 60000) {
+      return this.qqTokenCache.token;
+    }
+    const res = await networkClient.request({
+      url: 'https://bots.qq.com/app/getAppAccessToken',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: { appId, clientSecret }
+    });
+    const data = typeof res === 'string' ? JSON.parse(res) : res;
+    if (!data?.access_token) {
+      const errMsg = data?.msg || data?.message || '返回数据缺少 access_token';
+      throw new Error(`获取 QQ 机器人 AccessToken 失败: ${errMsg}`);
+    }
+    const expiresInSec = Number(data.expires_in) || 7200;
+    this.qqTokenCache = {
+      appId,
+      token: data.access_token,
+      expiresAt: now + expiresInSec * 1000
+    };
+    return this.qqTokenCache.token;
+  }
+
+  async sendQqBot(config, title, text) {
+    const appId = String(config?.appId || '').trim();
+    const clientSecret = String(config?.clientSecret || '').trim();
+    const openId = String(config?.openId || '').trim();
+    const groupOpenId = String(config?.groupOpenId || '').trim();
+
+    if (!appId || !clientSecret) {
+      throw new Error('QQ 机器人 AppID 与 AppSecret 不能为空');
+    }
+    if (!openId && !groupOpenId) {
+      throw new Error('QQ 机器人 OpenID 与群 OpenID 均为空');
+    }
+
+    const token = await this.getQqBotAccessToken(appId, clientSecret);
+    const targets = [];
+    if (openId) {
+      targets.push({ type: '私聊', url: `https://api.sgroup.qq.com/v2/users/${openId}/messages` });
+    }
+    if (groupOpenId) {
+      targets.push({ type: '群聊', url: `https://api.sgroup.qq.com/v2/groups/${groupOpenId}/messages` });
+    }
+
+    const errors = [];
+    let successCount = 0;
+    for (const target of targets) {
+      try {
+        await networkClient.request({
+          url: target.url,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `QQBot ${token}`
+          },
+          data: {
+            msg_type: 0,
+            content: text
+          }
+        });
+        successCount++;
+      } catch (e) {
+        errors.push(`[${target.type}] ${e.message}`);
+      }
+    }
+
+    if (successCount === 0) {
+      logger.log('🔴', `「QQ 机器人」推送失败: ${errors.join('; ')}`);
+      throw new Error(`「QQ 机器人」推送失败: ${errors.join('; ')}`);
+    }
+
+    logger.log('🔵', `「QQ 机器人」消息推送成功 (${successCount}/${targets.length} 目标)`);
+    return true;
+  }
+
   async testChannel(channel, value) {
     const title = '测试通知';
     const content = '如果你看到这条消息，说明该推送渠道已成功配置并联通！';
@@ -200,6 +287,10 @@ export class Notifier {
       case 'telegram': {
         const { botToken, chatId } = typeof value === 'object' ? value : JSON.parse(value);
         return this.sendTelegram(botToken, chatId, title, content);
+      }
+      case 'qqbot': {
+        const conf = typeof value === 'object' ? value : JSON.parse(value);
+        return this.sendQqBot(conf, title, `【${title}】\n${content}`);
       }
       default:
         throw new Error('不支持的通知渠道');

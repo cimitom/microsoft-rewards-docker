@@ -29,6 +29,9 @@ let accountSummaryHistory = [];
 let accountSummaryHistoryAt = 0;
 let accountSummaryHistoryPromise = null;
 let accountSummaryRenderSignature = '';
+let accountSelectorRenderSignature = '';
+let taskGridRenderSignature = '';
+let timelineRenderSignature = '';
 let accountTrendRows = [];
 let accountTrendMetric = 'earned';
 let accountTrendGeometry = null;
@@ -37,6 +40,23 @@ let accountSummaryColumnState = null;
 
 const ACCOUNT_SUMMARY_COLUMN_WIDTH_KEY = 'msr.accountSummaryColumnWidths.v1';
 const ACCOUNT_SUMMARY_COLUMN_KEYS = ['account', 'balance', 'earned', 'claimable', 'streak', 'stamps', 'avg7', 'avg30'];
+
+function setHtmlIfChanged(element, html) {
+  if (!element) return false;
+  const next = String(html ?? '');
+  if (element.innerHTML === next) return false;
+  element.innerHTML = next;
+  return true;
+}
+
+function setTextIfChanged(element, text) {
+  if (!element) return false;
+  const next = String(text ?? '');
+  if (element.textContent === next) return false;
+  element.textContent = next;
+  return true;
+}
+
 const ACCOUNT_TREND_METRICS = {
   balance: { label: '当前积分', kind: 'balance' },
   earned: { label: '今日获取', kind: 'earned' },
@@ -533,8 +553,6 @@ const GLASS_SURFACE_SELECTOR = [
   '.diag-banner',
   '.diag-summary-box',
   '.history-card',
-  '.browser-metric-row',
-  '.timeline-item',
   '.step-action-box'
 ].join(',');
 
@@ -547,17 +565,24 @@ function initLiquidMouseFollower() {
   enhanceGlassSurfaces();
   let cards = [];
   const updateCardsList = () => {
-    enhanceGlassSurfaces();
     cards = Array.from(document.querySelectorAll(GLASS_SURFACE_SELECTOR));
   };
 
   let observerRaf = 0;
-  const observer = new MutationObserver(() => {
+  const scheduleCardsListUpdate = () => {
     if (observerRaf) return;
     observerRaf = requestAnimationFrame(() => {
       observerRaf = 0;
       updateCardsList();
     });
+  };
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) enhanceGlassSurfaces(node);
+      }
+    }
+    scheduleCardsListUpdate();
   });
   observer.observe(document.body, { childList: true, subtree: true });
   updateCardsList();
@@ -2930,9 +2955,9 @@ async function fetchSystemMetrics() {
       const memEl = document.getElementById('metric-mem');
       const pingEl = document.getElementById('metric-ping');
       const pill = document.getElementById('sys-metrics-pill');
-      if (cpuEl) cpuEl.innerText = `CPU ${d.cpu}`;
-      if (memEl) memEl.innerText = `内存 ${d.procMem}`;
-      if (pingEl) pingEl.innerText = `延时 ${d.ping}`;
+      setTextIfChanged(cpuEl, `CPU ${d.cpu}`);
+      setTextIfChanged(memEl, `内存 ${d.procMem}`);
+      setTextIfChanged(pingEl, `延时 ${d.ping}`);
 
       if (pill && d.containerDetails) {
         const cd = d.containerDetails;
@@ -2942,7 +2967,8 @@ async function fetchSystemMetrics() {
         const cpuLine = d.cpuIsContainer
           ? `💻 容器 CPU 占用: ${d.cpu}（占单核百分比）`
           : `💻 CPU 占用: ${d.cpu}（宿主机整机，未读到容器 cgroup）`;
-        pill.setAttribute('data-tip', `📦 容器运行环境: Node.js ${cd.nodeVersion} on ${cd.platform}\n⏱️ 容器运行时间: ${cd.uptime}\n${memLine}\n🧩 Node 进程 RSS: ${cd.processRss} (堆内存: ${cd.heap})\n${cpuLine}\n🖥️ 宿主机物理内存: ${cd.hostMemory}\n🌐 微软网络延时: ${d.ping}\n🔄 提示: 点击立即刷新`);
+        const tip = `📦 容器运行环境: Node.js ${cd.nodeVersion} on ${cd.platform}\n⏱️ 容器运行时间: ${cd.uptime}\n${memLine}\n🧩 Node 进程 RSS: ${cd.processRss} (堆内存: ${cd.heap})\n${cpuLine}\n🖥️ 宿主机物理内存: ${cd.hostMemory}\n🌐 微软网络延时: ${d.ping}\n🔄 提示: 点击立即刷新`;
+        if (pill.getAttribute('data-tip') !== tip) pill.setAttribute('data-tip', tip);
       }
     }
   } catch {}
@@ -2955,7 +2981,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.10.5';
+  const current = updateInfo?.currentVersion || '1.10.6';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -3010,8 +3036,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.5'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.5'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.6'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.6'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -3038,7 +3064,8 @@ function renderBrowserMonitor(b) {
   if (!pill) return;
 
   const isRunning = b.status !== 'idle' && b.status !== 'stopped';
-  pill.className = `browser-status-pill ${isRunning ? 'status-running' : 'status-idle'}`;
+  const pillClass = `browser-status-pill ${isRunning ? 'status-running' : 'status-idle'}`;
+  if (pill.className !== pillClass) pill.className = pillClass;
 
   const statusMap = {
     idle: '空闲休眠中',
@@ -3050,21 +3077,22 @@ function renderBrowserMonitor(b) {
     stopped: '已停止'
   };
 
-  pillText.innerText = statusMap[b.status] || (isRunning ? '运行中' : '空闲休眠中');
-  bmAccount.innerText = b.activeAccountName || '--';
-  bmQuery.innerText = b.currentQuery || '--';
+  setTextIfChanged(pillText, statusMap[b.status] || (isRunning ? '运行中' : '空闲休眠中'));
+  setTextIfChanged(bmAccount, b.activeAccountName || '--');
+  setTextIfChanged(bmQuery, b.currentQuery || '--');
   if (bmRound) {
-    bmRound.innerText = b.totalTarget > 0 ? `${b.searchCount} / ${b.totalTarget}` : '0 / 0';
+    setTextIfChanged(bmRound, b.totalTarget > 0 ? `${b.searchCount} / ${b.totalTarget}` : '0 / 0');
     // 说明口径：这里统计的是「本次为补足剩余配额需要跑几轮搜索」，不是总进度
-    bmRound.setAttribute('data-tip', b.totalTarget > 0
+    const roundTip = b.totalTarget > 0
       ? `本次需补足剩余配额 ${b.pointsNeeded || b.totalTarget * 3} 分，每次搜索约 +3 分，共安排 ${b.totalTarget} 轮；与上方总进度是两个口径`
-      : '本次补分搜索轮次');
+      : '本次补分搜索轮次';
+    if (bmRound.getAttribute('data-tip') !== roundTip) bmRound.setAttribute('data-tip', roundTip);
   }
-  bmCountdown.innerText = b.nextSearchIn > 0 ? `${b.nextSearchIn} 秒` : '--';
+  setTextIfChanged(bmCountdown, b.nextSearchIn > 0 ? `${b.nextSearchIn} 秒` : '--');
   // 用容器真实内存（含 Chromium 子进程）替代原来写死的 180MB
   const containerMem = lastSystemMetrics?.procMem;
-  bmMem.innerText = containerMem || (isRunning ? `${b.memoryMB || '--'} MB` : '--');
-  bmAction.innerText = b.lastAction || '浏览器当前处于空闲休眠状态 (0 内存占用)';
+  setTextIfChanged(bmMem, containerMem || (isRunning ? `${b.memoryMB || '--'} MB` : '--'));
+  setTextIfChanged(bmAction, b.lastAction || '浏览器当前处于空闲休眠状态 (0 内存占用)');
 }
 
 // 渲染多账号切换胶囊栏
@@ -3078,6 +3106,24 @@ function renderAccountSelectorBar(summary, runtime = {}) {
   // 记录 id → 账号名映射，供日志与打卡明细按账号过滤使用
   accountNameById = {};
   accounts.forEach(acc => { accountNameById[acc.id] = acc.name; });
+
+  const signature = JSON.stringify({
+    selectedAccountId,
+    running: !!runtime.running,
+    runningAccountId: runtime.runningAccountId || null,
+    totalAccounts: summary.totalAccounts,
+    pausedAccounts: summary.pausedAccounts,
+    accounts: accounts.map(acc => ({
+      id: acc.id,
+      name: acc.name,
+      balance: acc.balance,
+      enabled: acc.enabled,
+      lastRunAt: acc.lastRunAt,
+      authDiagnosis: acc.authDiagnosis
+    }))
+  });
+  if (signature === accountSelectorRenderSignature && bar.childElementCount > 0) return;
+  accountSelectorRenderSignature = signature;
 
   // 1. 全部账号汇总胶囊
   const isAllActive = selectedAccountId === 'all';
@@ -3518,11 +3564,23 @@ function renderAccountSummaryTable(summary, runtime = {}) {
       earned: acc.earned,
       claimable: acc.claimablePoints,
       streak: acc.streakDays,
-      stamps: acc.stamps,
-      lastUpdate: acc.lastUpdate
+      stamps: acc.stamps
     })),
     totals: [totalBalance, totalEarned, totalClaimable]
   });
+  const updatedEl = document.getElementById('account-summary-updated');
+  setTextIfChanged(updatedEl, updatedAt > 0
+    ? `更新于 ${new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+    : '等待官网同步');
+  const claimBtn = document.getElementById('btn-summary-claim-all');
+  if (claimBtn) {
+    claimBtn.disabled = !!runtime.running || totalClaimable <= 0;
+    claimBtn.title = totalClaimable > 0
+      ? `全部账号共有 ${totalClaimable} 点待领取积分`
+      : '当前没有待领取积分';
+  }
+  ensureAccountSummaryHistory();
+
   if (signature === accountSummaryRenderSignature && tbody.childElementCount > 0) return;
   hideAccountTrendTooltip();
   accountSummaryRenderSignature = signature;
@@ -3572,22 +3630,6 @@ function renderAccountSummaryTable(summary, runtime = {}) {
   `;
 
   tbody.innerHTML = rows + totalRow;
-  const updatedEl = document.getElementById('account-summary-updated');
-  if (updatedEl) {
-    updatedEl.innerText = updatedAt > 0
-      ? `更新于 ${new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
-      : '等待官网同步';
-  }
-  const claimBtn = document.getElementById('btn-summary-claim-all');
-  if (claimBtn) {
-    claimBtn.disabled = !!runtime.running || totalClaimable <= 0;
-    claimBtn.title = totalClaimable > 0
-      ? `全部账号共有 ${totalClaimable} 点待领取积分`
-      : '当前没有待领取积分';
-  }
-
-  // 保持今日数据和 7/30 日趋势在长时间打开页面时同步更新。
-  ensureAccountSummaryHistory();
 }
 
 function formatAccountTrendValue(metric, row) {
@@ -3866,9 +3908,9 @@ function renderDashboard(data) {
       const paused = selectedAcc.enabled === false;
       const schedulePaused = getAccountRunHours(selectedAcc).length === 0;
       btnToggleAccount.className = `btn btn-sm ${paused ? 'btn-success' : (schedulePaused ? 'btn-secondary' : 'btn-warning')}`;
-      btnToggleAccount.innerHTML = paused
+      setHtmlIfChanged(btnToggleAccount, paused
         ? '<span>▶️</span> 启用账号'
-        : (schedulePaused ? '<span>🕒</span> 选择运行时间' : '<span>⏸️</span> 暂停账号');
+        : (schedulePaused ? '<span>🕒</span> 选择运行时间' : '<span>⏸️</span> 暂停账号'));
       btnToggleAccount.setAttribute('data-tip', paused
         ? '启用该账号；下一次任务或手动刷新时会按需更新 Token'
         : (schedulePaused
@@ -3889,7 +3931,7 @@ function renderDashboard(data) {
   refreshVersionPillTooltip();
 
   if (btnRunSingle && !isAllMode) {
-    btnRunSingle.innerHTML = `<span>▶️</span> 运行当前账号 [${escapeHtml(stats.name || '')}]`;
+    setHtmlIfChanged(btnRunSingle, `<span>▶️</span> 运行当前账号 [${escapeHtml(stats.name || '')}]`);
   }
 
   // 3. 账号积分与签到汇总表
@@ -3899,15 +3941,15 @@ function renderDashboard(data) {
   const scopeBadge = document.getElementById('ms-toolbar-scope');
   if (scopeBadge) {
     if (isAllMode) {
-      scopeBadge.innerHTML = '👥 全部账号汇总';
+      setHtmlIfChanged(scopeBadge, '👥 全部账号汇总');
     } else {
-      scopeBadge.innerHTML = `👤 当前账号：${escapeHtml(stats.name || selectedAccountId)}`;
+      setHtmlIfChanged(scopeBadge, `👤 当前账号：${escapeHtml(stats.name || selectedAccountId)}`);
     }
   }
 
   // 运行按钮提示
   const btnRunIcon = btnRun.querySelector('.icon') || btnRun;
-  btnRun.innerHTML = isAllMode ? '<span>▶️</span> 立即执行全部账号' : `<span>▶️</span> 运行当前账号 [${escapeHtml(stats.name || '')}]`;
+  setHtmlIfChanged(btnRun, isAllMode ? '<span>▶️</span> 立即执行全部账号' : `<span>▶️</span> 运行当前账号 [${escapeHtml(stats.name || '')}]`);
 
   // 4. 汇总视图 vs 单账号视图渲染
   const overviewCard = document.getElementById('accounts-overview-card');
@@ -3990,25 +4032,37 @@ function formatPunchCardTooltip(t) {
 
   // 5. 渲染任务网格
   const taskGrid = document.getElementById('task-grid');
-  taskGrid.innerHTML = '';
-  const TASK_PRIORITY = {
-    search: 10,
-    dailySet: 20,
-    sign: 30,
-    read: 40,
-    promos: 50,
-    browserExtension: 55,
-    desktopApp: 60
-  };
-
-  const tasksList = Object.entries(stats.tasks || {});
-  tasksList.sort((a, b) => {
-    const prioA = TASK_PRIORITY[a[0]] || 100;
-    const prioB = TASK_PRIORITY[b[0]] || 100;
-    return prioA - prioB;
+  const nextTaskGridSignature = isAllMode ? '' : JSON.stringify({
+    selectedAccountId,
+    running: !!running,
+    tasks: stats.tasks || {},
+    streaks: stats.streaks || {},
+    streakDays: stats.streakDays
   });
+  if (taskGrid && isAllMode) {
+    if (taskGrid.childElementCount > 0) taskGrid.innerHTML = '';
+    taskGridRenderSignature = '';
+  } else if (taskGrid && (nextTaskGridSignature !== taskGridRenderSignature || taskGrid.childElementCount === 0)) {
+    taskGridRenderSignature = nextTaskGridSignature;
+    taskGrid.innerHTML = '';
+    const TASK_PRIORITY = {
+      search: 10,
+      dailySet: 20,
+      sign: 30,
+      read: 40,
+      promos: 50,
+      browserExtension: 55,
+      desktopApp: 60
+    };
 
-  for (const [key, t] of tasksList) {
+    const tasksList = Object.entries(stats.tasks || {});
+    tasksList.sort((a, b) => {
+      const prioA = TASK_PRIORITY[a[0]] || 100;
+      const prioB = TASK_PRIORITY[b[0]] || 100;
+      return prioA - prioB;
+    });
+
+    for (const [key, t] of tasksList) {
     const card = document.createElement('div');
     const isFeaturedTask = key === 'search' || key === 'dailySet' || key === 'sign';
     card.className = `task-card task-card-clickable${isFeaturedTask ? ' task-card-featured' : ''}`;
@@ -4124,12 +4178,18 @@ function formatPunchCardTooltip(t) {
         triggerTaskCard();
       }
     });
-    taskGrid.appendChild(card);
+      taskGrid.appendChild(card);
+    }
   }
 
   // 6. 渲染时间轴（每行带账号名，服务端已按选中账号过滤）
   const timelineList = document.getElementById('timeline-list');
-  if (timelineList) {
+  const nextTimelineSignature = JSON.stringify({
+    selectedAccountId,
+    timeline: timeline || []
+  });
+  if (timelineList && (nextTimelineSignature !== timelineRenderSignature || timelineList.childElementCount === 0)) {
+    timelineRenderSignature = nextTimelineSignature;
     if (timeline && timeline.length > 0) {
       timelineList.innerHTML = timeline.map(item => {
         const acc = item.accountName || item.tag || '系统';
@@ -5454,6 +5514,10 @@ function populateSettingsForm() {
   document.getElementById('cfg-notify-pushme').value = c.notify?.pushme || '';
   document.getElementById('cfg-notify-tg-token').value = c.notify?.telegram?.botToken || '';
   document.getElementById('cfg-notify-tg-chat').value = c.notify?.telegram?.chatId || '';
+  document.getElementById('cfg-notify-qq-appid').value = c.notify?.qqbot?.appId || '';
+  document.getElementById('cfg-notify-qq-secret').value = c.notify?.qqbot?.clientSecret || '';
+  document.getElementById('cfg-notify-qq-openid').value = c.notify?.qqbot?.openId || '';
+  document.getElementById('cfg-notify-qq-group-openid').value = c.notify?.qqbot?.groupOpenId || '';
 
   // 液态视觉与背景
   const visualVal = c.visual || JSON.parse(localStorage.getItem('msr_visual_config') || 'null') || DEFAULT_VISUAL_CONFIG;
@@ -5660,6 +5724,12 @@ async function saveSettingsFromModal() {
       telegram: {
         botToken: document.getElementById('cfg-notify-tg-token').value.trim(),
         chatId: document.getElementById('cfg-notify-tg-chat').value.trim()
+      },
+      qqbot: {
+        appId: document.getElementById('cfg-notify-qq-appid').value.trim(),
+        clientSecret: document.getElementById('cfg-notify-qq-secret').value.trim(),
+        openId: document.getElementById('cfg-notify-qq-openid').value.trim(),
+        groupOpenId: document.getElementById('cfg-notify-qq-group-openid').value.trim()
       }
     }
   };
@@ -5833,6 +5903,22 @@ window.testNotifyChannel = async function(channel) {
       return;
     }
     val = JSON.stringify({ botToken, chatId });
+  } else if (channel === 'qqbot') {
+    const appId = document.getElementById('cfg-notify-qq-appid')?.value.trim();
+    const clientSecret = document.getElementById('cfg-notify-qq-secret')?.value.trim();
+    const openId = document.getElementById('cfg-notify-qq-openid')?.value.trim();
+    const groupOpenId = document.getElementById('cfg-notify-qq-group-openid')?.value.trim();
+    if (!appId || !clientSecret) {
+      openEpicActionModal('通知参数缺失', '请先输入 QQ 机器人 AppID 和 AppSecret。', ['填写参数', '重新测试'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+      return;
+    }
+    if (!openId && !groupOpenId) {
+      openEpicActionModal('通知参数缺失', '请至少输入用户 OpenID 或群 OpenID 之一。', ['填写参数', '重新测试'], 0);
+      updateEpicActionModal({ progress: 100, badge: { text: '参数缺失', cls: 'warn' } });
+      return;
+    }
+    val = JSON.stringify({ appId, clientSecret, openId, groupOpenId });
   } else {
     const idMap = {
       wework: 'cfg-notify-wework',

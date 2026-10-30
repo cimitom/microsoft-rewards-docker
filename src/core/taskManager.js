@@ -2587,8 +2587,10 @@ export class TaskManager {
     let completed = 0;
     let lastOfficial = Number(curSearch) || 0;
     let stoppedByStagnation = false;
+    const usedQueries = new Set();
     for (let i = 0; i < searchCount && this.running && !this.isAccountPaused(accCfg.id); i++) {
-      const word = await rewardsApi.getHotSearchWord();
+      const word = await rewardsApi.getHotSearchWord({ exclude: usedQueries });
+      usedQueries.add(word);
       logger.log('🔍', `[搜索 ${i + 1}/${searchCount}] 关键词: "${word}"`, '', accountName);
       await rewardsApi.doSearchOnce(word);
       completed++;

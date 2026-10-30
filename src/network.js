@@ -20,6 +20,28 @@ const MICROSOFT_COOKIE_DOMAINS = [
   'microsoft365.com'
 ];
 
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETDOWN',
+  'ENETUNREACH',
+  'EPIPE',
+  'ETIMEDOUT',
+  'EAI_AGAIN'
+]);
+
+const RETRYABLE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+export function isTransientNetworkError(error) {
+  if (!error || error.response) return false;
+  const code = String(error.code || '').toUpperCase();
+  if (TRANSIENT_NETWORK_CODES.has(code)) return true;
+  const message = String(error.message || '');
+  return /Socks5 proxy rejected connection|NetworkUnreachable|socket hang up|ECONNRESET|ECONNABORTED|ETIMEDOUT/i.test(message);
+}
+
 function isMicrosoftHost(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
@@ -265,10 +287,12 @@ class NetworkClient {
       proxyUrl,
       useProxy,
       ignoreAccountProxy = false,
-      returnResponse = false
+      returnResponse = false,
+      retryTransient = true,
+      transientRetries = 1,
+      transientRetryDelaysMs = [600]
     } = options;
 
-    const agent = this.getAgent({ proxyUrl, useProxy, ignoreAccountProxy });
     const finalHeaders = { ...headers };
     if (finalHeaders.cookie !== undefined) {
       finalHeaders.cookie = normalizeCookieString(String(finalHeaders.cookie));
@@ -285,66 +309,85 @@ class NetworkClient {
       finalHeaders['cookie'] = cookieHeader;
     }
 
-    const axiosConfig = {
-      url,
-      method,
-      headers: finalHeaders,
-      data,
-      timeout,
-      responseType,
-      validateStatus: (status) => {
-        if (!followRedirects) {
-          return (status >= 200 && status < 400);
+    const normalizedMethod = String(method || 'GET').toUpperCase();
+    const maxTransientRetries = retryTransient && RETRYABLE_METHODS.has(normalizedMethod)
+      ? Math.max(0, Math.min(2, Math.trunc(Number(transientRetries) || 0)))
+      : 0;
+    const retryDelays = Array.isArray(transientRetryDelaysMs) ? transientRetryDelaysMs : [600];
+
+    for (let attempt = 0; attempt <= maxTransientRetries; attempt++) {
+      // 每次重试重新创建 agent，避免复用已被 SOCKS 服务端关闭的底层连接。
+      const agent = this.getAgent({ proxyUrl, useProxy, ignoreAccountProxy });
+      const axiosConfig = {
+        url,
+        method: normalizedMethod,
+        headers: finalHeaders,
+        data,
+        timeout,
+        responseType,
+        validateStatus: (status) => {
+          if (!followRedirects) {
+            return (status >= 200 && status < 400);
+          }
+          return status >= 200 && status < 300;
         }
-        return status >= 200 && status < 300;
+      };
+
+      if (agent) {
+        axiosConfig.httpAgent = agent;
+        axiosConfig.httpsAgent = agent;
       }
-    };
 
-    if (agent) {
-      axiosConfig.httpAgent = agent;
-      axiosConfig.httpsAgent = agent;
-    }
+      if (!followRedirects) {
+        axiosConfig.maxRedirects = 0;
+      }
 
-    if (!followRedirects) {
-      axiosConfig.maxRedirects = 0;
-    }
+      try {
+        const response = await axios(axiosConfig);
 
-    try {
-      const response = await axios(axiosConfig);
-
-      // 处理 Set-Cookie
-      if (response.headers['set-cookie']) {
-        let domain = 'bing.com';
-        try { domain = new URL(url).hostname; } catch {}
-        const setCookies = Array.isArray(response.headers['set-cookie'])
-          ? response.headers['set-cookie']
-          : [response.headers['set-cookie']];
-        for (const sc of setCookies) {
-          const cookiePart = sc.split(';')[0];
-          const eq = cookiePart.indexOf('=');
-          if (eq > 0) {
-            const k = cookiePart.slice(0, eq).trim();
-            const v = cookiePart.slice(eq + 1).trim();
-            this.setCookie(k, v, domain);
+        // 处理 Set-Cookie
+        if (response.headers['set-cookie']) {
+          let domain = 'bing.com';
+          try { domain = new URL(url).hostname; } catch {}
+          const setCookies = Array.isArray(response.headers['set-cookie'])
+            ? response.headers['set-cookie']
+            : [response.headers['set-cookie']];
+          for (const sc of setCookies) {
+            const cookiePart = sc.split(';')[0];
+            const eq = cookiePart.indexOf('=');
+            if (eq > 0) {
+              const k = cookiePart.slice(0, eq).trim();
+              const v = cookiePart.slice(eq + 1).trim();
+              this.setCookie(k, v, domain);
+            }
           }
         }
-      }
 
-      // 如果是重定向响应，返回 Location
-      if ([301, 302, 307, 308].includes(response.status)) {
-        return response.headers.location || true;
-      }
+        // 如果是重定向响应，返回 Location
+        if ([301, 302, 307, 308].includes(response.status)) {
+          return response.headers.location || true;
+        }
 
-      return returnResponse
-        ? { data: response.data, status: response.status, headers: response.headers }
-        : response.data;
-    } catch (error) {
-      if (error.response && [301, 302, 307, 308].includes(error.response.status)) {
-        return error.response.headers.location || true;
+        return returnResponse
+          ? { data: response.data, status: response.status, headers: response.headers }
+          : response.data;
+      } catch (error) {
+        if (error.response && [301, 302, 307, 308].includes(error.response.status)) {
+          return error.response.headers.location || true;
+        }
+        if (attempt < maxTransientRetries && isTransientNetworkError(error)) {
+          const delayMs = Math.max(0, Number(retryDelays[Math.min(attempt, retryDelays.length - 1)]) || 0);
+          if (delayMs > 0) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+          continue;
+        }
+        const status = error.response ? `HTTP ${error.response.status}` : (error.code || error.message);
+        throw new Error(`${status}`);
       }
-      const status = error.response ? `HTTP ${error.response.status}` : (error.code || error.message);
-      throw new Error(`${status}`);
     }
+
+    throw new Error('网络请求失败');
   }
 
   xhr(options) {

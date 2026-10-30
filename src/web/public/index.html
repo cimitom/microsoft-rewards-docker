@@ -22,7 +22,7 @@
           <!-- 版本与状态复合胶囊 (结合更新检测与状态展示) -->
           <div class="version-status-pill status-idle" id="version-status-pill" title="系统状态: 后台定时就绪中 | 点击检查版本更新">
             <span class="status-dot"></span>
-            <span class="version-label" id="version-label">v1.10.5</span>
+            <span class="version-label" id="version-label">v1.10.6</span>
             <span class="update-indicator" id="update-indicator" style="display: none;">
               <span class="update-icon">🚀</span>
               <span class="update-text" id="update-text">有更新</span>
@@ -938,6 +938,19 @@
               <button class="btn btn-secondary btn-sm" onclick="testNotifyChannel('telegram')">测试</button>
             </div>
             <small class="form-hint">若部署在国内环境，启用网络代理后会自动通过代理访问 Telegram API</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">QQ 官方机器人 (QQBot OpenAPI v2)</label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+              <input type="text" id="cfg-notify-qq-appid" class="form-input" placeholder="机器人 AppID (例如 102030405)">
+              <input type="text" id="cfg-notify-qq-secret" class="form-input" placeholder="机器人 AppSecret (密钥)">
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px;">
+              <input type="text" id="cfg-notify-qq-openid" class="form-input" placeholder="用户 OpenID (私聊推送，可选)">
+              <input type="text" id="cfg-notify-qq-group-openid" class="form-input" placeholder="群 OpenID (群聊推送，可选)">
+              <button class="btn btn-secondary btn-sm" onclick="testNotifyChannel('qqbot')">测试</button>
+            </div>
+            <small class="form-hint">基于 QQ 开放平台 OpenAPI v2，支持私聊 OpenID 与群 OpenID 推送（二者至少填写一项）</small>
           </div>
         </div>
 

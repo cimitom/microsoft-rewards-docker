@@ -728,13 +728,15 @@ class BrowserManager extends EventEmitter {
       const page = await this.createPage(context);
       this.page = page;
 
+      const usedQueries = new Set();
       for (let i = 0; i < totalSearches; i++) {
         if (this.shouldStop) {
           logger.log('🛑', `搜索流程被用户手动中断`, '', accName);
           break;
         }
 
-        const query = await rewardsApi.getHotSearchWord();
+        const query = await rewardsApi.getHotSearchWord({ exclude: usedQueries });
+        usedQueries.add(query);
         completed++;
 
         this.updateState({

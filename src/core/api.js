@@ -1830,7 +1830,7 @@ export class RewardsApi {
    */
   async fetchSearchWordList(mode = 'offline') {
     if (mode === 'offline') {
-      const sample = SEARCH_POOL.slice(0, 20);
+      const sample = SEARCH_POOL.slice(0, 100);
       return { success: true, mode: 'offline', name: '本地离线智能词库', count: SEARCH_POOL.length, sample };
     }
 
@@ -1855,8 +1855,10 @@ export class RewardsApi {
         }
       }
 
-      if (words.length > 0) {
-        return { success: true, mode, name: target.name, count: words.length, sample: words.slice(0, 20) };
+      const uniqueWords = Array.from(new Set(words.map(item => String(item || '').trim()).filter(Boolean)));
+
+      if (uniqueWords.length > 0) {
+        return { success: true, mode, name: target.name, count: uniqueWords.length, sample: uniqueWords.slice(0, 100) };
       }
       return { success: false, mode, name: target.name, message: '接口返回数据为空或格式变动' };
     } catch (e) {
@@ -1867,12 +1869,12 @@ export class RewardsApi {
   /**
    * 获取热搜词（支持多 API 轮换与本地随机词池）
    */
-  async getHotSearchWord() {
+  async getHotSearchWord(options = {}) {
     const cfg = configManager.get();
     const mode = cfg.tasks?.searchApi || 'baidu.official';
-    const baseWord = SEARCH_POOL[this.randomRange(0, SEARCH_POOL.length - 1)];
-    const randomSuffix = Math.random().toString(36).slice(2, 6);
-    const fallbackSentence = `${baseWord} ${randomSuffix}`;
+    const excludeSet = options instanceof Set
+      ? options
+      : (options?.exclude instanceof Set ? options.exclude : new Set(Array.isArray(options?.exclude) ? options.exclude : []));
 
     if (mode !== 'offline') {
       try {
@@ -1883,17 +1885,29 @@ export class RewardsApi {
             this.hotWordIndex = 0;
           }
         }
-        if (this.hotWordList.length > 0 && this.hotWordIndex < this.hotWordList.length) {
+        while (this.hotWordList.length > 0 && this.hotWordIndex < this.hotWordList.length) {
           const word = this.hotWordList[this.hotWordIndex++];
           if (typeof word === 'string' && word.trim()) {
-            return word.trim().slice(0, 30);
+            const candidate = word.trim().slice(0, 30);
+            if (!excludeSet.has(candidate)) {
+              return candidate;
+            }
           }
         }
       } catch (e) {
         logger.log('🟡', `热搜词获取接口异常: ${e.message}，切换到离线词池`, '', logger.getAccountContext());
       }
     }
-    return fallbackSentence;
+    for (let attempts = 0; attempts < 50; attempts++) {
+      const baseWord = SEARCH_POOL[this.randomRange(0, SEARCH_POOL.length - 1)];
+      const randomSuffix = Math.random().toString(36).slice(2, 6);
+      const fallbackSentence = `${baseWord} ${randomSuffix}`.slice(0, 30);
+      if (!excludeSet.has(fallbackSentence)) {
+        return fallbackSentence;
+      }
+    }
+    const baseWord = SEARCH_POOL[this.randomRange(0, SEARCH_POOL.length - 1)];
+    return `${baseWord} ${Date.now().toString(36).slice(-4)}`.slice(0, 30);
   }
 
   /**
