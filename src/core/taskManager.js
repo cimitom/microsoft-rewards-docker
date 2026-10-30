@@ -32,7 +32,17 @@ export class TaskManager {
     this.running = false;
     this.runningAccountId = null;
     this.lastUnifiedReportDate = 0;
+    this.turboMode = false;
     this.stats = this.loadStats();
+  }
+
+  isTurboMode() {
+    return !!this.turboMode;
+  }
+
+  setTurboMode(enabled) {
+    this.turboMode = !!enabled;
+    return this.turboMode;
   }
 
   getTodayNum() {
@@ -1129,6 +1139,7 @@ export class TaskManager {
       running: this.running,
       runningAccountId: this.runningAccountId,
       selectedAccountId: accountId || 'all',
+      turboMode: this.isTurboMode(),
       summary,
       stats: activeStats,
       timeline
@@ -1942,6 +1953,7 @@ export class TaskManager {
   async runSingleAccount(accCfg, globalCfg, options = {}) {
     const accountId = accCfg.id;
     const accountName = accCfg.name || accountId;
+    const isTurbo = options.turbo === true;
     if (this.isAccountPaused(accountId)) {
       logger.log('⏸️', `账号 [${accountName}] 已暂停，跳过自动执行`, '', accountName);
       return;
@@ -2023,7 +2035,7 @@ export class TaskManager {
           } else if (appRes) {
             // 接口既没返积分也没报重复：无法区分「今天已经签过」还是「根本没签成」，
             // 直接读官网「必应应用连续打卡」的真实状态来判定，不凭猜测标已完成。
-            await rewardsApi.randomDelay(1500, 3000);
+            await rewardsApi.randomDelay(isTurbo ? 300 : 1500, isTurbo ? 600 : 3000);
             const appStatus = await rewardsApi.getAppCheckInStatus();
             if (appStatus?.isCurrentDayCompleted) {
               signSuccess = true;
@@ -2084,7 +2096,7 @@ export class TaskManager {
             logger.log('🟡', `第 ${i + 1}/${remaining} 篇阅读被接口判为重复，未计入进度`, accountName);
             break;
           }
-          await rewardsApi.randomDelay(3000, 6000);
+          await rewardsApi.randomDelay(isTurbo ? 300 : 3000, isTurbo ? 600 : 6000);
         }
         const finalRead = await rewardsApi.getReadProgress();
         const finalProg = finalRead?.progress || (cur + okCount * 3);
@@ -2130,7 +2142,7 @@ export class TaskManager {
         for (const card of cards) {
           if (!this.running || this.isAccountPaused(accountId)) break;
           logger.log('🧩', `执行卡片打卡: [${card.kind}] ${card.title} (+${card.points}分)`, accountName);
-          await rewardsApi.randomDelay(2500, 5000);
+          await rewardsApi.randomDelay(isTurbo ? 400 : 2500, isTurbo ? 800 : 5000);
           const desktopBefore = card.category === 'desktop'
             ? Number(this.ensureAccountStats(accountId).tasks?.desktopApp?.progress || 0)
             : 0;
@@ -2138,7 +2150,7 @@ export class TaskManager {
           if (!claimed) continue;
 
           if (card.category === 'desktop') {
-            await rewardsApi.randomDelay(1200, 2200);
+            await rewardsApi.randomDelay(isTurbo ? 300 : 1200, isTurbo ? 600 : 2200);
             const official = await rewardsApi.getRewardsInfo(1).catch(() => null);
             const desktopAfter = Number(official?.desktopApp?.progress);
             if (!Number.isFinite(desktopAfter) || desktopAfter <= desktopBefore) {
@@ -2357,19 +2369,22 @@ export class TaskManager {
                 onProgress: applySearchProgress,
                 probeProgress: probeSearchProgress,
                 stagnantLimit,
-                initialProgress: curSearch
+                initialProgress: curSearch,
+                turbo: isTurbo
               });
             } catch (e) {
               logger.log('🟡', `无头浏览器运行异常: ${e.message}，正在切换为轻量协议兜底`, '', accountName);
               searchRun = await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
                 probeProgress: probeSearchProgress,
-                stagnantLimit
+                stagnantLimit,
+                turbo: isTurbo
               });
             }
           } else {
             searchRun = await this.fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, applySearchProgress, {
               probeProgress: probeSearchProgress,
-              stagnantLimit
+              stagnantLimit,
+              turbo: isTurbo
             });
           }
 
@@ -2570,6 +2585,7 @@ export class TaskManager {
   async fallbackHttpSearch(accCfg, neededPoints, curSearch, maxSearch, globalCfg, onProgress = null, options = {}) {
     const accountName = accCfg.name || accCfg.id;
     const { probeProgress = null, stagnantLimit = 5, probeDelayMs = 12000 } = options;
+    const isTurbo = options.turbo === true;
     // 与拟人模式共用同一套停滞保护
     const stagnation = new SearchStagnationGuard(stagnantLimit);
     stagnation.observe(Number(curSearch) || 0);
@@ -2578,11 +2594,15 @@ export class TaskManager {
     const searchCount = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
     // 与拟人模式共用全局搜索节奏，并同样受 40 分钟搜索预算约束
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-    const wantedIntervalSec = clamp(Number(globalCfg.tasks?.searchIntervalSec ?? 60) || 60, 60, 120);
-    const jitterSec = clamp(Number(globalCfg.tasks?.searchJitterSec ?? 60) || 60, 30, 60);
+    const wantedIntervalSec = isTurbo ? 2 : clamp(Number(globalCfg.tasks?.searchIntervalSec ?? 60) || 60, 60, 120);
+    const jitterSec = isTurbo ? 1 : clamp(Number(globalCfg.tasks?.searchJitterSec ?? 60) || 60, 30, 60);
     const perSearchBudget = Math.floor((40 * 60) / searchCount);
-    const intervalSec = Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
-    logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accountName);
+    const intervalSec = isTurbo ? 2 : Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
+    if (isTurbo) {
+      logger.log('⚡', `[极速轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 2~3 秒`, '', accountName);
+    } else {
+      logger.log('🔍', `[轻量模式] 计划执行 ${searchCount} 次搜索请求，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accountName);
+    }
 
     let completed = 0;
     let lastOfficial = Number(curSearch) || 0;
@@ -2595,7 +2615,8 @@ export class TaskManager {
       await rewardsApi.doSearchOnce(word);
       completed++;
 
-      await rewardsApi.delay(Math.max(5000, Number(probeDelayMs) || 12000));
+      const probeDelay = isTurbo ? 1500 : Math.max(5000, Number(probeDelayMs) || 12000);
+      await rewardsApi.delay(probeDelay);
       let official = null;
       if (typeof probeProgress === 'function') {
         try {
@@ -2626,7 +2647,11 @@ export class TaskManager {
 
       if (i === searchCount - 1) break;
       const waitSec = intervalSec + rewardsApi.randomRange(0, jitterSec);
-      logger.log('⏳', `等待 ${waitSec} 秒...`, '', accountName);
+      if (isTurbo) {
+        logger.log('⚡', `[极速轻量模式] 等待 ${waitSec} 秒...`, '', accountName);
+      } else {
+        logger.log('⏳', `等待 ${waitSec} 秒...`, '', accountName);
+      }
       // 按 1 秒切片等待，让「停止」按钮能立即生效。
       // 旧实现是一次性 await 整个间隔，最长要等 900+300 秒才停得下来。
       for (let s = waitSec; s > 0 && this.running && !this.isAccountPaused(accCfg.id); s--) {
@@ -2660,6 +2685,11 @@ export class TaskManager {
     this.running = true;
     logger.setAccountContext('');
     const startTime = Date.now();
+    const activeTurbo = this.turboMode;
+    if (this.turboMode) {
+      this.turboMode = false;
+      logger.log('⚡', '本次任务已启用【极速模式】（仅对本次任务生效，已自动重置为关闭状态）');
+    }
 
     try {
       const globalCfg = configManager.get();
@@ -2705,7 +2735,7 @@ export class TaskManager {
           continue;
         }
         try {
-          const result = await this.runSingleAccount(acc, globalCfg, { manual });
+          const result = await this.runSingleAccount(acc, globalCfg, { manual, turbo: activeTurbo });
           if (result) runResults.push(result);
         } catch (e) {
           failures.push({ name: acc.name || acc.id, error: e.message });
@@ -2726,6 +2756,10 @@ export class TaskManager {
 
         // 多账号之间安全随机延时隔离防风控
         if (i < targetList.length - 1 && this.running) {
+          if (activeTurbo) {
+            logger.log('⚡', '极速模式：跳过多账号防风控长等待，快速进入下一个账号...');
+            await rewardsApi.delay(1000);
+          } else {
           const baseGap = Math.max(15, Number(globalCfg.tasks?.accountGapSec ?? 180) || 180);
           const jitter = Math.floor(baseGap * 0.25);
           const gapSec = rewardsApi.randomRange(baseGap, baseGap + jitter);
@@ -2733,6 +2767,7 @@ export class TaskManager {
           logger.log('⏳', `多账号安全防风控隔离：等待 ${gapMin} 分钟 (${gapSec} 秒) 后切换下一个账号...`);
           for (let s = gapSec; s > 0 && this.running; s--) {
             await rewardsApi.delay(1000);
+          }
           }
         }
       }

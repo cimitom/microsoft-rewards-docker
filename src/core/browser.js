@@ -706,8 +706,10 @@ class BrowserManager extends EventEmitter {
       probeProgress = null,
       stagnantLimit = 5,
       initialProgress = null,
-      probeDelayMs = 12000
+      probeDelayMs = 12000,
+      turbo = false
     } = options;
+    const isTurbo = turbo === true;
     const totalSearches = Math.max(1, Math.min(Math.ceil(neededPoints / 3), 20));
 
     // 停滞保护：连续 N 次搜索官网进度都不涨，说明搜索额度已到顶或账号正在被限流，
@@ -720,17 +722,16 @@ class BrowserManager extends EventEmitter {
     // 全局搜索节奏（配置中心「任务与防风控」→ 搜索节奏设置）
     const cfg = configManager.get();
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-    // 安全下限：基础间隔 ≥ 60 秒、随机浮动 ≥ 30 秒，避免过于密集触发风控
-    const wantedIntervalSec = clamp(Number(cfg.tasks?.searchIntervalSec ?? 60) || 60, 60, 120);
-    const jitterSec = clamp(Number(cfg.tasks?.searchJitterSec ?? 60) || 60, 30, 60);
+    const wantedIntervalSec = isTurbo ? 2 : clamp(Number(cfg.tasks?.searchIntervalSec ?? 60) || 60, 60, 120);
+    const jitterSec = isTurbo ? 1 : clamp(Number(cfg.tasks?.searchJitterSec ?? 60) || 60, 30, 60);
     // 40 分钟搜索上限：1 小时档位还要为启动随机和其他任务留出余量
     const MAX_WINDOW_SEC = 40 * 60;
     const perSearchBudget = Math.floor(MAX_WINDOW_SEC / totalSearches);
-    const intervalSec = Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
+    const intervalSec = isTurbo ? 2 : Math.max(60, Math.min(wantedIntervalSec, perSearchBudget - jitterSec));
     // 随机浮动为「只延后」的叠加模型：单次实际等待 = 基础间隔 + 0~浮动 秒
     const estimatedSec = totalSearches * (intervalSec + Math.floor(jitterSec / 2));
     const worstSec = totalSearches * (intervalSec + jitterSec);
-    if (intervalSec < wantedIntervalSec) {
+    if (!isTurbo && intervalSec < wantedIntervalSec) {
       logger.log('⚠️', `为保证 ${totalSearches} 次搜索在 40 分钟内完成，本次间隔已自动压缩为 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动`, '', accName);
     }
 
@@ -741,7 +742,11 @@ class BrowserManager extends EventEmitter {
       throw new Error(`当前账号 [${accName}] 未配置网页 Cookie，无法执行搜索`);
     }
 
+    if (isTurbo) {
+      logger.log('⚡', `[极速模式] 启动真机快速搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 2~3 秒，预计约 ${(totalSearches * 4 / 60).toFixed(1)} 分钟`, '', accName);
+    } else {
     logger.log('🖥️', `启动 Playwright 拟人真机搜索：需补足 ${neededPoints} 分 → ${totalSearches} 次搜索，间隔 ${intervalSec} 秒 + 0~${jitterSec} 秒浮动，预计约 ${(estimatedSec/60).toFixed(0)} 分钟（最长 ${(worstSec/60).toFixed(0)} 分钟，上限 40 分钟）`, '', accName);
+    }
 
     this.shouldStop = false;
     let completed = 0;
@@ -797,8 +802,8 @@ class BrowserManager extends EventEmitter {
           break;
         }
 
-        // 给微软计分系统留出异步写入时间，再读官网真实进度。
-        await this.delay(Math.max(5000, Number(probeDelayMs) || 12000));
+        const probeDelay = isTurbo ? 1500 : Math.max(5000, Number(probeDelayMs) || 12000);
+        await this.delay(probeDelay);
         let official = null;
         if (typeof probeProgress === 'function') {
           try {
@@ -844,7 +849,11 @@ class BrowserManager extends EventEmitter {
 
         // 计算下一次搜索的拟人休眠时间（基础间隔 + 0~浮动 秒）
         const waitSec = intervalSec + rewardsApi.randomRange(0, jitterSec);
+        if (isTurbo) {
+          logger.log('⚡', `[极速模式] 等待 ${waitSec} 秒后执行第 ${completed + 1} 次搜索...`, '', accName);
+        } else {
         logger.log('⏳', `拟人呼吸间隔休眠：${(waitSec / 60).toFixed(1)} 分钟后执行第 ${completed + 1} 次搜索...`, '', accName);
+        }
 
         // 逐秒倒计时更新，便于 WebUI 前端实时显示倒计时
         for (let s = waitSec; s > 0; s--) {

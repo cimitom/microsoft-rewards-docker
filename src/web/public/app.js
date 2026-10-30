@@ -794,6 +794,22 @@ function initUIEvents() {
     setTimeout(() => pill?.classList.remove('refreshing'), 600);
   });
 
+  document.getElementById('btn-turbo-mode')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/tasks/turbo', { method: 'POST' }).then(r => r.json());
+      if (res.success) {
+        const isTurbo = !!res.turboMode;
+        const turboBtn = document.getElementById('btn-turbo-mode');
+        const turboText = document.getElementById('btn-turbo-text');
+        if (turboBtn && turboText) {
+          turboBtn.className = `btn ${isTurbo ? 'btn-warning active' : 'btn-secondary'} btn-sm`;
+          setTextIfChanged(turboText, isTurbo ? '极速模式: 下次生效' : '极速模式: 关');
+        }
+        await fetchStatus();
+      }
+    } catch {}
+  });
+
   // 顶部一键同步微软官网真实状态
   document.getElementById('btn-sync-status')?.addEventListener('click', async () => {
     const btn = document.getElementById('btn-sync-status');
@@ -3917,9 +3933,6 @@ async function openAccountDetailFromSummary(accountId) {
     fetchHistory(currentHistoryDays, accountId)
   ]);
   renderLogs();
-  requestAnimationFrame(() => {
-    document.getElementById('task-list-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
 }
 
 // 渲染大屏
@@ -3938,6 +3951,17 @@ function renderDashboard(data) {
   const btnRunSingle = document.getElementById('btn-run-single-header');
   const btnToggleAccount = document.getElementById('btn-toggle-account-header');
   const btnStopSingle = document.getElementById('btn-stop-single-header');
+  const turboBtn = document.getElementById('btn-turbo-mode');
+  const turboText = document.getElementById('btn-turbo-text');
+  if (turboBtn && turboText) {
+    const isTurbo = !!data.turboMode;
+    turboBtn.className = `btn ${isTurbo ? 'btn-warning active' : 'btn-secondary'} btn-sm`;
+    setTextIfChanged(turboText, isTurbo ? '极速模式: 下次生效' : '极速模式: 关');
+    const tip = isTurbo
+      ? '⚡ 极速模式已开启！将在下一次任务（手动或自动）中极限提速执行，任务开始后自动恢复为关闭状态'
+      : '极速模式：压缩所有搜索与任务间隔以快速赶时间，仅对下一次任务生效（执行一次后自动恢复关闭）';
+    if (turboBtn.getAttribute('data-tip') !== tip) turboBtn.setAttribute('data-tip', tip);
+  }
 
   const isAllMode = selectedAccountId === 'all';
   const selectedAcc = isAllMode ? null : (summary?.accountsList || []).find(a => a.id === selectedAccountId);

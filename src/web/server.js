@@ -900,6 +900,13 @@ export function createServer() {
     res.json({ success: true, message: '已发出停止指令' });
   });
 
+  // 5.2 切换极速模式（单次有效）
+  app.post('/api/tasks/turbo', (req, res) => {
+    const enabled = req.body?.enabled !== undefined ? !!req.body.enabled : !taskManager.isTurboMode();
+    const result = taskManager.setTurboMode(enabled);
+    res.json({ success: true, turboMode: result });
+  });
+
   // 5.5 历史日志（读取 data/app.log 末尾，供「全部日志」弹窗）
   app.get('/api/logs/history', (req, res) => {
     const limit = Math.min(1000, Math.max(50, parseInt(req.query.limit, 10) || 300));
