@@ -130,53 +130,142 @@ class BrowserManager extends EventEmitter {
   parseCookies(cookieStr, defaultDomain = '.bing.com') {
     if (!cookieStr || typeof cookieStr !== 'string') return [];
     const list = [];
-    const parts = cookieStr.split(/[;\r\n]+/);
+    let raw = cookieStr.trim();
+    if (raw.toLowerCase().startsWith('cookie:')) {
+      raw = raw.slice(7).trim();
+    }
+    const parts = raw.split(/[;\r\n]+/);
+    const ignoredAttr = new Set(['expires', 'max-age', 'path', 'domain', 'samesite', 'httponly', 'secure', 'priority', 'version', 'comment']);
+
     for (const part of parts) {
       const trimmed = part.trim();
-      if (!trimmed) continue;
-      let name = '', value = '';
-      if (trimmed.includes('\t') && !trimmed.includes('=')) {
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      let name = '', value = '', domain = defaultDomain, path = '/';
+
+      if (trimmed.includes('\t')) {
         const cols = trimmed.split('\t');
-        name = cols[0].trim();
-        value = cols[1].trim();
+        if (cols.length >= 7) {
+          domain = cols[0].trim() || defaultDomain;
+          path = cols[2].trim() || '/';
+          name = cols[5].trim();
+          value = cols.slice(6).join('\t').trim();
+        } else if (cols.length >= 2) {
+          name = cols[0].trim();
+          value = cols.slice(1).join('\t').trim();
+        }
       } else {
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx > 0) {
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx > 0) {
           name = trimmed.slice(0, eqIdx).trim();
           value = trimmed.slice(eqIdx + 1).trim();
         }
       }
-      if (name && name !== '_EDGE_S') {
-        if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-          value = value.slice(1, -1);
+
+      name = name.replace(/[\r\n\t\0\s]/g, '');
+
+      if (!name || ignoredAttr.has(name.toLowerCase()) || name === '_EDGE_S') {
+        continue;
+      }
+
+      if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+        value = value.slice(1, -1);
+      }
+
+      // 遵循 RFC 6265bis Cookie 前缀规范，兼容 Chromium CDP / Playwright 要求：
+      // 1. __Host- 前缀必须：严禁 domain 属性、必须 secure: true、path 必须为 '/'，需提供具体 host url
+      //    在 Playwright 中纯 URL 模式严禁传入 path 或 domain，Playwright 会从 URL 自动推导出 path='/' 与 secure
+      // 2. __Secure- 前缀必须：secure: true
+      if (name.startsWith('__Host-')) {
+        let cleanHost = (domain || defaultDomain || 'cn.bing.com').replace(/^\.+/, '');
+        if (cleanHost === 'bing.com') {
+          cleanHost = 'www.bing.com';
         }
-        if (name.startsWith('__Host-')) {
-          const host = defaultDomain.replace(/^\./, '');
-          list.push({
-            name,
-            value,
-            url: `https://${host}`,
-            secure: true
-          });
-        } else if (name.startsWith('__Secure-')) {
-          list.push({
-            name,
-            value,
-            domain: defaultDomain,
-            path: '/',
-            secure: true
-          });
-        } else {
-          list.push({
-            name,
-            value,
-            domain: defaultDomain,
-            path: '/'
-          });
+        list.push({
+          name,
+          value,
+          url: 'https://' + cleanHost + '/',
+          secure: true
+        });
+      } else {
+        const cookieItem = {
+          name,
+          value,
+          domain,
+          path
+        };
+        if (name.startsWith('__Secure-')) {
+          cookieItem.secure = true;
         }
+        list.push(cookieItem);
       }
     }
     return list;
+  }
+
+  /**
+   * 自动规范化并修复 Cookie 格式，以严格满足 RFC 6265bis、Chromium CDP 与 Playwright 校验要求：
+   * 1. 严格互斥：纯 URL 模式（严禁 domain 与 path）与 Domain+Path 模式（必须成对，严禁 url）二选一
+   * 2. __Host- 前缀规范：使用纯 HTTPS URL 模式，严禁附加 domain 与 path
+   * 3. __Secure- 前缀规范：强制包含 secure: true
+   * 4. 字段清洗：缺失 domain/path 自动补齐，多余空格双引号自动剔除
+   */
+  sanitizeCookie(cookie, fallbackDomain = 'cn.bing.com') {
+    if (!cookie || typeof cookie !== 'object') return null;
+    const name = String(cookie.name || '').replace(/[\r\n\t\0\s]/g, '');
+    if (!name) return null;
+    let value = String(cookie.value ?? '');
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      value = value.slice(1, -1);
+    }
+
+    const res = { name, value };
+    if (cookie.httpOnly !== undefined) res.httpOnly = Boolean(cookie.httpOnly);
+    if (cookie.sameSite !== undefined) res.sameSite = cookie.sameSite;
+    if (typeof cookie.expires === 'number') {
+      res.expires = (cookie.expires === -1 || cookie.expires > 0) ? cookie.expires : -1;
+    }
+
+    // 针对 __Host- 前缀规范：Playwright 下纯 URL 模式最为安全，但严禁包含 domain 与 path 属性
+    if (name.startsWith('__Host-')) {
+      let host = '';
+      if (cookie.url) {
+        try {
+          host = new URL(cookie.url).hostname;
+        } catch {}
+      }
+      if (!host) {
+        host = cookie.domain || fallbackDomain || 'cn.bing.com';
+      }
+      host = String(host).replace(/^\.+/, '');
+      if (host === 'bing.com') host = 'www.bing.com';
+      res.url = 'https://' + host + '/';
+      res.secure = true;
+      delete res.domain;
+      delete res.path;
+      return res;
+    }
+
+    // 针对 __Secure- 前缀规范
+    if (name.startsWith('__Secure-')) {
+      res.secure = true;
+    } else if (cookie.secure !== undefined) {
+      res.secure = Boolean(cookie.secure);
+    }
+
+    // 若原对象提供了 url 且未提供 domain，优先保留纯 URL 模式（删除 path 避免互斥断言）
+    if (cookie.url && (!cookie.domain || cookie.domain === '')) {
+      res.url = cookie.url;
+      delete res.domain;
+      delete res.path;
+      return res;
+    }
+
+    // 否则一律遵循标准的 Domain + Path 模式（删除 url 避免互斥断言）
+    res.path = cookie.path || '/';
+    res.domain = cookie.domain || fallbackDomain || '.bing.com';
+    delete res.url;
+    return res;
   }
 
   async launchBrowser(acc) {
@@ -302,17 +391,92 @@ class BrowserManager extends EventEmitter {
         } catch {}
       });
 
-      // 注入当前账号的完整 Cookie
+      // 注入当前账号的完整 Cookie（带主动规范化与异常自愈重试机制）
       if (acc?.cookie) {
         const cookies = this.parseCookies(acc.cookie, '.bing.com');
         const cnCookies = this.parseCookies(acc.cookie, 'cn.bing.com');
-        try {
-          await context.addCookies([...cookies, ...cnCookies]);
-        } catch (cookieErr) {
-          for (const c of [...cookies, ...cnCookies]) {
-            try {
-              await context.addCookies([c]);
-            } catch {}
+        const allCookies = [...cookies, ...cnCookies];
+
+        // 统一规范化清洗并去重 (兼顾 url 模式与 domain 模式)
+        const cookieMap = new Map();
+        for (const c of allCookies) {
+          const sanitized = this.sanitizeCookie(c);
+          if (!sanitized) continue;
+          const scope = sanitized.url || sanitized.domain || '';
+          cookieMap.set(`${sanitized.name}@${scope}`, sanitized);
+        }
+        const uniqueCookies = Array.from(cookieMap.values());
+
+        if (uniqueCookies.length > 0) {
+          try {
+            await context.addCookies(uniqueCookies);
+          } catch (batchErr) {
+            logger.log('🟡', `批量注入 Cookie 遇到异常 (${batchErr?.message || batchErr})，降级为逐个自愈注入...`, '', acc?.name);
+            for (const c of uniqueCookies) {
+              try {
+                await context.addCookies([c]);
+              } catch (singleErr) {
+                // 格式异常自愈修复循环：修正后再次尝试注入，绝不轻言跳过
+                let healed = false;
+                const origErr = singleErr?.message || String(singleErr);
+
+                // 自愈策略 1：若是纯 URL 模式被拒，转换为无前导点的 Host-Domain 模式重试
+                if (c.url) {
+                  try {
+                    const u = new URL(c.url);
+                    const candidate1 = {
+                      name: c.name,
+                      value: c.value,
+                      domain: u.hostname,
+                      path: '/',
+                      secure: true
+                    };
+                    await context.addCookies([candidate1]);
+                    healed = true;
+                    logger.log('✨', `格式异常 Cookie [${c.name}] 已自愈修正并成功使用 (URL -> Host-Domain)`, '', acc?.name);
+                  } catch {}
+                }
+
+                // 自愈策略 2：若是 Domain 模式被拒（如 __Host- 含有前导点导致 CDP 报 Invalid cookie fields），转换为纯 URL 模式重试
+                if (!healed && c.domain) {
+                  try {
+                    const cleanHost = String(c.domain).replace(/^\.+/, '') || 'cn.bing.com';
+                    const candidate2 = {
+                      name: c.name,
+                      value: c.value,
+                      url: 'https://' + (cleanHost === 'bing.com' ? 'www.bing.com' : cleanHost) + '/',
+                      secure: true
+                    };
+                    await context.addCookies([candidate2]);
+                    healed = true;
+                    logger.log('✨', `格式异常 Cookie [${c.name}] 已自愈修正并成功使用 (Domain -> URL)`, '', acc?.name);
+                  } catch {}
+                }
+
+                // 自愈策略 3：剥离特殊限制，以通用保底域名注入重试
+                if (!healed) {
+                  try {
+                    const candidate3 = {
+                      name: c.name,
+                      value: c.value,
+                      domain: '.bing.com',
+                      path: '/'
+                    };
+                    if (c.name.startsWith('__Secure-') || c.name.startsWith('__Host-')) {
+                      candidate3.secure = true;
+                    }
+                    await context.addCookies([candidate3]);
+                    healed = true;
+                    logger.log('✨', `格式异常 Cookie [${c.name}] 已降级自愈并成功使用 (Fallback Domain)`, '', acc?.name);
+                  } catch {}
+                }
+
+                // 仅当全部自愈策略均无法使其生效时，才记录跳过
+                if (!healed) {
+                  logger.log('🟡', `跳过无法自愈的异常 Cookie [${c.name}]: ${origErr}`, '', acc?.name);
+                }
+              }
+            }
           }
         }
       }

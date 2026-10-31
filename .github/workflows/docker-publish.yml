@@ -60,7 +60,7 @@ jobs:
         if: steps.mode.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME || 'wangheqiang' }}
+          username: ${{ secrets.DOCKERHUB_USERNAME || 'ccmove' }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # 3. 提取元数据和 Tag
@@ -73,7 +73,7 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository }}
-            ${{ secrets.DOCKERHUB_USERNAME || 'wangheqiang' }}/microsoft-rewards-docker
+            ${{ secrets.DOCKERHUB_USERNAME || 'ccmove' }}/microsoft-rewards-docker
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
