@@ -3059,7 +3059,7 @@ let taskRunning = false;
 function refreshVersionPillTooltip() {
   const pill = document.getElementById('version-status-pill');
   if (!pill) return;
-  const current = updateInfo?.currentVersion || '1.10.7';
+  const current = updateInfo?.currentVersion || '1.10.9';
   const statusLine = taskRunning
     ? '🟦 系统状态：正在执行自动化任务打卡中…'
     : '🟢 系统状态：后台定时就绪中';
@@ -3114,8 +3114,8 @@ async function handleVersionCheckClick() {
     openEpicActionModal(
       '版本检查',
       failed
-        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.7'}，但无法连接 GitHub 检查更新。`
-        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.7'} 已是最新版本。`,
+        ? `当前运行版本 v${updateInfo?.currentVersion || '1.10.9'}，但无法连接 GitHub 检查更新。`
+        : `当前运行版本 v${updateInfo?.currentVersion || '1.10.9'} 已是最新版本。`,
       ['获取远端版本', '比较版本号', failed ? '检查失败' : '确认无需更新'],
       3
     );
@@ -4134,6 +4134,7 @@ function formatPunchCardTooltip(t) {
     const TASK_PRIORITY = {
       search: 10,
       dailySet: 20,
+      appPromotions: 25,
       sign: 30,
       read: 40,
       promos: 50,
@@ -4206,6 +4207,14 @@ function formatPunchCardTooltip(t) {
     if (key === 'dailySet') {
       const dsStreak = stats.streaks?.dailyset;
       extraStreakHtml = render7DayStreakTrack(dsStreak, stats.streakDays, isDone, '每日连续打卡活动');
+    }
+
+    if (key === 'appPromotions') {
+      displayName = '移动端每日活动';
+      pointsBadge = Number(t.max || 0) > 0
+        ? (isDone ? `+${t.points || 0} 积分` : `${t.max} 项待处理`)
+        : '等待同步';
+      if (t.statusMessage) subtext = `${subtext} · ${t.statusMessage}`;
     }
 
     // 3. 特殊活动：官网 points 为 0，但完成后有固定奖励。
@@ -5563,6 +5572,7 @@ function populateSettingsForm() {
 
   // 任务
   document.getElementById('cfg-task-sign').checked = c.tasks?.sign !== false;
+  document.getElementById('cfg-task-app-promotions').checked = c.tasks?.appPromotions !== false;
   document.getElementById('cfg-task-read').checked = c.tasks?.read !== false;
   document.getElementById('cfg-task-search').checked = c.tasks?.search !== false;
   document.getElementById('cfg-task-promos').checked = c.tasks?.promos !== false;
@@ -5775,6 +5785,7 @@ async function saveSettingsFromModal() {
     },
     tasks: {
       sign: document.getElementById('cfg-task-sign').checked,
+      appPromotions: document.getElementById('cfg-task-app-promotions').checked,
       read: document.getElementById('cfg-task-read').checked,
       search: document.getElementById('cfg-task-search').checked,
       promos: document.getElementById('cfg-task-promos').checked,
@@ -7557,6 +7568,7 @@ function renderEpicBrowserStatus(data) {
 // ===== 全部历史日志弹窗 =====
 let logsModalEntries = [];
 let logsModalOpen = false;
+let diagnosticsReport = null;
 
 function initLogsModal() {
   document.getElementById('btn-open-logs')?.addEventListener('click', openLogsModal);
@@ -7567,6 +7579,12 @@ function initLogsModal() {
     logsModalEntries = [];
     renderLogsModal();
   });
+  document.getElementById('btn-logs-export-diagnostics')?.addEventListener('click', openDiagnosticsExport);
+  document.getElementById('btn-terminal-export-diagnostics')?.addEventListener('click', openDiagnosticsExport);
+  document.getElementById('btn-close-diagnostics')?.addEventListener('click', closeDiagnosticsExport);
+  document.getElementById('btn-close-diagnostics-btn')?.addEventListener('click', closeDiagnosticsExport);
+  document.getElementById('btn-copy-diagnostics')?.addEventListener('click', copyDiagnosticsExport);
+  document.getElementById('btn-download-diagnostics')?.addEventListener('click', downloadDiagnosticsExport);
 }
 
 async function openLogsModal() {
@@ -7623,4 +7641,93 @@ function appendLogToModal(entry) {
   });
   if (logsModalEntries.length > 800) logsModalEntries.shift();
   renderLogsModal();
+}
+
+function formatDiagnosticBytes(bytes = 0) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function setDiagnosticActionsEnabled(enabled) {
+  const copy = document.getElementById('btn-copy-diagnostics');
+  const download = document.getElementById('btn-download-diagnostics');
+  if (copy) copy.disabled = !enabled;
+  if (download) download.disabled = !enabled;
+}
+
+async function openDiagnosticsExport() {
+  const preview = document.getElementById('diagnostics-preview');
+  const meta = document.getElementById('diagnostics-meta');
+  diagnosticsReport = null;
+  setDiagnosticActionsEnabled(false);
+  if (preview) preview.value = '';
+  if (meta) meta.textContent = '正在生成最近 24 小时脱敏诊断日志...';
+  openModal('diagnostics-modal');
+
+  try {
+    const res = await fetch('/api/logs/diagnostics', {
+      cache: 'no-store'
+    }).then(r => r.json());
+    if (!res.success || !res.data?.content) {
+      throw new Error(res.message || '诊断日志生成失败');
+    }
+    diagnosticsReport = res.data;
+    if (preview) preview.value = res.data.content;
+    if (meta) {
+      const truncateText = res.data.truncated ? ' · 内容已按大小上限截断' : '';
+      meta.textContent = `最近 ${res.data.windowHours} 小时 · ${res.data.lineCount} 行日志 · ${formatDiagnosticBytes(res.data.bytes)}${truncateText}`;
+    }
+    setDiagnosticActionsEnabled(true);
+  } catch (e) {
+    if (preview) preview.value = '';
+    if (meta) meta.textContent = `生成失败：${e.message}`;
+  }
+}
+
+function closeDiagnosticsExport() {
+  closeModal('diagnostics-modal');
+}
+
+async function copyDiagnosticsExport() {
+  const preview = document.getElementById('diagnostics-preview');
+  const meta = document.getElementById('diagnostics-meta');
+  if (!diagnosticsReport?.content || !preview) return;
+  let copied = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(diagnosticsReport.content);
+      copied = true;
+    }
+  } catch {}
+  if (!copied) {
+    preview.focus();
+    preview.select();
+    try {
+      copied = document.execCommand('copy');
+    } catch {}
+  }
+  if (copied) {
+    if (meta) meta.textContent = '已复制全部脱敏诊断日志，可直接粘贴到 Issue 或 AI 对话中。';
+  } else {
+    if (meta) meta.textContent = '复制失败，预览内容已全选，请使用系统复制快捷键。';
+    preview.focus();
+    preview.select();
+  }
+}
+
+function downloadDiagnosticsExport() {
+  if (!diagnosticsReport?.content) return;
+  const blob = new Blob([diagnosticsReport.content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = diagnosticsReport.filename || 'msr-diagnostics-redacted.txt';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const meta = document.getElementById('diagnostics-meta');
+  if (meta) meta.textContent = `已下载 ${anchor.download}。公开前请再次检查内容。`;
 }
