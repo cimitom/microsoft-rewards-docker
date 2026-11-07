@@ -29,7 +29,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CURRENT_VERSION = '1.10.10';
+const CURRENT_VERSION = '1.10.12';
 
 let lastCpuInfo = os.cpus().map(c => c.times);
 
@@ -1458,15 +1458,30 @@ export function createServer() {
 
   // 10. 测试通知
   app.post('/api/notify/test', async (req, res) => {
-    const { channel, value } = req.body;
+    const { channel, value, proxy } = req.body;
     if (!channel || !value) {
       return res.status(400).json({ success: false, message: '参数缺失' });
     }
     try {
-      await notifier.testChannel(channel, value);
+      await notifier.testChannel(channel, value, proxy);
       res.json({ success: true, message: '测试消息发送成功' });
     } catch (e) {
       res.status(500).json({ success: false, message: e.message });
+    }
+  });
+
+  app.post('/api/notify/telegram/check', async (req, res) => {
+    const value = req.body?.value && typeof req.body.value === 'object'
+      ? req.body.value
+      : {
+          botToken: req.body?.botToken,
+          chatId: req.body?.chatId
+        };
+    try {
+      const data = await notifier.checkTelegram(value.botToken, value.chatId, req.body?.proxy);
+      res.json({ success: true, data });
+    } catch (e) {
+      res.status(400).json({ success: false, message: e.message });
     }
   });
 
