@@ -19,7 +19,8 @@ import {
   extractDailySetCardsFromDashboard,
   getAppCheckInStatusFromPromotions,
   isAppReadPromotion,
-  normalizeAppPromotions
+  normalizeAppPromotions,
+  resolveAppCheckInStatus
 } from './promotionSources.js';
 import {
   PC_USER_AGENT,
@@ -1266,18 +1267,12 @@ export class RewardsApi {
           }
         } catch {}
       }
-      // 网页端是用户实际看到的 Rewards 状态，明确 true/false 都必须优先。
-      // DAPI 的 check-in promotion 可能属于另一个 App 功能，甚至返回 5/7，
-      // 不能再覆盖网页端明确显示的 0/7。
-      if (webStatus && typeof webStatus.isCurrentDayCompleted === 'boolean') {
-        return webStatus;
-      }
     }
 
     // 新版 App 的连签状态可能只存在于 DAPI promotion，Web Flight 里没有模型。
     const promotions = await this.getAppPromotions().catch(() => []);
     const dapiStatus = getAppCheckInStatusFromPromotions(promotions);
-    return dapiStatus || webStatus || null;
+    return resolveAppCheckInStatus(webStatus, dapiStatus);
   }
 
   /**
@@ -1303,14 +1298,11 @@ export class RewardsApi {
         data: JSON.stringify({
           amount: 1,
           id: this.getDapiId(),
-          // 新版 App 的签到活动按普通领取活动处理。type=103 仅触发启动上报，
-          // 接口会返回 200，但连签 progress 和 last_updated 不会推进。
-          type: 101,
+          // 实测 CN 账号只有 type=103 会实际完成「必应应用连续打卡」。
+          // type=101 也会返回活动对象，但 p=0 且 Dashboard 仍为 0/1。
+          type: 103,
           country: region,
           channel: APP_CONFIG.channel,
-          // 关键修复：必须带上 offerid，微软才会把它计入「必应应用连续打卡」。
-          // 缺了 attributes.offerid 时接口同样返回 200，但连签任务不会推进，
-          // 这正是之前「必应应用连续打卡」一直显示 0/1 的原因。
           attributes: { offerid: APP_CONFIG.offerIds.dailyCheckIn }
         })
       }));
@@ -1321,12 +1313,16 @@ export class RewardsApi {
           const act = data.response.activity;
           const points = Number(act.p || act.points || 0);
           const appliedOffer = act.a?.offerid || act.attributes?.offerid || '';
+          const confirmed = String(appliedOffer).toLowerCase()
+            === String(APP_CONFIG.offerIds.dailyCheckIn).toLowerCase();
           // balance 是「该 Token 所属账号」的积分，可用于判断 Token 与 Cookie 是否同一个号
           const balance = Number(data.response.balance);
           return {
             points,
             offerId: appliedOffer,
             isDuplicate: !!data.response.isDuplicate,
+            confirmed,
+            ...(confirmed ? {} : { error: '接口返回的签到活动与当前任务不匹配' }),
             balance: Number.isFinite(balance) ? balance : null
           };
         }
@@ -1336,6 +1332,7 @@ export class RewardsApi {
             points: 0,
             offerId: APP_CONFIG.offerIds.dailyCheckIn,
             isDuplicate: true,
+            confirmed: true,
             balance: Number.isFinite(balance) ? balance : null
           };
         }

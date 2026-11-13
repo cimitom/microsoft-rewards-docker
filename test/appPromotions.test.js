@@ -133,7 +133,7 @@ test('Web 缺少连签模型时使用 DAPI 签到状态兜底', async () => {
     name: 'Daily Check-In',
     offerId: 'Gamification_Sapphire_DailyCheckIn',
     type: 'checkin',
-    complete: false,
+    complete: true,
     progress: 2,
     lastUpdated: new Date().toISOString()
   }];
@@ -146,7 +146,7 @@ test('Web 缺少连签模型时使用 DAPI 签到状态兜底', async () => {
   }
 });
 
-test('Web 连签状态明确为 false 时以网页端为准，不被 DAPI 覆盖', async () => {
+test('DAPI 已确认今日签到时，网页端滞后的 0/7 不能覆盖完成状态', async () => {
   const originals = {
     getRewardsInfo: rewardsApi.getRewardsInfo,
     getAppPromotions: rewardsApi.getAppPromotions,
@@ -172,8 +172,10 @@ test('Web 连签状态明确为 false 时以网页端为准，不被 DAPI 覆盖
   networkClient.request = async () => '';
   try {
     const status = await rewardsApi.getAppCheckInStatus();
-    assert.equal(status.isCurrentDayCompleted, false);
-    assert.equal(status.completedDays, 0);
+    assert.equal(status.isCurrentDayCompleted, true);
+    assert.equal(status.completedDays, 3);
+    assert.equal(status.source, 'dapi');
+    assert.equal(status.webStatusMismatch, true);
   } finally {
     rewardsApi.getRewardsInfo = originals.getRewardsInfo;
     rewardsApi.getAppPromotions = originals.getAppPromotions;
@@ -181,7 +183,7 @@ test('Web 连签状态明确为 false 时以网页端为准，不被 DAPI 覆盖
   }
 });
 
-test('移动端签到使用 type 101，而不是启动类型 103', async () => {
+test('移动端签到使用 type 103，并接受 p=0 的已受理活动响应', async () => {
   const originals = {
     request: networkClient.request,
     getAccessToken: authManager.getAccessToken
@@ -193,15 +195,16 @@ test('移动端签到使用 type 101，而不是启动类型 103', async () => {
     return {
       response: {
         balance: 125,
-        activity: { p: 5, a: { offerid: 'Gamification_Sapphire_DailyCheckIn' } }
+        activity: { p: 0, a: { offerid: 'Gamification_Sapphire_DailyCheckIn' } }
       }
     };
   };
   try {
     const result = await rewardsApi.signApp();
-    assert.equal(posted.type, 101);
+    assert.equal(posted.type, 103);
     assert.equal(posted.attributes.offerid, 'Gamification_Sapphire_DailyCheckIn');
-    assert.equal(result.points, 5);
+    assert.equal(result.points, 0);
+    assert.equal(result.confirmed, true);
   } finally {
     networkClient.request = originals.request;
     authManager.getAccessToken = originals.getAccessToken;
