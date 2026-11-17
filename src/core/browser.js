@@ -16,7 +16,6 @@ import { cookieValue } from './accountIdentity.js';
 import {
   isQuestSubtaskCompleted,
   parseQuestProgress,
-  classifyQuestAction,
   questSubtaskKey,
   isDailyQuestSubtask,
   isQuestSubtaskCoolingDown,
@@ -26,7 +25,9 @@ import {
   extractQuestSearchQuery,
   isQuestSearchTarget,
   resolveQuestFailureCooldown,
-  questVerificationAttempts
+  questVerificationAttempts,
+  resolveQuestKind,
+  selectQuestSubtaskDepth
 } from './questStatus.js';
 import {
   SPECIAL_ACTIVITIES,
@@ -1067,66 +1068,110 @@ class BrowserManager extends EventEmitter {
    * 返回稳定的动作类型、进度和冷却判断所需信息。
    */
   async scanQuestSubtasks(page) {
-    const rawItems = await page.evaluate(() => {
-      const headings = [...document.querySelectorAll('h3')].filter(h => {
-        const t = (h.innerText || '').trim();
-        return t && !t.includes('条款和条件') && !t.includes('Terms');
+    // 分两步求值：先只采集「h3 → 祖先链」的结构统计，交给纯函数
+    // selectQuestSubtaskDepth 决定每张卡片的容器边界；再按该边界取容器、
+    // 抽 CTA 并打编号。
+    //
+    // 之前一次求值就边冒泡边判定的写法会越过卡片边界落到共享外层容器：
+    // 那里只有一个 CTA，于是所有子任务共用一个 href、共用同一个 DOM 节点，
+    // data-msr-subtask 被反复覆盖，最后 locator 找不到目标而超时，任务永不推进。
+    let rawItems = null;
+    for (let attempt = 0; attempt < 3 && rawItems === null; attempt++) {
+      const layout = await page.evaluate(() => {
+        const headings = [...document.querySelectorAll('h3')].filter(h => {
+          const t = (h.innerText || '').trim();
+          return t && !t.includes('条款和条件') && !t.includes('Terms');
+        });
+        return headings.map(h => {
+          const frames = [];
+          let node = h;
+          for (let depth = 0; depth < 9 && node; depth++) {
+            frames.push({
+              h3Count: node.querySelectorAll('h3').length,
+              linkCount: node.querySelectorAll('a[href], button').length,
+              isBody: node === document.body
+            });
+            if (node === document.body) break;
+            node = node.parentElement;
+            if (!node) break;
+          }
+          return { title: (h.innerText || '').trim(), frames };
+        });
       });
-      const items = [];
-      for (let i = 0; i < headings.length; i++) {
-        const h = headings[i];
-        let container = h;
-        for (let depth = 0; depth < 8 && container?.parentElement; depth++) {
-          container = container.parentElement;
-          if (container === document.body) break;
-          if (container.querySelectorAll('h3').length > 1) break;
-          if (container.querySelectorAll('a[href], button').length > 0) break;
+      if (!Array.isArray(layout)) break;
+
+      const depthByHeading = layout.map(item => selectQuestSubtaskDepth(item.frames));
+      const applied = await page.evaluate(({ depths, expectedHeadings }) => {
+        const headings = [...document.querySelectorAll('h3')].filter(h => {
+          const t = (h.innerText || '').trim();
+          return t && !t.includes('条款和条件') && !t.includes('Terms');
+        });
+        // 两次求值之间页面若发生重渲染，标题数量会变，索引不再可信，直接重扫。
+        if (headings.length !== expectedHeadings) return { ok: false, reason: 'headings-changed' };
+
+        // 上一轮留下的编号必须先清掉，否则旧标记会指向这一轮之外的元素。
+        document.querySelectorAll('[data-msr-subtask]').forEach(el => el.removeAttribute('data-msr-subtask'));
+
+        const items = [];
+        for (let i = 0; i < headings.length; i++) {
+          const depth = Number(depths?.[i]);
+          if (!Number.isFinite(depth) || depth < 0) continue;
+          const h = headings[i];
+          let container = h;
+          for (let step = 0; step < depth && container; step++) container = container.parentElement;
+          if (!container || container === document.body) continue;
+
+          const rawText = container.innerText || '';
+          const hasSuccessIcon = !!container.querySelector(
+            '[class*="bg-statusSuccessRewardsBg"], [class*="statusSuccessRewards"], [data-testid*="complete" i]'
+          );
+          const hasEmptyCircle = !!container.querySelector('[class*="border-ctrlChoiceBaseStrokeRest"]');
+          const hasLockIcon = !!container.querySelector('[class*="Lock"], [class*="lock"], [aria-label*="锁定"], [aria-label*="Locked"]');
+          const links = [...container.querySelectorAll('a[href], button')].filter(a => {
+            if (a.closest('header') || a.closest('footer')) return false;
+            const href = a.getAttribute('href') || '';
+            if (/\/account\/general|\/rewards\/about|\/rewards\/faq|\/rewards\/redeem/i.test(href)) return false;
+            return true;
+          });
+          if (links.length === 0) continue;
+
+          const link = links[0];
+          const disabled = link.getAttribute('aria-disabled') === 'true'
+            || link.getAttribute('data-disabled') === 'true'
+            || link.disabled === true;
+          // 编号必须连续，locator [data-msr-subtask="N"] 依赖这一点。
+          const index = items.length + 1;
+          link.setAttribute('data-msr-subtask', String(index));
+          items.push({
+            index,
+            title: (h.innerText || '').trim(),
+            actionText: (link.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+            href: link.getAttribute('href') || '',
+            tag: link.tagName,
+            rawText,
+            hasSuccessIcon,
+            hasEmptyCircle,
+            hasLockIcon,
+            disabled
+          });
         }
-        if (!container) continue;
+        return { ok: true, items };
+      }, { depths: depthByHeading, expectedHeadings: layout.length });
 
-        const rawText = container.innerText || '';
-        const hasSuccessIcon = !!container.querySelector(
-          '[class*="bg-statusSuccessRewardsBg"], [class*="statusSuccessRewards"], [data-testid*="complete" i]'
-        );
-        const hasEmptyCircle = !!container.querySelector('[class*="border-ctrlChoiceBaseStrokeRest"]');
-        const hasLockIcon = !!container.querySelector('[class*="Lock"], [class*="lock"], [aria-label*="锁定"], [aria-label*="Locked"]');
-        const links = [...container.querySelectorAll('a[href], button')].filter(a => {
-          if (a.closest('header') || a.closest('footer')) return false;
-          const href = a.getAttribute('href') || '';
-          if (/\/account\/general|\/rewards\/about|\/rewards\/faq|\/rewards\/redeem/i.test(href)) return false;
-          return true;
-        });
-        if (links.length === 0) continue;
-
-        const link = links[0];
-        const disabled = link.getAttribute('aria-disabled') === 'true'
-          || link.getAttribute('data-disabled') === 'true'
-          || link.disabled === true;
-        link.setAttribute('data-msr-subtask', String(i + 1));
-        items.push({
-          index: i + 1,
-          title: (h.innerText || '').trim(),
-          actionText: (link.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
-          href: link.getAttribute('href') || '',
-          tag: link.tagName,
-          rawText,
-          hasSuccessIcon,
-          hasEmptyCircle,
-          hasLockIcon,
-          disabled
-        });
+      if (applied?.ok) {
+        rawItems = applied.items;
+        break;
       }
-      return items;
-    });
+      await this.delay(300);
+    }
 
     return (rawItems || []).map(item => {
       const progress = parseQuestProgress(item.rawText);
       // href 本身也是微软任务意图的一部分。月度打孔卡可能把动作写成
       // “比较电子产品”，但 href 明确是 bing.com/search?q=...，必须按搜索执行。
-      const classified = classifyQuestAction(item);
-      const kind = classified === 'unknown' && isQuestSearchTarget(item)
-        ? 'search'
-        : classified;
+      // 判定逻辑收进 resolveQuestKind：只要 href 指向 bing.com/search?q=...，
+      // 就按搜索执行，不再依赖按钮文案（activate 仍保持最高优先级）。
+      const kind = resolveQuestKind(item);
       const completed = isQuestSubtaskCompleted(item);
       const locked = item.disabled || item.hasLockIcon;
       return {
@@ -1206,23 +1251,39 @@ class BrowserManager extends EventEmitter {
     const targetIsBingSearch = isQuestSearchTarget({ href: targetUrl || target.href });
     const searchKind = target.kind === 'search' || targetIsBingSearch;
     const popupPromise = context.waitForEvent('page', { timeout: 9000 }).catch(() => null);
+    const subtaskSelector = `[data-msr-subtask="${target.index}"]`;
     let clicked = false;
+    let clickMode = '';
     let navigationFallback = false;
     try {
-      await humanClick(page.locator(`[data-msr-subtask="${target.index}"]`), { page, timeout: 8000 });
+      await humanClick(page.locator(subtaskSelector), { page, timeout: 8000 });
       clicked = true;
+      clickMode = 'human';
     } catch (e) {
-      if (targetUrl) {
-        const fallback = await context.newPage().catch(() => null);
-        if (fallback) {
-          await fallback.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
-          await this.delay(rewardsApi.randomRange(2500, 4500));
-          await fallback.close().catch(() => {});
-          clicked = true;
-        }
+      // 拟人鼠标点击会被全屏遮罩、Cookie 浮层或 React 手势层吃掉：
+      // 鼠标事件落在覆盖层上，链接本身从未触发导航。
+      // 这时必须回到页面内用原生 DOM click 重新触发，而不是另开空白页直接 goto —
+      // 后者会丢掉 Referer，微软服务端就认不出这是从 Rewards 推广链接触发的访问，
+      // 打孔卡子任务的进度永远不会推进。
+      const domClicked = await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        try { el.scrollIntoView({ block: 'center' }); } catch {}
+        el.click();
+        return true;
+      }, subtaskSelector).catch(() => false);
+      if (domClicked) {
+        clicked = true;
+        clickMode = 'dom';
       }
       if (!clicked) throw e;
     }
+    logger.log(
+      '🧩',
+      `打孔卡子任务已触发 (${clickMode === 'dom' ? '页面内原生点击' : '拟人鼠标点击'}): ${target.title || target.actionText || target.index}`,
+      '',
+      accName
+    );
 
     const popup = await Promise.race([popupPromise, this.delay(5500).then(() => null)]);
     let landingPage = popup || null;
@@ -1263,24 +1324,51 @@ class BrowserManager extends EventEmitter {
         // 点击后 popup 已经打开了 Bing 搜索结果页（带 q 与 form/OCID/PUBL 追踪参数）。
         // 这正是打孔卡需要的「通过推广链接触发搜索」，referrer 与参数都完整，
         // 直接停留即可。之前这里强制重输关键词，把追踪参数冲掉，导致任务永远卡住。
+        //
+        // 但必须像 PC 搜索一样校验登录态：popup 里的静默登录若失败，页面仍是游客态，
+        // 微软不会给这次搜索计分。旧实现无条件写 searchSubmitted: true，
+        // 于是「游客态搜索」被当成成功，月度打孔卡长期卡在 1/5、2/5。
+        const login = await this.getBingLoginState(searchPage).catch(() => ({}));
+        if (login?.isGuest) {
+          throw new Error('打孔卡搜索落地页为必应游客态，本次搜索站点不认，已中止以免空跑');
+        }
+        if (login?.userName) {
+          logger.log('👤', `打孔卡搜索登录态确认: ${login.userName}`, '', accName);
+        }
         searchResult = {
           success: true,
           query: questQuery,
           finalUrl: landingUrl,
           searchSubmitted: true,
-          login: {}
+          login: login || {}
         };
       } else if (officialSearchTarget) {
         // 没有可复用的 popup 时，直接访问官网给的这条完整搜索链接，
         // 保留 form/OCID/PUBL 参数，让微软服务端确认「Rewards 推广触发的搜索」。
+        //
+        // 关键：必须显式补上 Referer。新开页面裸 goto 的 Referer 是空的，
+        // 微软服务端就认不出这次搜索来自 Rewards 推广链，子任务进度不会推进。
+        const searchReferer = String(page.url() || quest.url || beforeUrl || '');
         if (!searchPage) searchPage = await this.createPage(context);
-        await searchPage.goto(officialSearchTarget, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        await searchPage.goto(officialSearchTarget, {
+          waitUntil: 'domcontentloaded',
+          timeout: 25000,
+          ...(searchReferer ? { referer: searchReferer } : {})
+        }).catch(() => {});
+        // 直接打开官方链接同样要校验登录态，理由同上一分支。
+        const login = await this.getBingLoginState(searchPage).catch(() => ({}));
+        if (login?.isGuest) {
+          throw new Error('打孔卡搜索落地页为必应游客态，本次搜索站点不认，已中止以免空跑');
+        }
+        if (login?.userName) {
+          logger.log('👤', `打孔卡搜索登录态确认: ${login.userName}`, '', accName);
+        }
         searchResult = {
           success: true,
           query: questQuery,
           finalUrl: String(searchPage.url?.() || officialSearchTarget),
           searchSubmitted: true,
-          login: {}
+          login: login || {}
         };
       } else {
         // 仅当既无结果页、也无官方搜索链接时才退回普通关键词搜索。
